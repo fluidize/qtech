@@ -14,8 +14,19 @@ from plotly.subplots import make_subplots
 
 from alpaca.data.live.crypto import CryptoDataStream
 
-API_KEY_ID = "PKSUCH8LLQDX4CJVXCGD"
-API_SECRET_KEY = "4l0zZRsUcoDSrZJxJtvveamRBeI1QusMIvKsugNl"
+import time
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    DEFAULT = '\033[39m'
+
+API_KEY_ID = "PK0A3PJBDB887VC8BO53"
+API_SECRET_KEY = "hWeFc9JiICNSIrvfJWBIUZ6UmZ64SDaCUpqBNsyP"
 
 class trading_bot:
     def __init__(self,SYMBOL, API_KEY_ID, API_SECRET_KEY):
@@ -24,8 +35,12 @@ class trading_bot:
         self.API_SECRET_KEY = API_SECRET_KEY
 
         self.trading_client = TradingClient(API_KEY_ID, API_SECRET_KEY, paper=True)
-        self.portfolio = self.trading_client.get_all_positions()
-
+        try:
+            self.portfolio = self.trading_client.get_all_positions()
+            print(bcolors.OKGREEN + "KEYS CLEAR", end=bcolors.DEFAULT + "\n")
+        except:
+            print(bcolors.FAIL + "ERROR", end=bcolors.DEFAULT + "\n")
+            raise Exception("BAD KEYS")
         data_client = CryptoHistoricalDataClient(API_KEY_ID, API_SECRET_KEY)
         DATE_RANGE = 14
         request_params = CryptoBarsRequest(
@@ -52,7 +67,7 @@ class trading_bot:
     def compute_indicators(self):
         ma_window = 20  # Moving average window size
         num_std = 2  # Number of standard deviations for the bands
-        self.ohlcv['SMA'] = self.self.ohlcv['close'].rolling(window=ma_window).mean()
+        self.ohlcv['SMA'] = self.ohlcv['close'].rolling(window=ma_window).mean()
         self.ohlcv['STD'] = self.ohlcv['close'].rolling(window=ma_window).std()
         self.ohlcv['Upper_Band'] = self.ohlcv['SMA'] + (num_std * self.ohlcv['STD'])
         self.ohlcv['Lower_Band'] = self.ohlcv['SMA'] - (num_std * self.ohlcv['STD'])
@@ -129,9 +144,10 @@ class trading_bot:
                               })
             if verbose:
                 print(f"{position.symbol} - {position.qty}")
+
         return positions
 
-    def place_order(self, value, type, use_shares=False):
+    def place_order(self, value, type, use_shares=False): #trading in usd by default
         #notional means trading in USD
         #qty means trading in shares
         if use_shares:
@@ -153,7 +169,7 @@ class trading_bot:
                         order_data=market_order_data
                     )
         
-        print(f"Trade placed at {datetime.datetime.now()} - {self.SYMBOL if use_shares else "$"}{value} - {type}")
+        print(f"Trade placed at {datetime.datetime.now()} - {self.SYMBOL.split("/")[0]+" " if use_shares else "$"}{value} - {type}")
     
     def algo_trading(self):
         #trading algorithm asyncronous with data stream
@@ -168,4 +184,4 @@ class trading_bot:
 
 trader = trading_bot("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
 
-trader.place_order(trader.get_positions()[0]['shares'],OrderSide.SELL,use_shares=True)
+trader.open_graph()
