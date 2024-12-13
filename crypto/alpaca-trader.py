@@ -15,6 +15,7 @@ from plotly.subplots import make_subplots
 from alpaca.data.live.crypto import CryptoDataStream
 
 import time
+import os
 
 class bcolors:
     HEADER = '\033[95m'
@@ -28,7 +29,7 @@ class bcolors:
 API_KEY_ID = "PK0A3PJBDB887VC8BO53"
 API_SECRET_KEY = "hWeFc9JiICNSIrvfJWBIUZ6UmZ64SDaCUpqBNsyP"
 
-class trading_bot:
+class TradingEngine:
     def __init__(self,SYMBOL, API_KEY_ID, API_SECRET_KEY):
         self.SYMBOL = SYMBOL
         self.API_KEY_ID = API_KEY_ID
@@ -36,8 +37,11 @@ class trading_bot:
 
         self.trading_client = TradingClient(API_KEY_ID, API_SECRET_KEY, paper=True)
         try:
+            os.system('cls')
+
             self.portfolio = self.trading_client.get_all_positions()
             print(bcolors.OKGREEN + "KEYS CLEAR", end=bcolors.DEFAULT + "\n")
+            print()
         except:
             print(bcolors.FAIL + "ERROR", end=bcolors.DEFAULT + "\n")
             raise Exception("BAD KEYS")
@@ -50,7 +54,8 @@ class trading_bot:
             end=datetime.datetime.now(),            # End date for historical data
             limit=1000                           # Max number of bars to retrieve
         )
-
+        
+        ### DATA COLLECTION
         crypto_bars = data_client.get_crypto_bars(request_params)
         bars = []
         for bar in crypto_bars[SYMBOL]:
@@ -63,14 +68,19 @@ class trading_bot:
                 "volume": bar.volume
             })
         self.ohlcv = pd.DataFrame(bars)
+
+        #fun display
+        print("-"*55)
+        self.get_account_info(verbose=True)
+        print("-"*55)
     
     def compute_indicators(self):
         ma_window = 20  # Moving average window size
         num_std = 2  # Number of standard deviations for the bands
         self.ohlcv['SMA'] = self.ohlcv['close'].rolling(window=ma_window).mean()
         self.ohlcv['STD'] = self.ohlcv['close'].rolling(window=ma_window).std()
-        self.ohlcv['Upper_Band'] = self.ohlcv['SMA'] + (num_std * self.ohlcv['STD'])
-        self.ohlcv['Lower_Band'] = self.ohlcv['SMA'] - (num_std * self.ohlcv['STD'])
+        self.ohlcv['upper_band'] = self.ohlcv['SMA'] + (num_std * self.ohlcv['STD'])
+        self.ohlcv['lower_band'] = self.ohlcv['SMA'] - (num_std * self.ohlcv['STD'])
 
         self.ohlcv['delta'] = self.ohlcv['close'].diff() #self.ohlcv['close'][x]-self.ohlcv['close'][x-1]
         self.ohlcv['gain'] = self.ohlcv['delta'].where(self.ohlcv['delta'] > 0, 0)
@@ -80,12 +90,27 @@ class trading_bot:
         self.ohlcv['avg_loss'] = self.ohlcv['loss'].rolling(window=window, min_periods=1).mean()
         self.ohlcv['rs'] = self.ohlcv['avg_gain'] / self.ohlcv['avg_loss']
         self.ohlcv['rsi'] = 100 - (100 / (1 + self.ohlcv['rs']))
-    
-    def open_graph(self):
+### BAR FUNCTIONS
+    def crossover_BB(self):
+        #BOLLINGER BAND CROSSOVER - OVERBOUGHT
+        results = np.greater(self.ohlcv['high'],self.ohlcv['upper_band'])
+        crossover_timestamps = []
+        for x in range(len(results)):
+            if results[x]:
+                crossover_timestamps.append(self.ohlcv['timestamp'][x])
+    def crossunder_BB(self):
+        results = np.less(self.ohlcv['low'],self.ohlcv['lower_band'])
+        crossunder_timestamps = []
+        for x in range(len(results)):
+            if results[x]:
+                crossunder_timestamps.append(self.ohlcv['timestamp'][x])
+        print(crossunder_timestamps)
+
+    def update_graph(self):
         self.compute_indicators() #indicator columns don't exist yet
 
         ohlcv = self.ohlcv #no more eye sore
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        self.fig = make_subplots(specs=[[{"secondary_y": True}]])
 
         candlestick = go.Candlestick(
             x=ohlcv['timestamp'],
@@ -103,38 +128,43 @@ class trading_bot:
             name="RSI"
         )
 
-        fig.add_trace(candlestick)
-        fig.add_trace(rsi, secondary_y=True)
+        self.fig.add_trace(candlestick)
+        self.fig.add_trace(rsi, secondary_y=True)
 
         ### BOLLINGER BANDS
-        fig.add_trace(go.Scatter(
+        self.fig.add_trace(go.Scatter(
             x=ohlcv['timestamp'],
-            y=ohlcv['Upper_Band'],
+            y=ohlcv['upper_band'],
             line=dict(color='rgba(255, 0, 0, 0.75)', width=1),
             name="Upper"
         ))
-        fig.add_trace(go.Scatter(
+        self.fig.add_trace(go.Scatter(
             x=ohlcv['timestamp'],
-            y=ohlcv['Lower_Band'],
+            y=ohlcv['lower_band'],
             line=dict(color='rgba(0, 255, 0, 0.75)', width=1),
             name="Lower"
         ))
-        fig.add_trace(go.Scatter(
+        self.fig.add_trace(go.Scatter(
             x=ohlcv['timestamp'],
             y=ohlcv['SMA'],
             line=dict(color='rgba(0, 191, 255, 0.75)', width=1),
             name="SMA"
         ))
 
-        fig.update_layout(
+        self.fig.update_layout(
             title=self.SYMBOL,
             xaxis_title="Date",
             yaxis_title="Price",
             xaxis_rangeslider_visible=False,
             template="plotly_dark"  # Optional: Dark theme for the chart
         )
-        fig.show()
-
+    
+    def show_graph(self):
+        try:
+            self.fig.show()
+        except:
+            print(bcolors.FAIL + "GRAPH NOT CREATED YET" + bcolors.DEFAULT)
+                                                                                                                                                                
     def get_positions(self, verbose=False):
         positions = []
         for position in self.portfolio:
@@ -147,6 +177,20 @@ class trading_bot:
 
         return positions
 
+    def get_account_info(self, verbose=False):
+        raw_info = self.trading_client.get_account()
+        info_dict = {
+            "account_number" : raw_info.account_number,
+            "account_id" : raw_info.id,
+            "currency" : raw_info.currency,
+            "currency_amount" : raw_info.cash,
+            "portfolio_value" : raw_info.portfolio_value,
+            "equity" : raw_info.equity
+        }
+        if verbose:
+            print(f"Account Number: {info_dict['account_number']}\nAccount ID: {info_dict['account_id']}\nCurrency Amount: {info_dict['currency_amount']} {info_dict['currency']}\nPortfolio Value: {info_dict['portfolio_value']}\nEquity: {info_dict['equity']}")
+        return info_dict
+### TRADING FUNCTIONS
     def place_order(self, value, type, use_shares=False): #trading in usd by default
         #notional means trading in USD
         #qty means trading in shares
@@ -170,7 +214,11 @@ class trading_bot:
                     )
         
         print(f"Trade placed at {datetime.datetime.now()} - {self.SYMBOL.split("/")[0]+" " if use_shares else "$"}{value} - {type}")
-    
+    def buy_max(self):
+        self.place_order(self.get_account_info()['currency_amount'],OrderSide.BUY,use_shares=False)
+    def sell_max(self):
+        self.place_order(trader.get_positions()[0]['shares'],OrderSide.SELL,use_shares=True)
+
     def algo_trading(self):
         #trading algorithm asyncronous with data stream
         async def quote_handler(data):
@@ -182,6 +230,10 @@ class trading_bot:
         print('streamer ready')
         stream_client.run()
 
-trader = trading_bot("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
 
-trader.open_graph()
+trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
+
+trader.compute_indicators()
+trader.crossunder_BB()
+trader.update_graph()
+trader.show_graph()
