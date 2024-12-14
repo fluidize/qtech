@@ -36,17 +36,27 @@ class TradingEngine:
         self.API_SECRET_KEY = API_SECRET_KEY
 
         self.trading_client = TradingClient(API_KEY_ID, API_SECRET_KEY, paper=True)
+        self.data_client = CryptoHistoricalDataClient(API_KEY_ID, API_SECRET_KEY)
+        
         try:
             os.system('cls')
-
             self.portfolio = self.trading_client.get_all_positions()
             print(bcolors.OKGREEN + "KEYS CLEAR", end=bcolors.DEFAULT + "\n")
             print()
         except:
             print(bcolors.FAIL + "ERROR", end=bcolors.DEFAULT + "\n")
             raise Exception("BAD KEYS")
-        data_client = CryptoHistoricalDataClient(API_KEY_ID, API_SECRET_KEY)
-        DATE_RANGE = 0.125
+
+### INTIAL DATA LOAD
+        self.load_data()
+
+        #fun display
+        print("-"*55)
+        self.get_account_info(verbose=True)
+        print("-"*55)
+
+    def load_data(self):
+        DATE_RANGE = 14
         request_params = CryptoBarsRequest(
             symbol_or_symbols=[self.SYMBOL],       # The crypto pair to fetch
             timeframe=TimeFrame.Minute,            # Timeframe (e.g., Minute, Hour, Day)
@@ -56,9 +66,9 @@ class TradingEngine:
         )
         
         ### DATA COLLECTION
-        crypto_bars = data_client.get_crypto_bars(request_params)
+        crypto_bars = self.data_client.get_crypto_bars(request_params)
         bars = []
-        for bar in crypto_bars[SYMBOL]:
+        for bar in crypto_bars[self.SYMBOL]:
             bars.append({
                 "timestamp": bar.timestamp,
                 "open": bar.open,
@@ -68,11 +78,6 @@ class TradingEngine:
                 "volume": bar.volume
             })
         self.ohlcv = pd.DataFrame(bars)
-
-        #fun display
-        print("-"*55)
-        self.get_account_info(verbose=True)
-        print("-"*55)
     
     def compute_indicators(self):
         ma_window = 20  # Moving average window size
@@ -90,22 +95,41 @@ class TradingEngine:
         self.ohlcv['avg_loss'] = self.ohlcv['loss'].rolling(window=window, min_periods=1).mean()
         self.ohlcv['rs'] = self.ohlcv['avg_gain'] / self.ohlcv['avg_loss']
         self.ohlcv['rsi'] = 100 - (100 / (1 + self.ohlcv['rs']))
-### BAR FUNCTIONS
-    def crossover_BB(self):
+### TA FUNCTIONS
+    def strategy_BB(self):
         #BOLLINGER BAND CROSSOVER - OVERBOUGHT
         results = np.greater(self.ohlcv['high'],self.ohlcv['upper_band'])
-        crossover_timestamps = []
+        sell_points = []
         for x in range(len(results)):
             if results[x]:
-                crossover_timestamps.append(self.ohlcv['timestamp'][x])
-    def crossunder_BB(self):
-        #CROSSUNDER - OVERSOLD
+                sell_points.append(self.ohlcv['timestamp'][x])
+        #BOLLINGER BAND CROSSUNDER - OVERSOLD
+        buy_points = []
         results = np.less(self.ohlcv['low'],self.ohlcv['lower_band'])
-        crossunder_timestamps = []
         for x in range(len(results)):
             if results[x]:
-                crossunder_timestamps.append(self.ohlcv['timestamp'][x])
-        print(crossunder_timestamps)
+                buy_points.append(self.ohlcv['timestamp'][x])
+
+        return {"buy_points":buy_points, "sell_points":sell_points}
+
+    def strategy_RSI(self):
+        limit = 30
+        low_rsi = np.less(self.ohlcv['rsi'], limit, ) #low rsi - oversold
+        high_rsi = np.greater(self.ohlcv['rsi'], 100-limit, ) #high rsi - overbought
+        buy_points = []
+        sell_points = []
+        #1 - buy 
+        #-1 - sell 
+        #0 - none
+        for count, b, s in zip(range(len(self.ohlcv['rsi'])), low_rsi, high_rsi):
+            if b:
+                buy_points.append(self.ohlcv['timestamp'][count])
+            elif s:
+                sell_points.append(self.ohlcv['timestamp'][count])
+
+        return {"buy_points":buy_points, "sell_points":sell_points}
+            
+
 
     def update_graph(self):
         self.compute_indicators() #indicator columns don't exist yet
@@ -177,7 +201,6 @@ class TradingEngine:
                 print(f"{position.symbol} - {position.qty}")
 
         return positions
-
     def get_account_info(self, verbose=False):
         raw_info = self.trading_client.get_account()
         info_dict = {
@@ -191,6 +214,7 @@ class TradingEngine:
         if verbose:
             print(f"Account Number: {info_dict['account_number']}\nAccount ID: {info_dict['account_id']}\nCurrency Amount: {info_dict['currency_amount']} {info_dict['currency']}\nPortfolio Value: {info_dict['portfolio_value']}\nEquity: {info_dict['equity']}")
         return info_dict
+
 ### TRADING FUNCTIONS
     def place_order(self, value, type, use_shares=False): #trading in usd by default
         #notional means trading in USD
@@ -234,5 +258,7 @@ class TradingEngine:
 
 trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
 
-while True:
-    trader.update_graph()
+trader.compute_indicators()
+print(trader.strategy_RSI())
+trader.update_graph()
+trader.show_graph()
