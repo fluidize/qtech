@@ -46,13 +46,13 @@ class TradingEngine:
             print(bcolors.FAIL + "ERROR", end=bcolors.DEFAULT + "\n")
             raise Exception("BAD KEYS")
         data_client = CryptoHistoricalDataClient(API_KEY_ID, API_SECRET_KEY)
-        DATE_RANGE = 14
+        DATE_RANGE = 0.125
         request_params = CryptoBarsRequest(
             symbol_or_symbols=[self.SYMBOL],       # The crypto pair to fetch
-            timeframe=TimeFrame.Hour,            # Timeframe (e.g., Minute, Hour, Day)
+            timeframe=TimeFrame.Minute,            # Timeframe (e.g., Minute, Hour, Day)
             start=datetime.datetime.now() - datetime.timedelta(DATE_RANGE),          # Start date for historical data
             end=datetime.datetime.now(),            # End date for historical data
-            limit=1000                           # Max number of bars to retrieve
+            limit=10000                          # Max number of bars to retrieve
         )
         
         ### DATA COLLECTION
@@ -227,13 +227,11 @@ class TradingEngine:
         #stream data
         stream_client = CryptoDataStream(API_KEY_ID,API_SECRET_KEY)
         stream_client.subscribe_quotes(quote_handler, "BTC/USD")
-        print('streamer ready')
+        print('Streamer Online')
         stream_client.run()
 
 
 trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
 
-trader.compute_indicators()
-trader.crossunder_BB()
-trader.update_graph()
-trader.show_graph()
+while True:
+    trader.update_graph()
