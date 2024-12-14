@@ -99,6 +99,7 @@ class TradingEngine:
             if results[x]:
                 crossover_timestamps.append(self.ohlcv['timestamp'][x])
     def crossunder_BB(self):
+        #CROSSUNDER - OVERSOLD
         results = np.less(self.ohlcv['low'],self.ohlcv['lower_band'])
         crossunder_timestamps = []
         for x in range(len(results)):
