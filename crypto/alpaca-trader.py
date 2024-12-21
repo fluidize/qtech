@@ -55,13 +55,14 @@ class TradingEngine:
         self.get_account_info(verbose=True)
         print("-"*55)
 
-    def load_data(self):
+    def load_data(self, verbose=False):
         DATE_RANGE = 14
         request_params = CryptoBarsRequest(
-            symbol_or_symbols=[self.SYMBOL],       # The crypto pair to fetch
-            timeframe=TimeFrame.Minute,            # Timeframe (e.g., Minute, Hour, Day)
-            start=datetime.datetime.now() - datetime.timedelta(DATE_RANGE),          # Start date for historical data
-            end=datetime.datetime.now(),            # End date for historical data
+            symbol_or_symbols=[self.SYMBOL],       #pair to get
+            #REMEMBER TO CHANGE ALGORITHM TRADING TIMEFRAMES
+            timeframe=TimeFrame.Hour,            # Timeframe (e.g., Minute, Hour, Day)
+            start=datetime.datetime.now() - datetime.timedelta(DATE_RANGE),          #start date
+            end=datetime.datetime.now(),            #end date
             limit=10000                          # Max number of bars to retrieve
         )
         
@@ -78,6 +79,8 @@ class TradingEngine:
                 "volume": bar.volume
             })
         self.ohlcv = pd.DataFrame(bars)
+
+        print("DATA LOADED - OHLCV REFRESHED")
     
     def compute_indicators(self):
         ma_window = 20  # Moving average window size
@@ -128,8 +131,6 @@ class TradingEngine:
                 sell_points.append(self.ohlcv['timestamp'][count])
 
         return {"buy_points":buy_points, "sell_points":sell_points}
-            
-
 
     def update_graph(self):
         self.compute_indicators() #indicator columns don't exist yet
@@ -238,27 +239,34 @@ class TradingEngine:
                         order_data=market_order_data
                     )
         
-        print(f"Trade placed at {datetime.datetime.now()} - {self.SYMBOL.split("/")[0]+" " if use_shares else "$"}{value} - {type}")
+        print(f"Trade placed at {datetime.datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}")
     def buy_max(self):
         self.place_order(self.get_account_info()['currency_amount'],OrderSide.BUY,use_shares=False)
     def sell_max(self):
         self.place_order(trader.get_positions()[0]['shares'],OrderSide.SELL,use_shares=True)
 
     def algo_trading(self):
-        #trading algorithm asyncronous with data stream
-        async def quote_handler(data):
-            print(data)
+        while True:
+            current_time = datetime.datetime.now().replace(microsecond=0, second=0) #trading by minutes
+            #current_time = datetime.datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
+            print(current_time)
+            self.compute_indicators()
+            ### OVERSOLD
+            if (self.strategy_RSI()['buy_point'][-1] == current_time) and (self.strategy_BB()['buy_point'][-1] == current_time): #if the last entry point is the hour, buy
+                self.buy_max()
+            ### OVERBOUGHT
+            if (self.strategy_RSI()['buy_point'][-1] == current_time) and (self.strategy_BB()['buy_point'][-1] == current_time):
+                self.sell_max()
+            self.load_data()
+            self.update_graph()
+            self.show_graph()
+            time.sleep(60)
         
-        #stream data
-        stream_client = CryptoDataStream(API_KEY_ID,API_SECRET_KEY)
-        stream_client.subscribe_quotes(quote_handler, "BTC/USD")
-        print('Streamer Online')
-        stream_client.run()
+
+
+        
 
 
 trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
 
-trader.compute_indicators()
-print(trader.strategy_RSI())
-trader.update_graph()
-trader.show_graph()
+trader.algo_trading()
