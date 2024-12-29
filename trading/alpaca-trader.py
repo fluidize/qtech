@@ -26,8 +26,13 @@ class bcolors:
     ENDC = '\033[0m'
     DEFAULT = '\033[39m'
 
-API_KEY_ID = "PK0A3PJBDB887VC8BO53"
-API_SECRET_KEY = "hWeFc9JiICNSIrvfJWBIUZ6UmZ64SDaCUpqBNsyP"
+os.chdir(os.path.dirname(os.path.abspath(__file__))) #set cwd as script folder
+
+import json
+data = json.load(open('keys.json'))
+
+API_KEY_ID = data['key']
+API_SECRET_KEY = data['secret']
 
 class TradingEngine:
     def __init__(self,SYMBOL, API_KEY_ID, API_SECRET_KEY):
@@ -116,7 +121,7 @@ class TradingEngine:
         return {"buy_points":buy_points, "sell_points":sell_points}
 
     def strategy_RSI(self):
-        limit = 40
+        limit = 20
         low_rsi = np.less(self.ohlcv['rsi'], limit, ) #low rsi - oversold
         high_rsi = np.greater(self.ohlcv['rsi'], 100-limit, ) #high rsi - overbought
         buy_points = []
@@ -234,18 +239,21 @@ class TradingEngine:
                 side=type, #OrderSide.BUY OrderSide.SELL
                 time_in_force=TimeInForce.GTC
             )
-        try:
-            market_order = self.trading_client.submit_order(
-                            order_data=market_order_data
-                        )
-        except:
-            print(bcolors.WARNING + "Order Failed" + bcolors.DEFAULT)
         
-        print(f"Trade placed at {datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}")
+        try:
+            self.trading_client.submit_order(order_data=market_order_data)
+            print(f"Trade placed at {datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}")
+        except:
+            print(bcolors.WARNING + "Order Failed; Out of currency?" + bcolors.DEFAULT)
+        
+        
     def buy_max(self):
         self.place_order(self.get_account_info()['currency_amount'],OrderSide.BUY,use_shares=False)
     def sell_max(self):
-        self.place_order(trader.get_positions()[0]['shares'],OrderSide.SELL,use_shares=True)
+        try:
+            self.place_order(trader.get_positions()[0]['shares'],OrderSide.SELL,use_shares=True)
+        except:
+            print(bcolors.WARNING + "Order Failed; No assets?" + bcolors.DEFAULT)
 
     def algo_trading(self):
         while True:
@@ -255,7 +263,7 @@ class TradingEngine:
             print(current_time)
             self.load_data()
             self.compute_indicators()
-            print(self.ohlcv['rsi'].iloc[-1])
+            print(f"RSI: {self.ohlcv['rsi'].iloc[-1]}")
             
 
             ### OVERSOLD
