@@ -1,3 +1,1 @@
-# brains
-
-ML/NN projects
+# finance + ML/NN
