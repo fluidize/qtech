@@ -2,7 +2,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
-import datetime
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
 from alpaca.data.historical import CryptoHistoricalDataClient
@@ -56,13 +56,13 @@ class TradingEngine:
         print("-"*55)
 
     def load_data(self, verbose=False):
-        DATE_RANGE = 14
+        DATE_RANGE = 0.5
         request_params = CryptoBarsRequest(
             symbol_or_symbols=[self.SYMBOL],       #pair to get
             #REMEMBER TO CHANGE ALGORITHM TRADING TIMEFRAMES
-            timeframe=TimeFrame.Hour,            # Timeframe (e.g., Minute, Hour, Day)
-            start=datetime.datetime.now() - datetime.timedelta(DATE_RANGE),          #start date
-            end=datetime.datetime.now(),            #end date
+            timeframe=TimeFrame.Minute,            # Timeframe (e.g., Minute, Hour, Day)
+            start=datetime.now() - timedelta(DATE_RANGE),          #start date
+            end=datetime.now(),            #end date
             limit=10000                          # Max number of bars to retrieve
         )
         
@@ -71,7 +71,7 @@ class TradingEngine:
         bars = []
         for bar in crypto_bars[self.SYMBOL]:
             bars.append({
-                "timestamp": bar.timestamp,
+                "timestamp": bar.timestamp.replace(tzinfo=None),
                 "open": bar.open,
                 "high": bar.high,
                 "low": bar.low,
@@ -116,7 +116,7 @@ class TradingEngine:
         return {"buy_points":buy_points, "sell_points":sell_points}
 
     def strategy_RSI(self):
-        limit = 30
+        limit = 40
         low_rsi = np.less(self.ohlcv['rsi'], limit, ) #low rsi - oversold
         high_rsi = np.greater(self.ohlcv['rsi'], 100-limit, ) #high rsi - overbought
         buy_points = []
@@ -234,12 +234,14 @@ class TradingEngine:
                 side=type, #OrderSide.BUY OrderSide.SELL
                 time_in_force=TimeInForce.GTC
             )
+        try:
+            market_order = self.trading_client.submit_order(
+                            order_data=market_order_data
+                        )
+        except:
+            print(bcolors.WARNING + "Order Failed" + bcolors.DEFAULT)
         
-        market_order = self.trading_client.submit_order(
-                        order_data=market_order_data
-                    )
-        
-        print(f"Trade placed at {datetime.datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}")
+        print(f"Trade placed at {datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}")
     def buy_max(self):
         self.place_order(self.get_account_info()['currency_amount'],OrderSide.BUY,use_shares=False)
     def sell_max(self):
@@ -247,25 +249,25 @@ class TradingEngine:
 
     def algo_trading(self):
         while True:
-            current_time = datetime.datetime.now().replace(microsecond=0, second=0) #trading by minutes
-            #current_time = datetime.datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
+            current_time = datetime.now().replace(microsecond=0, second=0) #trading by minutes
+            #current_time = datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
+
             print(current_time)
+            self.load_data()
             self.compute_indicators()
+            print(self.ohlcv['rsi'].iloc[-1])
+            
+
             ### OVERSOLD
-            if (self.strategy_RSI()['buy_point'][-1] == current_time) and (self.strategy_BB()['buy_point'][-1] == current_time): #if the last entry point is the hour, buy
+            if (self.strategy_RSI()['buy_points'][-1] == current_time) or (self.strategy_BB()['buy_points'][-1] == current_time): #if the last entry point is the hour, buy
                 self.buy_max()
             ### OVERBOUGHT
-            if (self.strategy_RSI()['buy_point'][-1] == current_time) and (self.strategy_BB()['buy_point'][-1] == current_time):
+            if (self.strategy_RSI()['sell_points'][-1] == current_time) or (self.strategy_BB()['sell_points'][-1] == current_time):
                 self.sell_max()
-            self.load_data()
-            self.update_graph()
-            self.show_graph()
+
+            print()
             time.sleep(60)
         
-
-
-        
-
 
 trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
 
