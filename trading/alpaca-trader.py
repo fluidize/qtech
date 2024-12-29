@@ -242,7 +242,7 @@ class TradingEngine:
         
         try:
             self.trading_client.submit_order(order_data=market_order_data)
-            print(f"Trade placed at {datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}")
+            print(bcolors.OKGREEN + f"Trade placed at {datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}" + bcolors.DEFAULT)
         except:
             print(bcolors.WARNING + "Order Failed; Out of currency?" + bcolors.DEFAULT)
         
@@ -255,7 +255,7 @@ class TradingEngine:
         except:
             print(bcolors.WARNING + "Order Failed; No assets?" + bcolors.DEFAULT)
 
-    def algo_trading(self):
+    def rsi_bb_auto(self):
         while True:
             current_time = datetime.now().replace(microsecond=0, second=0) #trading by minutes
             #current_time = datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
@@ -279,4 +279,4 @@ class TradingEngine:
 
 trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
 
-trader.algo_trading()
+trader.rsi_bb_auto()
