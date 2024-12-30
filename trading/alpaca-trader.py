@@ -61,11 +61,11 @@ class TradingEngine:
         print("-"*55)
 
     def load_data(self, verbose=False):
-        DATE_RANGE = 0.5
+        DATE_RANGE = 14
         request_params = CryptoBarsRequest(
             symbol_or_symbols=[self.SYMBOL],       #pair to get
             #REMEMBER TO CHANGE ALGORITHM TRADING TIMEFRAMES
-            timeframe=TimeFrame.Minute,            # Timeframe (e.g., Minute, Hour, Day)
+            timeframe=TimeFrame.Hour,            # Timeframe (e.g., Minute, Hour, Day)
             start=datetime.now() - timedelta(DATE_RANGE),          #start date
             end=datetime.now(),            #end date
             limit=10000                          # Max number of bars to retrieve
@@ -121,7 +121,7 @@ class TradingEngine:
         return {"buy_points":buy_points, "sell_points":sell_points}
 
     def strategy_RSI(self):
-        limit = 20
+        limit = 30
         low_rsi = np.less(self.ohlcv['rsi'], limit, ) #low rsi - oversold
         high_rsi = np.greater(self.ohlcv['rsi'], 100-limit, ) #high rsi - overbought
         buy_points = []
@@ -242,9 +242,9 @@ class TradingEngine:
         
         try:
             self.trading_client.submit_order(order_data=market_order_data)
-            print(bcolors.OKGREEN + f"Trade placed at {datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}" + bcolors.DEFAULT)
+            print(bcolors.OKGREEN if type == OrderSide.BUY else bcolors.FAIL + f"Trade placed at {datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}" + bcolors.DEFAULT)
         except:
-            print(bcolors.WARNING + "Order Failed; Out of currency?" + bcolors.DEFAULT)
+            print(bcolors.WARNING + "Order Failed; Out of currency or order is too large." + bcolors.DEFAULT)
         
         
     def buy_max(self):
@@ -257,8 +257,8 @@ class TradingEngine:
 
     def rsi_bb_auto(self):
         while True:
-            current_time = datetime.now().replace(microsecond=0, second=0) #trading by minutes
-            #current_time = datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
+            # current_time = datetime.now().replace(microsecond=0, second=0) #trading by minutes
+            current_time = datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
 
             print(current_time)
             self.load_data()
@@ -274,9 +274,14 @@ class TradingEngine:
                 self.sell_max()
 
             print()
-            time.sleep(60)
+            time.sleep(3600)
         
 
 trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
+
+trader.compute_indicators()
+
+print(trader.strategy_RSI()['sell_points'][-1])
+print(datetime.now().replace(microsecond=0, second=0, minute=0))
 
 trader.rsi_bb_auto()
