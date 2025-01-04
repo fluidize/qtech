@@ -16,6 +16,7 @@ from alpaca.data.live.crypto import CryptoDataStream
 
 import time
 import os
+import traceback
 
 class bcolors:
     HEADER = '\033[95m'
@@ -65,7 +66,7 @@ class TradingEngine:
         request_params = CryptoBarsRequest(
             symbol_or_symbols=[self.SYMBOL],       #pair to get
             #REMEMBER TO CHANGE ALGORITHM TRADING TIMEFRAMES
-            timeframe=TimeFrame.Hour,            # Timeframe (e.g., Minute, Hour, Day)
+            timeframe=TimeFrame.Minute,            # Timeframe (e.g., Minute, Hour, Day)
             start=datetime.now() - timedelta(DATE_RANGE),          #start date
             end=datetime.now(),            #end date
             limit=10000                          # Max number of bars to retrieve
@@ -103,6 +104,7 @@ class TradingEngine:
         self.ohlcv['avg_loss'] = self.ohlcv['loss'].rolling(window=window, min_periods=1).mean()
         self.ohlcv['rs'] = self.ohlcv['avg_gain'] / self.ohlcv['avg_loss']
         self.ohlcv['rsi'] = 100 - (100 / (1 + self.ohlcv['rs']))
+
 ### TA FUNCTIONS
     def strategy_BB(self):
         #BOLLINGER BAND CROSSOVER - OVERBOUGHT
@@ -119,7 +121,6 @@ class TradingEngine:
                 buy_points.append(self.ohlcv['timestamp'][x])
 
         return {"buy_points":buy_points, "sell_points":sell_points}
-
     def strategy_RSI(self):
         limit = 30
         low_rsi = np.less(self.ohlcv['rsi'], limit, ) #low rsi - oversold
@@ -136,6 +137,7 @@ class TradingEngine:
                 sell_points.append(self.ohlcv['timestamp'][count])
 
         return {"buy_points":buy_points, "sell_points":sell_points}
+
 
     def update_graph(self):
         self.compute_indicators() #indicator columns don't exist yet
@@ -181,7 +183,6 @@ class TradingEngine:
             line=dict(color='rgba(0, 191, 255, 0.75)', width=1),
             name="SMA"
         ))
-
         self.fig.update_layout(
             title=self.SYMBOL,
             xaxis_title="Date",
@@ -189,20 +190,22 @@ class TradingEngine:
             xaxis_rangeslider_visible=False,
             template="plotly_dark"  # Optional: Dark theme for the chart
         )
-    
     def show_graph(self):
         try:
             self.fig.show()
         except:
             print(bcolors.FAIL + "GRAPH NOT CREATED YET" + bcolors.DEFAULT)
-                                                                                                                                                                
+
+
     def get_positions(self, verbose=False):
         positions = []
         for position in self.portfolio:
             positions.append({
                 "symbol":position.symbol,
-                "shares":position.qty
-                              })
+                "shares":float(position.qty),
+                "value":float(position.market_value),
+                "asset_price":float(position.current_price)
+                })
             if verbose:
                 print(f"{position.symbol} - {position.qty}")
 
@@ -220,6 +223,7 @@ class TradingEngine:
         if verbose:
             print(f"Account Number: {info_dict['account_number']}\nAccount ID: {info_dict['account_id']}\nCurrency Amount: {info_dict['currency_amount']} {info_dict['currency']}\nPortfolio Value: {info_dict['portfolio_value']}\nEquity: {info_dict['equity']}")
         return info_dict
+
 
 ### TRADING FUNCTIONS
     def place_order(self, value, type, use_shares=False): #trading in usd by default
@@ -240,25 +244,34 @@ class TradingEngine:
                 time_in_force=TimeInForce.GTC
             )
         
-        try:
-            self.trading_client.submit_order(order_data=market_order_data)
-            print(bcolors.OKGREEN if type == OrderSide.BUY else bcolors.FAIL + f"Trade placed at {datetime.now()} - {self.SYMBOL.split("/")[0]+' ' if use_shares else "$"}{value} - {type}" + bcolors.DEFAULT)
-        except:
-            print(bcolors.WARNING + "Order Failed; Out of currency or order is too large." + bcolors.DEFAULT)
-        
-        
+
+        self.trading_client.submit_order(order_data=market_order_data)
+
+        pcolor = bcolors.OKGREEN if type == OrderSide.BUY else bcolors.FAIL
+        pcurrency = self.SYMBOL.split('/')[0]+' ' if use_shares else '$'
+        print(pcolor + f"Trade placed at {datetime.now()} - {pcurrency}{value} - {type}" + bcolors.DEFAULT)
     def buy_max(self):
-        self.place_order(self.get_account_info()['currency_amount'],OrderSide.BUY,use_shares=False)
-    def sell_max(self):
         try:
-            self.place_order(trader.get_positions()[0]['shares'],OrderSide.SELL,use_shares=True)
+            self.place_order(self.get_account_info()['currency_amount'],OrderSide.BUY,use_shares=False)
         except:
-            print(bcolors.WARNING + "Order Failed; No assets?" + bcolors.DEFAULT)
+            print(bcolors.WARNING + "WARNING; Out of currency or order is too large." + bcolors.DEFAULT)
+    def sell_max(self):
+        current_position = self.get_positions()[0]
+        try:
+            self.place_order(current_position['shares'],OrderSide.SELL,use_shares=True)
+        except:
+            max_sell = 200000
+            if self.get_positions()[0]['value'] >= max_sell:
+                print(bcolors.WARNING + "WARNING; Out of assets or order is too large." + bcolors.DEFAULT)
+                shares_to_sell = max_sell/current_position['asset_price']
+                self.place_order(shares_to_sell,OrderSide.SELL,use_shares=True)
+                print(bcolors.FAIL + "Sold maximum amount of shares." + bcolors.DEFAULT)
+
 
     def rsi_bb_auto(self):
         while True:
-            # current_time = datetime.now().replace(microsecond=0, second=0) #trading by minutes
-            current_time = datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
+            current_time = datetime.now().replace(microsecond=0, second=0) #trading by minutes
+            # current_time = datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
 
             print(current_time)
             self.load_data()
@@ -274,14 +287,9 @@ class TradingEngine:
                 self.sell_max()
 
             print()
-            time.sleep(3600)
+            time.sleep(45)
         
 
 trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
-
-trader.compute_indicators()
-
-print(trader.strategy_RSI()['sell_points'][-1])
-print(datetime.now().replace(microsecond=0, second=0, minute=0))
 
 trader.rsi_bb_auto()
