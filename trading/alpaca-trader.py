@@ -54,7 +54,7 @@ class TradingEngine:
             raise Exception("BAD KEYS")
 
 ### INTIAL DATA LOAD
-        self.load_data()
+        self.load_data(verbose=True)
 
         #fun display
         print("-"*55)
@@ -62,14 +62,17 @@ class TradingEngine:
         print("-"*55)
 
     def load_data(self, verbose=False):
-        DATE_RANGE = 14
+        DATE_RANGE = 1
         request_params = CryptoBarsRequest(
-            symbol_or_symbols=[self.SYMBOL],       #pair to get
             #REMEMBER TO CHANGE ALGORITHM TRADING TIMEFRAMES
-            timeframe=TimeFrame.Minute,            # Timeframe (e.g., Minute, Hour, Day)
-            start=datetime.now() - timedelta(DATE_RANGE),          #start date
-            end=datetime.now(),            #end date
-            limit=10000                          # Max number of bars to retrieve
+            #if bar limit is reached, it will cause a shift in dates causing no trades to be executed.
+
+            symbol_or_symbols=[self.SYMBOL], #pair to get
+            
+            timeframe=TimeFrame.Minute, # Timeframe (e.g., Minute, Hour, Day)
+            start=datetime.now() - timedelta(DATE_RANGE), #start date
+            end=datetime.now(), #end date
+            limit=10000 # Max number of bars to retrieve
         )
         
         ### DATA COLLECTION
@@ -86,7 +89,8 @@ class TradingEngine:
             })
         self.ohlcv = pd.DataFrame(bars)
 
-        print("DATA LOADED - OHLCV REFRESHED")
+        if verbose:
+            print("DATA LOADED - OHLCV REFRESHED")
     
     def compute_indicators(self):
         ma_window = 20  # Moving average window size
@@ -256,19 +260,22 @@ class TradingEngine:
         except:
             print(bcolors.WARNING + "WARNING; Out of currency or order is too large." + bcolors.DEFAULT)
     def sell_max(self):
-        current_position = self.get_positions()[0]
         try:
-            self.place_order(current_position['shares'],OrderSide.SELL,use_shares=True)
+            current_position = self.get_positions()[0]
+            try:
+                self.place_order(current_position['shares'],OrderSide.SELL,use_shares=True)
+            except:
+                max_sell = 200000
+                if self.get_positions()[0]['value'] >= max_sell:
+                    print(bcolors.WARNING + "WARNING; Out of assets or order is too large." + bcolors.DEFAULT)
+                    shares_to_sell = max_sell/current_position['asset_price']
+                    self.place_order(shares_to_sell,OrderSide.SELL,use_shares=True)
+                    print(bcolors.FAIL + "Sold maximum amount of shares." + bcolors.DEFAULT)
         except:
-            max_sell = 200000
-            if self.get_positions()[0]['value'] >= max_sell:
-                print(bcolors.WARNING + "WARNING; Out of assets or order is too large." + bcolors.DEFAULT)
-                shares_to_sell = max_sell/current_position['asset_price']
-                self.place_order(shares_to_sell,OrderSide.SELL,use_shares=True)
-                print(bcolors.FAIL + "Sold maximum amount of shares." + bcolors.DEFAULT)
+            print(bcolors.WARNING + "ORDER FAILED; Out of assets or order is too large." + bcolors.DEFAULT)
 
 
-    def rsi_bb_auto(self):
+    def rsi_auto(self):
         while True:
             current_time = datetime.now().replace(microsecond=0, second=0) #trading by minutes
             # current_time = datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
@@ -276,15 +283,21 @@ class TradingEngine:
             print(current_time)
             self.load_data()
             self.compute_indicators()
-            print(f"RSI: {self.ohlcv['rsi'].iloc[-1]}")
+            latest_time = self.ohlcv['timestamp'].iloc[-1]
+            latest_rsi = self.ohlcv['rsi'].iloc[-1]
+            print(f"RSI - {self.ohlcv['timestamp'].iloc[-1]}: {self.ohlcv['rsi'].iloc[-1]}")
             
-
-            ### OVERSOLD
-            if (self.strategy_RSI()['buy_points'][-1] == current_time) or (self.strategy_BB()['buy_points'][-1] == current_time): #if the last entry point is the hour, buy
+            if (latest_rsi <= 30.0) and (latest_time == current_time):
                 self.buy_max()
-            ### OVERBOUGHT
-            if (self.strategy_RSI()['sell_points'][-1] == current_time) or (self.strategy_BB()['sell_points'][-1] == current_time):
+            if (latest_rsi >= 70.0) and (latest_time == current_time):
                 self.sell_max()
+            
+            # ### OVERSOLD
+            # if (self.strategy_RSI()['buy_points'][-1] == current_time) or (self.strategy_BB()['buy_points'][-1] == current_time): #if the last entry point is the same as current datetime, buy
+            #     self.buy_max()
+            # ### OVERBOUGHT
+            # if (self.strategy_RSI()['sell_points'][-1] == current_time) or (self.strategy_BB()['sell_points'][-1] == current_time):
+            #     self.sell_max()
 
             print()
             time.sleep(45)
@@ -292,4 +305,4 @@ class TradingEngine:
 
 trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
 
-trader.rsi_bb_auto()
+trader.rsi_auto()
