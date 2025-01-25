@@ -72,7 +72,7 @@ class TradingEngine:
             timeframe=TimeFrame.Minute, # Timeframe (e.g., Minute, Hour, Day)
             start=datetime.now() - timedelta(DATE_RANGE), #start date
             end=datetime.now(), #end date
-            limit=10000 # Max number of bars to retrieve
+            limit=5000 # Max number of bars to retrieve
         )
         
         ### DATA COLLECTION
@@ -260,6 +260,7 @@ class TradingEngine:
         except:
             print(bcolors.WARNING + "WARNING; Out of currency or order is too large." + bcolors.DEFAULT)
     def sell_max(self):
+    def 
         try:
             current_position = self.get_positions()[0]
             try:
