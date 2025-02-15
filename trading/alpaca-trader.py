@@ -260,7 +260,6 @@ class TradingEngine:
         except:
             print(bcolors.WARNING + "WARNING; Out of currency or order is too large." + bcolors.DEFAULT)
     def sell_max(self):
-    def 
         try:
             current_position = self.get_positions()[0]
             try:
