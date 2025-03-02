@@ -3,18 +3,19 @@ import pandas as pd
 import numpy as np
 
 import tensorflow as tf
-from keras import layers, models
+from keras import layers, models, optimizers, callbacks
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# Step 1: Fetch Bitcoin OHLCV Data
+tf.config.threading.set_intra_op_parallelism_threads(4)
+tf.config.threading.set_inter_op_parallelism_threads(4)
+
 def fetch_btc_data():
     # Download Bitcoin OHLCV data (1 minute candles for 8 days)
     data = yf.download('BTC-USD', period='8d', interval='1m')  
     return data
 
-# Step 2: Add Features (Moving Averages, RSI, Lagged Features)
 def add_features(df):
     # 20-period and 50-period moving averages
     df['MA20'] = df['Close'].rolling(window=20).mean()
@@ -35,7 +36,6 @@ def add_features(df):
     
     return df
 
-# Calculate 14-period RSI
 def compute_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -59,11 +59,9 @@ def prepare_data(df):
     
     return X, y
 
-# Fetch data and add features
+#preparation
 data = fetch_btc_data()
 data = add_features(data)
-
-# Prepare data
 X, y = prepare_data(data)
 
 # Reshape X into 3D for LSTM [samples, time steps, features]
@@ -73,25 +71,30 @@ X, y = prepare_data(data)
 X = X.values.reshape((X.shape[0], 1, X.shape[1]))  # Reshaping to (samples, time_steps, features)
 
 # LSTM MODEL
-width = 512
-
 model = models.Sequential()
-model.add(layers.Input(input_shape=(X.shape[1], X.shape[2]))) #LSTM INPUT SHAPE
-model.add(layers.LSTM(units=width, return_sequences=True))  # First LSTM layer
-model.add(layers.LSTM(units=width, return_sequences=True))
-model.add(layers.LSTM(units=width, return_sequences=False))
-model.add(layers.Dense(units=1))  # Output layer
+reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validation loss
+                              factor=0.2,  # Reduce by 80% (0.2)
+                              patience=5,  # Wait for 5 epochs with no improvement
+                              min_lr=1e-6)
+lstm_width = 512
 
+model.add(layers.Input(shape=(X.shape[1], X.shape[2]))) #LSTM INPUT SHAPE
+model.add(layers.LSTM(units=lstm_width, return_sequences=True))  # First LSTM layer
+model.add(layers.LSTM(units=lstm_width, return_sequences=False))
 
-# Compile the model
+model.add(layers.Dense(256))
+model.add(layers.Dense(256))
+model.add(layers.Dense(256))
+model.add(layers.Dense(1))  # Output layer
+
+# compile and train
 lossfn = tf.keras.losses.Huber()
-model.compile(optimizer='adam', loss=lossfn, metrics=['mean_squared_error'])
+model.compile(optimizer=optimizers.Adam(learning_rate=0.00001), loss=lossfn, metrics=['mean_squared_error'])
+model.fit(X, y, epochs=100, batch_size=16)
 
-model.fit(X, y, epochs=100, batch_size=32)
+#predict and plot
 yhat = model.predict(X)
-
 data.index = pd.to_datetime(data.index)
-
 data = data.reset_index() # Alternatively, reset the index if the time is being used as a column
 data = data.iloc[:-1] # extras
 
