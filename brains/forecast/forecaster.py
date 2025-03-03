@@ -3,17 +3,17 @@ import pandas as pd
 import numpy as np
 
 import tensorflow as tf
-from keras import layers, models, optimizers, callbacks
+from keras import layers, models, optimizers, callbacks, losses
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-tf.config.threading.set_intra_op_parallelism_threads(4)
-tf.config.threading.set_inter_op_parallelism_threads(4)
+tf.config.threading.set_intra_op_parallelism_threads(24)
+tf.config.threading.set_inter_op_parallelism_threads(24)
 
 def fetch_btc_data():
     # Download Bitcoin OHLCV data (1 minute candles for 8 days)
-    data = yf.download('BTC-USD', period='8d', interval='1m')  
+    data = yf.download('BTC-USD', period='2y', interval='1h')  
     return data
 
 def add_features(df):
@@ -64,10 +64,18 @@ data = fetch_btc_data()
 data = add_features(data)
 X, y = prepare_data(data)
 
-# Reshape X into 3D for LSTM [samples, time steps, features]
-# X.shape[0]: Number of rows (data points, samples).
-# X.shape[1]: Number of columns (features, variables).
-# X.shape[2] (only in 3D arrays): This could refer to additional dimensions, for example, in time-series data where the 3D shape might represent (samples, timesteps, features).
+percentage = 0.5  # 50% of the original sequence length
+seq_length = int(X.shape[1] * percentage)
+
+# Create sequences of the calculated length (if you need to reshape X)
+def create_sequences(data, seq_length):
+    sequences = []
+    for i in range(len(data) - seq_length):
+        sequences.append(data[i:i + seq_length])
+    return np.array(sequences)
+
+# Reshape your data based on the new sequence length
+X_seq = create_sequences(X, seq_length)
 X = X.values.reshape((X.shape[0], 1, X.shape[1]))  # Reshaping to (samples, time_steps, features)
 
 # LSTM MODEL
@@ -76,28 +84,40 @@ reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validatio
                               factor=0.2,  # Reduce by 80% (0.2)
                               patience=5,  # Wait for 5 epochs with no improvement
                               min_lr=1e-6)
-lstm_width = 512
+early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
+lstm_width = 2048
+dense_width = 2048
 
-model.add(layers.Input(shape=(X.shape[1], X.shape[2]))) #LSTM INPUT SHAPE
-model.add(layers.LSTM(units=lstm_width, return_sequences=True))  # First LSTM layer
-model.add(layers.LSTM(units=lstm_width, return_sequences=False))
+inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
+# lstm = layers.Bidirectional(layers.LSTM(units=lstm_width, return_sequences=True))(inputs)  
+# lstm = layers.Bidirectional(layers.LSTM(units=lstm_width, return_sequences=True))(lstm)
 
-model.add(layers.Dense(256))
-model.add(layers.Dense(256))
-model.add(layers.Dense(256))
-model.add(layers.Dense(1))  # Output layer
+# attention = layers.Attention()([lstm, lstm])
 
-# compile and train
-lossfn = tf.keras.losses.Huber()
-model.compile(optimizer=optimizers.Adam(learning_rate=0.00001), loss=lossfn, metrics=['mean_squared_error'])
-model.fit(X, y, epochs=100, batch_size=16)
+gru = layers.GRU(units=lstm_width, return_sequences=True)(inputs)
+gru = layers.GRU(units=lstm_width, return_sequences=True)(gru)
+gru = layers.GRU(units=lstm_width, return_sequences=True)(gru)
+
+# Attention mechanism
+attention = layers.Attention()([gru, gru])
+
+attention = layers.GlobalAveragePooling1D()(attention)
+
+dense = layers.Dense(dense_width, activation='relu')(attention)
+dense = layers.Dense(dense_width, activation='relu')(dense)
+
+outputs = layers.Dense(1)(dense)
+
+model = models.Model(inputs=inputs, outputs=outputs)
+lossfn = losses.MeanAbsoluteError()
+model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
+model.fit(X, y, epochs=50, batch_size=64, callbacks=[early_stopping])
 
 #predict and plot
 yhat = model.predict(X)
 data.index = pd.to_datetime(data.index)
 data = data.reset_index() # Alternatively, reset the index if the time is being used as a column
 data = data.iloc[:-1] # extras
-
 
 sns.set_style("darkgrid")
 
