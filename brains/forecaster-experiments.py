@@ -58,7 +58,7 @@ dataset = TensorDataset(X_tensor, y_tensor) #CONV TO TENSOR
 train_loader = DataLoader(dataset, batch_size=64, shuffle=True) #LOAD TO MEM
 
 class Model(nn.Module):
-    def __init__(self, input_size, rnn_width=4096, dense_width=4096, num_heads=13, key_dim=128):
+    def __init__(self, input_size, rnn_width=2048, dense_width=4096, num_heads=13, key_dim=128):
         super(Model, self).__init__()
         self.prefc1 = nn.Linear(input_size, dense_width)
         self.prefc2 = nn.Linear(dense_width, dense_width)
@@ -92,9 +92,6 @@ class Model(nn.Module):
         # GRU layers
         x, _ = self.gru1(x)  # Revert back to (batch_size, seq_len, embed_dim)
         x, _ = self.gru2(x)
-        x, _ = self.gru2(x)
-        x, _ = self.gru2(x)
-        x, _ = self.gru2(x)
         x, _ = self.gru3(x)
         #: This means "select all samples in the batch."
         #-1 This means "select the last time step in the sequence."
@@ -120,7 +117,7 @@ model = Model(input_size)
 model.to(device) #USE GPU
 
 loss_fn = nn.HuberLoss()
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
+optimizer = optim.Adam(model.parameters(), lr=1e-4)
 from tqdm import tqdm
 
 num_epochs = 50
@@ -129,11 +126,12 @@ for epoch in range(num_epochs):
     running_loss = 0.0
     for X_batch, y_batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False):
         X_batch, y_batch = X_batch.to(device), y_batch.to(device) #USE GPU
-        optimizer.zero_grad()
-        outputs = model(X_batch)
-        loss = loss_fn(outputs, y_batch)
-        loss.backward()
-        optimizer.step()
+        optimizer.zero_grad() #clear previous gradients
+        outputs = model(X_batch) #fwd pass to get predictions
+        loss = loss_fn(outputs, y_batch) #calculate loss
+        loss.backward() #backpropogate loss to calculate gradients
+        optimizer.step() #update model parameters
+        torch.cuda.empty_cache()
         running_loss += loss.item()
 
     avg_loss = running_loss / len(train_loader)

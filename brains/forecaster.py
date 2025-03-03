@@ -4,6 +4,7 @@ import numpy as np
 
 import tensorflow as tf
 from keras import layers, models, optimizers, callbacks, losses
+from sklearn.preprocessing import MinMaxScaler
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -34,7 +35,9 @@ def add_features(df):
     # Remove rows with NaN values due to lagging
     df.dropna(inplace=True)
     
-    return df
+    scaler = MinMaxScaler()
+
+    return pd.DataFrame(scaler.fit_transform(df), columns=df.columns)
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -73,16 +76,12 @@ reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validatio
                               patience=5,  # Wait for 5 epochs with no improvement
                               min_lr=1e-6)
 early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
-rnn_width = 1024
-dense_width = 1024
+rnn_width = 256
+dense_width = 256
 
 inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
-lstm = layers.Bidirectional(layers.LSTM(units=rnn_width, return_sequences=True))(inputs)  
-lstm = layers.Bidirectional(layers.LSTM(units=rnn_width, return_sequences=True))(lstm)
 
-attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(lstm, lstm)
-
-gru = layers.GRU(units=rnn_width, return_sequences=True)(attention)
+gru = layers.GRU(units=rnn_width, return_sequences=True)(inputs)
 gru = layers.GRU(units=rnn_width, return_sequences=True)(gru)
 gru = layers.GRU(units=rnn_width, return_sequences=True)(gru)
 
@@ -96,20 +95,20 @@ outputs = layers.Dense(1)(dense)
 model = models.Model(inputs=inputs, outputs=outputs)
 lossfn = losses.MeanAbsoluteError()
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
-model.fit(X, y, epochs=50, batch_size=64, callbacks=[early_stopping])
+model.fit(X, y, epochs=1, batch_size=64, callbacks=[early_stopping])
 
 #predict and plot
 yhat = model.predict(X)
 data.index = pd.to_datetime(data.index)
-data = data.reset_index() # Alternatively, reset the index if the time is being used as a column
+ # Alternatively, reset the index if the time is being used as a column
 data = data.iloc[:-1] # extras
 
 sns.set_style("darkgrid")
 
 plt.figure(figsize=(10, 6))
-
-sns.lineplot(x=data['Datetime'], y=y.to_numpy().ravel(), label="Actual Values (y)", color='blue', alpha=0.7)
-sns.lineplot(x=data['Datetime'], y=yhat.flatten(), label="Predicted Values (y_hat)", color='red', alpha=0.7)
+print(data.head())
+sns.lineplot(x=data.index, y=y.to_numpy().ravel(), label="Actual Values (y)", color='blue', alpha=0.7)
+sns.lineplot(x=data.index, y=yhat.flatten(), label="Predicted Values (y_hat)", color='red', alpha=0.7)
 
 plt.title("Actual vs Predicted Values")
 plt.xlabel("Time")
