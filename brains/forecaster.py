@@ -8,8 +8,8 @@ from keras import layers, models, optimizers, callbacks, losses
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-tf.config.threading.set_intra_op_parallelism_threads(24)
-tf.config.threading.set_inter_op_parallelism_threads(24)
+tf.config.threading.set_intra_op_parallelism_threads(16)
+tf.config.threading.set_inter_op_parallelism_threads(16)
 
 def fetch_btc_data():
     # Download Bitcoin OHLCV data (1 minute candles for 8 days)
@@ -64,18 +64,6 @@ data = fetch_btc_data()
 data = add_features(data)
 X, y = prepare_data(data)
 
-percentage = 0.5  # 50% of the original sequence length
-seq_length = int(X.shape[1] * percentage)
-
-# Create sequences of the calculated length (if you need to reshape X)
-def create_sequences(data, seq_length):
-    sequences = []
-    for i in range(len(data) - seq_length):
-        sequences.append(data[i:i + seq_length])
-    return np.array(sequences)
-
-# Reshape your data based on the new sequence length
-X_seq = create_sequences(X, seq_length)
 X = X.values.reshape((X.shape[0], 1, X.shape[1]))  # Reshaping to (samples, time_steps, features)
 
 # LSTM MODEL
@@ -85,23 +73,20 @@ reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validatio
                               patience=5,  # Wait for 5 epochs with no improvement
                               min_lr=1e-6)
 early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
-lstm_width = 2048
-dense_width = 2048
+rnn_width = 1024
+dense_width = 1024
 
 inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
-# lstm = layers.Bidirectional(layers.LSTM(units=lstm_width, return_sequences=True))(inputs)  
-# lstm = layers.Bidirectional(layers.LSTM(units=lstm_width, return_sequences=True))(lstm)
+lstm = layers.Bidirectional(layers.LSTM(units=rnn_width, return_sequences=True))(inputs)  
+lstm = layers.Bidirectional(layers.LSTM(units=rnn_width, return_sequences=True))(lstm)
 
-# attention = layers.Attention()([lstm, lstm])
+attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(lstm, lstm)
 
-gru = layers.GRU(units=lstm_width, return_sequences=True)(inputs)
-gru = layers.GRU(units=lstm_width, return_sequences=True)(gru)
-gru = layers.GRU(units=lstm_width, return_sequences=True)(gru)
+gru = layers.GRU(units=rnn_width, return_sequences=True)(attention)
+gru = layers.GRU(units=rnn_width, return_sequences=True)(gru)
+gru = layers.GRU(units=rnn_width, return_sequences=True)(gru)
 
-# Attention mechanism
-attention = layers.Attention()([gru, gru])
-
-attention = layers.GlobalAveragePooling1D()(attention)
+attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(gru, gru)
 
 dense = layers.Dense(dense_width, activation='relu')(attention)
 dense = layers.Dense(dense_width, activation='relu')(dense)
