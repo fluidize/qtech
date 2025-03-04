@@ -12,32 +12,33 @@ import seaborn as sns
 tf.config.threading.set_intra_op_parallelism_threads(16)
 tf.config.threading.set_inter_op_parallelism_threads(16)
 
+feature_scaler = MinMaxScaler() #create scaler object in public to inverse in final output.
+close_scaler = MinMaxScaler() #separate scaler object to store MinMax for inversing output yhat
+
+
+########################################
+## PRE-PROCESSING
+########################################
+
 def fetch_btc_data():
-    # Download Bitcoin OHLCV data (1 minute candles for 8 days)
-    data = yf.download('BTC-USD', period='2y', interval='1h')  
+    data = yf.download('BTC-USD', period='8d', interval='1m')  
     return data
 
 def add_features(df):
-    # 20-period and 50-period moving averages
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA50'] = df['Close'].rolling(window=50).mean()
     
-    # RSI calculation (14-period)
     df['RSI'] = compute_rsi(df['Close'], 14)
     
-    # Lag features (previous bars' OHLCV values)
     df['Prev_Close'] = df['Close'].shift(1)
     df['Prev_High'] = df['High'].shift(1)
     df['Prev_Low'] = df['Low'].shift(1)
     df['Prev_Open'] = df['Open'].shift(1)
     df['Prev_Volume'] = df['Volume'].shift(1)
     
-    # Remove rows with NaN values due to lagging
     df.dropna(inplace=True)
-    
-    scaler = MinMaxScaler()
 
-    return pd.DataFrame(scaler.fit_transform(df), columns=df.columns)
+    return df
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -47,14 +48,16 @@ def compute_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# Step 3: Prepare Data (features and target)
 def prepare_data(df):
     # Target is the next bar's close
     df['Target'] = df['Close'].shift(-1)
 
     # Features (OHLCV + technical indicators)
     X = df[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']]
-    y = df['Target']
+    X = pd.DataFrame(feature_scaler.fit_transform(X), columns=X.columns) #SCALE X SEPARATELY
+
+    y = df[['Target']]
+    y = pd.DataFrame(close_scaler.fit_transform(y), columns=y.columns) #SCALE Y SEPARATELY TO INVERSE LATER
     
     # Remove the last row (no target)
     X = X[:-1]
@@ -62,28 +65,31 @@ def prepare_data(df):
     
     return X, y
 
-#preparation
 data = fetch_btc_data()
-data = add_features(data)
-X, y = prepare_data(data)
+scaled_data = add_features(data)
+X, y = prepare_data(scaled_data)
 
 X = X.values.reshape((X.shape[0], 1, X.shape[1]))  # Reshaping to (samples, time_steps, features)
 
-# LSTM MODEL
+
+########################################
+## MODEL
+########################################
+
 model = models.Sequential()
 reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validation loss
-                              factor=0.2,  # Reduce by 80% (0.2)
-                              patience=5,  # Wait for 5 epochs with no improvement
+                              factor=0.2,
+                              patience=5,
                               min_lr=1e-6)
 early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
-rnn_width = 256
-dense_width = 256
+rnn_width = 512
+dense_width = 512
 
 inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
 
-gru = layers.GRU(units=rnn_width, return_sequences=True)(inputs)
-gru = layers.GRU(units=rnn_width, return_sequences=True)(gru)
-gru = layers.GRU(units=rnn_width, return_sequences=True)(gru)
+gru = layers.SimpleRNN(units=rnn_width, return_sequences=True)(inputs)
+gru = layers.SimpleRNN(units=rnn_width, return_sequences=True)(gru)
+gru = layers.SimpleRNN(units=rnn_width, return_sequences=True)(gru)
 
 attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(gru, gru)
 
@@ -97,22 +103,37 @@ lossfn = losses.MeanAbsoluteError()
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
 model.fit(X, y, epochs=1, batch_size=64, callbacks=[early_stopping])
 
-#predict and plot
 yhat = model.predict(X)
 data.index = pd.to_datetime(data.index)
- # Alternatively, reset the index if the time is being used as a column
 data = data.iloc[:-1] # extras
 
-sns.set_style("darkgrid")
 
-plt.figure(figsize=(10, 6))
-print(data.head())
-sns.lineplot(x=data.index, y=y.to_numpy().ravel(), label="Actual Values (y)", color='blue', alpha=0.7)
-sns.lineplot(x=data.index, y=yhat.flatten(), label="Predicted Values (y_hat)", color='red', alpha=0.7)
+########################################
+## PLOTTING
+########################################
 
-plt.title("Actual vs Predicted Values")
-plt.xlabel("Time")
-plt.ylabel("Price (USD)")
+yhat_inverse = close_scaler.inverse_transform(yhat.squeeze().reshape(-1,1)) #squeeze and reshape bc it expects a 2d dataframe
 
-plt.legend()
-plt.show()
+import plotly.graph_objects as go
+
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(x=data.index, 
+                         y=data["Close"].squeeze(), 
+                         mode='lines', 
+                         name='Actual Values (y)', 
+                         line=dict(color='blue')))
+
+fig.add_trace(go.Scatter(x=data.index, 
+                         y=yhat_inverse.squeeze(), 
+                         mode='lines', 
+                         name='Predicted Values (y_hat)', 
+                         line=dict(color='red')))
+
+fig.update_layout(title="Actual vs Predicted Values",
+                  xaxis_title="Time",
+                  yaxis_title="Price (USD)",
+                  template="plotly_dark")
+
+fig.show()
+
