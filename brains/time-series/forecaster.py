@@ -5,6 +5,7 @@ import numpy as np
 import tensorflow as tf
 from keras import layers, models, optimizers, callbacks, losses
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -71,7 +72,6 @@ X, y = prepare_data(scaled_data)
 
 X = X.values.reshape((X.shape[0], 1, X.shape[1]))  # Reshaping to (samples, time_steps, features)
 
-
 ########################################
 ## MODEL
 ########################################
@@ -87,11 +87,11 @@ dense_width = 512
 
 inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
 
-gru = layers.SimpleRNN(units=rnn_width, return_sequences=True)(inputs)
-gru = layers.SimpleRNN(units=rnn_width, return_sequences=True)(gru)
-gru = layers.SimpleRNN(units=rnn_width, return_sequences=True)(gru)
+rnn = layers.GRU(units=rnn_width, return_sequences=True)(inputs)
+rnn = layers.GRU(units=rnn_width, return_sequences=True)(rnn)
+rnn = layers.GRU(units=rnn_width, return_sequences=True)(rnn)
 
-attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(gru, gru)
+attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(rnn, rnn)
 
 dense = layers.Dense(dense_width, activation='relu')(attention)
 dense = layers.Dense(dense_width, activation='relu')(dense)
@@ -101,39 +101,54 @@ outputs = layers.Dense(1)(dense)
 model = models.Model(inputs=inputs, outputs=outputs)
 lossfn = losses.MeanAbsoluteError()
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
-model.fit(X, y, epochs=1, batch_size=64, callbacks=[early_stopping])
+model_data = model.fit(X, y, epochs=1, batch_size=64, callbacks=[early_stopping])
 
 yhat = model.predict(X)
+yhat_inverse = close_scaler.inverse_transform(yhat.squeeze().reshape(-1,1)) #squeeze and reshape bc it expects a 2d dataframe
+
+########################################
+## ANALYZE
+########################################
+
 data.index = pd.to_datetime(data.index)
 data = data.iloc[:-1] # extras
 
-
-########################################
-## PLOTTING
-########################################
-
-yhat_inverse = close_scaler.inverse_transform(yhat.squeeze().reshape(-1,1)) #squeeze and reshape bc it expects a 2d dataframe
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-fig = go.Figure()
+# Create subplots with 2 rows and 1 column
+fig = make_subplots(rows=2, cols=1,subplot_titles=('Actual vs Predicted Values', 'Loss Function'))
 
-fig.add_trace(go.Scatter(x=data.index, 
-                         y=data["Close"].squeeze(), 
-                         mode='lines', 
-                         name='Actual Values (y)', 
-                         line=dict(color='blue')))
+# Plot Actual vs Predicted values in the first subplot (top panel)
+fig.append_trace(
+    go.Scatter(x=data.index, y=data["Close"], mode='lines', name='Actual', line=dict(color='blue')),
+    row=1, col=1
+)
 
-fig.add_trace(go.Scatter(x=data.index, 
-                         y=yhat_inverse.squeeze(), 
-                         mode='lines', 
-                         name='Predicted Values (y_hat)', 
-                         line=dict(color='red')))
+fig.append_trace(
+    go.Scatter(x=data.index, y=yhat_inverse.flatten(), mode='lines', name='Predicted', line=dict(color='red')),
+    row=1, col=1
+)
 
-fig.update_layout(title="Actual vs Predicted Values",
-                  xaxis_title="Time",
-                  yaxis_title="Price (USD)",
-                  template="plotly_dark")
+# Training loss
+training_loss = model_data.history['loss']
 
+# Plot training loss in the second subplot (bottom panel)
+fig.append_trace(
+    go.Scatter(x=list(range(len(training_loss))), y=training_loss, mode='lines', name='Training Loss', line=dict(color='blue')),
+    row=2, col=1
+)
+
+# Update layout (titles, axis labels)
+fig.update_layout(
+    title_text="Actual vs Predicted & Loss Function",
+    height=800,  # adjust height to avoid overlap
+    showlegend=True,
+    template="plotly_dark"  # Set dark mode theme
+)
+
+# Show the plot
 fig.show()
-
