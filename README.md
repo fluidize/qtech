@@ -4,4 +4,4 @@ This repository contains a collection of **trading bots**, **machine learning mo
 
 ## Table of Contents
 
-- [Overview](#overview)
+- [Neural Networks](#brains)
