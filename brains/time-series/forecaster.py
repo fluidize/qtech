@@ -63,7 +63,7 @@ def prepare_data(df):
     X = pd.concat([X_ohlc_scaled, X_other_scaled], axis=1)
 
     X_ohlc_scaled['Target'] = X_ohlc_scaled['Close'].shift(-1) # Target is the next bar's close
-    y = X_ohlc_scaled[['Target']]
+    y = X_ohlc_scaled[['Target']] # make sure using scaled and not raw data due to MinMax scaling error.
     
     # Remove the last row (no target)
     X = X[:-1]
@@ -87,14 +87,14 @@ reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validatio
                               patience=5,
                               min_lr=1e-6)
 early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
-rnn_width = 256
+rnn_width = 512
 dense_width = 256
 
 inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
 
-rnn = layers.SimpleRNN(units=rnn_width, return_sequences=True)(inputs)
-rnn = layers.SimpleRNN(units=rnn_width, return_sequences=True)(rnn)
-rnn = layers.SimpleRNN(units=rnn_width, return_sequences=True)(rnn)
+rnn = layers.LSTM(units=rnn_width, return_sequences=True)(inputs)
+rnn = layers.LSTM(units=rnn_width, return_sequences=True)(rnn)
+rnn = layers.LSTM(units=rnn_width, return_sequences=True)(rnn)
 
 attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(rnn, rnn)
 
@@ -106,7 +106,7 @@ outputs = layers.Dense(1)(dense)
 model = models.Model(inputs=inputs, outputs=outputs)
 lossfn = losses.Huber(delta=5)
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
-model_data = model.fit(X, y, epochs=3, batch_size=64, callbacks=[early_stopping, reduce_lr])
+model_data = model.fit(X, y, epochs=25, batch_size=64, callbacks=[early_stopping, reduce_lr])
 
 yhat = model.predict(X)
 
@@ -136,7 +136,7 @@ if 'val_loss' in model_data.history:
     ax2.plot(model_data.history['val_loss'], label='Validation Loss')
 ax2.set_xlabel('Epoch')
 ax2.set_ylabel('Loss')
-ax2.set_title(f'Model Loss {lossfn.name} | MSE: {mean_squared_error(y.squeeze(), yhat.squeeze())}')
+ax2.set_title(f'{lossfn.name}:{model_data.history['loss'][-1]} | MSE: {mean_squared_error(y.squeeze(), yhat.squeeze())}')
 ax2.legend()
 ax2.xaxis.set_major_locator(MaxNLocator(integer=True))
 
