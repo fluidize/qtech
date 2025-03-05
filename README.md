@@ -4,4 +4,4 @@ This repository contains a collection of **trading bots**, **machine learning mo
 
 ## Table of Contents
 
-- [Neural Networks](#[brains](https://github.com/Fluidize/fintech/tree/main/brains))
+- [Neural Networks/Machine Learning](https://github.com/Fluidize/fintech/tree/main/brains)
