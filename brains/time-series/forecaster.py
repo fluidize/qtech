@@ -7,6 +7,8 @@ from keras import layers, models, optimizers, callbacks, losses
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
 
+from datetime import datetime, timedelta
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.ticker import MaxNLocator
@@ -24,7 +26,16 @@ close_scaler = MinMaxScaler() #separate scaler object to store MinMax for invers
 ########################################
 
 def fetch_btc_data():
-    data = yf.download('BTC-USD', period='8d', interval='1m')  
+    data = pd.DataFrame()
+    temp_data = None
+    for x in range(3):
+        start_date = (datetime.now() - timedelta(days=8) - timedelta(days=8*x)).strftime('%Y-%m-%d')
+        end_date = (datetime.now()- timedelta(days=8*x)).strftime('%Y-%m-%d')
+        temp_data = yf.download('BTC-USD', start=start_date, end=end_date, interval='1m')
+        data = pd.concat([data, temp_data])
+    print(data.head())
+    data.sort_index(inplace=True)
+    # data.reset_index(drop=True, inplace=True)
     return data
 
 def add_features(df):
@@ -87,7 +98,7 @@ reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validatio
                               patience=5,
                               min_lr=1e-6)
 early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
-rnn_width = 512
+rnn_width = 256
 dense_width = 256
 
 inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
@@ -106,7 +117,7 @@ outputs = layers.Dense(1)(dense)
 model = models.Model(inputs=inputs, outputs=outputs)
 lossfn = losses.Huber(delta=5)
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
-model_data = model.fit(X, y, epochs=25, batch_size=64, callbacks=[early_stopping, reduce_lr])
+model_data = model.fit(X, y, epochs=1, batch_size=64, callbacks=[early_stopping, reduce_lr])
 
 yhat = model.predict(X)
 
