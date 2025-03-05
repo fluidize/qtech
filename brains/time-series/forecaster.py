@@ -9,11 +9,13 @@ from sklearn.metrics import mean_squared_error
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.ticker import MaxNLocator
 
 tf.config.threading.set_intra_op_parallelism_threads(16)
 tf.config.threading.set_inter_op_parallelism_threads(16)
 
 feature_scaler = MinMaxScaler() #create scaler object in public to inverse in final output.
+price_scaler = MinMaxScaler() #separate scaler object to store MinMax for OHLC features
 close_scaler = MinMaxScaler() #separate scaler object to store MinMax for inversing output yhat
 
 
@@ -50,15 +52,18 @@ def compute_rsi(series, period=14):
     return rsi
 
 def prepare_data(df):
-    # Target is the next bar's close
-    df['Target'] = df['Close'].shift(-1)
+    ohlc_features = ['Open', 'High', 'Low', 'Close']
+    other_features = ['Volume', 'MA20', 'MA50', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']
+    
+    X_ohlc = df[ohlc_features]
+    X_other = df[other_features]
+    
+    X_ohlc_scaled = pd.DataFrame(price_scaler.fit_transform(X_ohlc), columns=X_ohlc.columns) #SCALE OHLC SEPARATELY
+    X_other_scaled = pd.DataFrame(feature_scaler.fit_transform(X_other), columns=X_other.columns) #SCALE OTHER FEATURES SEPARATELY
+    X = pd.concat([X_ohlc_scaled, X_other_scaled], axis=1)
 
-    # Features (OHLCV + technical indicators)
-    X = df[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']]
-    X = pd.DataFrame(feature_scaler.fit_transform(X), columns=X.columns) #SCALE X SEPARATELY
-
-    y = df[['Target']]
-    y = pd.DataFrame(close_scaler.fit_transform(y), columns=y.columns) #SCALE Y SEPARATELY TO INVERSE LATER
+    X_ohlc_scaled['Target'] = X_ohlc_scaled['Close'].shift(-1) # Target is the next bar's close
+    y = X_ohlc_scaled[['Target']]
     
     # Remove the last row (no target)
     X = X[:-1]
@@ -82,14 +87,14 @@ reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validatio
                               patience=5,
                               min_lr=1e-6)
 early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
-rnn_width = 512
-dense_width = 512
+rnn_width = 256
+dense_width = 256
 
 inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
 
-rnn = layers.GRU(units=rnn_width, return_sequences=True)(inputs)
-rnn = layers.GRU(units=rnn_width, return_sequences=True)(rnn)
-rnn = layers.GRU(units=rnn_width, return_sequences=True)(rnn)
+rnn = layers.SimpleRNN(units=rnn_width, return_sequences=True)(inputs)
+rnn = layers.SimpleRNN(units=rnn_width, return_sequences=True)(rnn)
+rnn = layers.SimpleRNN(units=rnn_width, return_sequences=True)(rnn)
 
 attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(rnn, rnn)
 
@@ -99,56 +104,41 @@ dense = layers.Dense(dense_width, activation='relu')(dense)
 outputs = layers.Dense(1)(dense)
 
 model = models.Model(inputs=inputs, outputs=outputs)
-lossfn = losses.MeanAbsoluteError()
+lossfn = losses.Huber(delta=5)
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
-model_data = model.fit(X, y, epochs=1, batch_size=64, callbacks=[early_stopping])
+model_data = model.fit(X, y, epochs=3, batch_size=64, callbacks=[early_stopping, reduce_lr])
 
 yhat = model.predict(X)
-yhat_inverse = close_scaler.inverse_transform(yhat.squeeze().reshape(-1,1)) #squeeze and reshape bc it expects a 2d dataframe
+
+yhat_expanded = np.zeros((yhat.shape[0], 4))
+yhat_expanded[:,3] = yhat.squeeze()
+yhat_inverse = price_scaler.inverse_transform(yhat_expanded)[:,3]  # squeeze and reshape from ohlc scaler
 
 ########################################
 ## ANALYZE
 ########################################
 
 data.index = pd.to_datetime(data.index)
-data = data.iloc[:-1] # extras
+data = data.iloc[:-1]  # extras
 
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(10, 8))
+# Plot predictions
+ax1.plot(data.index, data["Close"], label="True", color='blue')
+ax1.plot(data.index, yhat_inverse, label="Prediction", color='red')
+ax1.set_xlabel('Date')
+ax1.set_ylabel('Price')
+ax1.set_title('Bitcoin Price Prediction')
+ax1.legend()
 
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+# Plot loss
+ax2.plot(model_data.history['loss'], label='Training Loss')
+if 'val_loss' in model_data.history:
+    ax2.plot(model_data.history['val_loss'], label='Validation Loss')
+ax2.set_xlabel('Epoch')
+ax2.set_ylabel('Loss')
+ax2.set_title(f'Model Loss {lossfn.name} | MSE: {mean_squared_error(y.squeeze(), yhat.squeeze())}')
+ax2.legend()
+ax2.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-# Create subplots with 2 rows and 1 column
-fig = make_subplots(rows=2, cols=1,subplot_titles=('Actual vs Predicted Values', 'Loss Function'))
-
-# Plot Actual vs Predicted values in the first subplot (top panel)
-fig.append_trace(
-    go.Scatter(x=data.index, y=data["Close"], mode='lines', name='Actual', line=dict(color='blue')),
-    row=1, col=1
-)
-
-fig.append_trace(
-    go.Scatter(x=data.index, y=yhat_inverse.flatten(), mode='lines', name='Predicted', line=dict(color='red')),
-    row=1, col=1
-)
-
-# Training loss
-training_loss = model_data.history['loss']
-
-# Plot training loss in the second subplot (bottom panel)
-fig.append_trace(
-    go.Scatter(x=list(range(len(training_loss))), y=training_loss, mode='lines', name='Training Loss', line=dict(color='blue')),
-    row=2, col=1
-)
-
-# Update layout (titles, axis labels)
-fig.update_layout(
-    title_text="Actual vs Predicted & Loss Function",
-    height=800,  # adjust height to avoid overlap
-    showlegend=True,
-    template="plotly_dark"  # Set dark mode theme
-)
-
-# Show the plot
-fig.show()
+plt.tight_layout()
+plt.show()
