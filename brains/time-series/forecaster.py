@@ -17,6 +17,7 @@ tf.config.threading.set_inter_op_parallelism_threads(16)
 
 feature_scaler = MinMaxScaler() #create scaler object in public to inverse in final output.
 price_scaler = MinMaxScaler() #separate scaler object to store MinMax for OHLC features
+close_scaler = MinMaxScaler() #separate scaler object to store MinMax for inversing output yhat
 
 
 ########################################
@@ -78,11 +79,11 @@ def prepare_data(df):
     
     return X, y
 
-data = fetch_data('BTC-USD', 5, '5m', 10)
-scaled_data = add_features(data)
-X, y = prepare_data(scaled_data)
+train_data = fetch_data('BTC-USD', 5, '5m', 10)
+scaled_data = add_features(train_data)
+X_train, y_train = prepare_data(scaled_data)
 
-X = X.values.reshape((X.shape[0], 1, X.shape[1]))  # Reshaping to (samples, time_steps, features)
+X_train = X_train.values.reshape((X_train.shape[0], 1, X_train.shape[1]))  # Reshaping to (samples, time_steps, features)
 
 ########################################
 ## MODEL
@@ -94,12 +95,12 @@ early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5
 rnn_width = 256
 dense_width = 256
 
-inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
-normalizer = layers.Normalization()(inputs)
+inputs = layers.Input(shape=(X_train.shape[1], X_train.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
 
-rnn = layers.LSTM(units=rnn_width, return_sequences=True)(normalizer)
+rnn = layers.layers.LSTM(units=rnn_width, return_sequences=True)(inputs)
+rnn = layers.GRU(units=rnn_width, return_sequences=True)(rnn)
 rnn = layers.LSTM(units=rnn_width, return_sequences=True)(rnn)
-rnn = layers.LSTM(units=rnn_width, return_sequences=True)(rnn)
+rnn = layers.GRU(units=rnn_width, return_sequences=True)(rnn)
 
 attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(rnn, rnn)
 
@@ -111,13 +112,13 @@ outputs = layers.Dense(1)(dense)
 model = models.Model(inputs=inputs, outputs=outputs)
 lossfn = losses.Huber(delta=5)
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
-model_data = model.fit(X, y, epochs=50, batch_size=64, callbacks=[early_stopping, reduce_lr])
+model_data = model.fit(X_train, y_train, epochs=50, batch_size=64, callbacks=[early_stopping, reduce_lr])
 
 ########################################
 ## PREDICT
 ########################################
 
-yhat = model.predict(X)
+yhat = model.predict(X_train)
 
 yhat_expanded = np.zeros((yhat.shape[0], 4))
 yhat_expanded[:,3] = yhat.squeeze()
@@ -127,16 +128,16 @@ yhat_inverse = price_scaler.inverse_transform(yhat_expanded)[:,3]  # squeeze and
 ## ANALYZE
 ########################################
 
-data.index = pd.to_datetime(data.index)
-data = data.iloc[:-1]  # extras
-data.reset_index(inplace=True)# Convert data.index to a column
+train_data.index = pd.to_datetime(train_data.index)
+train_data = train_data.iloc[:-1]  # extras
+train_data.reset_index(inplace=True)# Convert data.index to a column
 
 loss_history = model_data.history['loss']
 
-fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'{lossfn.name}: {loss_history[-1]} | MSE: {mean_squared_error(y,yhat.squeeze())}'))
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'{lossfn.name}: {loss_history[-1]} | MSE: {mean_squared_error(y_train,yhat.squeeze())}'))
 
-fig.add_trace(go.Scatter(x=data['Datetime'], y=data["Close"].squeeze(), mode='lines', name='True', line=dict(color='blue')), row=1, col=1)
-fig.add_trace(go.Scatter(x=data['Datetime'], y=yhat_inverse, mode='lines', name='Prediction', line=dict(color='red')), row=1, col=1)
+fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data["Close"].squeeze(), mode='lines', name='True', line=dict(color='blue')), row=1, col=1)
+fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat_inverse, mode='lines', name='Prediction', line=dict(color='red')), row=1, col=1)
 
 
 fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name=f'{lossfn.name}', line=dict(color='orange')), row=2, col=1)
@@ -145,3 +146,6 @@ fig.update_layout(template='plotly_dark', title_text='Price Prediction and Model
 fig.update_xaxes(tickmode='linear', tick0=0, dtick=1, row=2, col=1) # Update x-axis for loss plot to show integer values only
 
 fig.show()
+
+if input("y/n").lower() == "y":
+    model.save(f'model_{loss_history[-1]}.h5')
