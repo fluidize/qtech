@@ -7,35 +7,31 @@ from keras import layers, models, optimizers, callbacks, losses
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
 
-from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.ticker import MaxNLocator
+from datetime import datetime, timedelta  # Ensure datetime is imported
 
 tf.config.threading.set_intra_op_parallelism_threads(16)
 tf.config.threading.set_inter_op_parallelism_threads(16)
 
 feature_scaler = MinMaxScaler() #create scaler object in public to inverse in final output.
 price_scaler = MinMaxScaler() #separate scaler object to store MinMax for OHLC features
-close_scaler = MinMaxScaler() #separate scaler object to store MinMax for inversing output yhat
 
 
 ########################################
 ## PRE-PROCESSING
 ########################################
 
-def fetch_btc_data():
+def fetch_data(ticker, multiplier, interval='1m', age_days=0):
     data = pd.DataFrame()
     temp_data = None
-    for x in range(3):
-        start_date = (datetime.now() - timedelta(days=8) - timedelta(days=8*x)).strftime('%Y-%m-%d')
-        end_date = (datetime.now()- timedelta(days=8*x)).strftime('%Y-%m-%d')
-        temp_data = yf.download('BTC-USD', start=start_date, end=end_date, interval='1m')
+    for x in range(multiplier):
+        start_date = (datetime.now() - timedelta(days=8) - timedelta(days=8*x) - timedelta(days=age_days)).strftime('%Y-%m-%d')
+        end_date = (datetime.now()- timedelta(days=8*x) - timedelta(days=age_days)).strftime('%Y-%m-%d')
+        temp_data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
         data = pd.concat([data, temp_data])
-    print(data.head())
     data.sort_index(inplace=True)
-    # data.reset_index(drop=True, inplace=True)
     return data
 
 def add_features(df):
@@ -82,7 +78,7 @@ def prepare_data(df):
     
     return X, y
 
-data = fetch_btc_data()
+data = fetch_data('BTC-USD', 5, '5m', 10)
 scaled_data = add_features(data)
 X, y = prepare_data(scaled_data)
 
@@ -93,17 +89,15 @@ X = X.values.reshape((X.shape[0], 1, X.shape[1]))  # Reshaping to (samples, time
 ########################################
 
 model = models.Sequential()
-reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',  # Monitor validation loss
-                              factor=0.2,
-                              patience=5,
-                              min_lr=1e-6)
+reduce_lr = callbacks.ReduceLROnPlateau(monitor='val_loss',factor=0.2,patience=5,min_lr=1e-6)
 early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
 rnn_width = 256
 dense_width = 256
 
 inputs = layers.Input(shape=(X.shape[1], X.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
+normalizer = layers.Normalization()(inputs)
 
-rnn = layers.LSTM(units=rnn_width, return_sequences=True)(inputs)
+rnn = layers.LSTM(units=rnn_width, return_sequences=True)(normalizer)
 rnn = layers.LSTM(units=rnn_width, return_sequences=True)(rnn)
 rnn = layers.LSTM(units=rnn_width, return_sequences=True)(rnn)
 
@@ -117,7 +111,11 @@ outputs = layers.Dense(1)(dense)
 model = models.Model(inputs=inputs, outputs=outputs)
 lossfn = losses.Huber(delta=5)
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mean_squared_error'])
-model_data = model.fit(X, y, epochs=1, batch_size=64, callbacks=[early_stopping, reduce_lr])
+model_data = model.fit(X, y, epochs=50, batch_size=64, callbacks=[early_stopping, reduce_lr])
+
+########################################
+## PREDICT
+########################################
 
 yhat = model.predict(X)
 
@@ -131,25 +129,19 @@ yhat_inverse = price_scaler.inverse_transform(yhat_expanded)[:,3]  # squeeze and
 
 data.index = pd.to_datetime(data.index)
 data = data.iloc[:-1]  # extras
+data.reset_index(inplace=True)# Convert data.index to a column
 
-fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(10, 8))
-# Plot predictions
-ax1.plot(data.index, data["Close"], label="True", color='blue')
-ax1.plot(data.index, yhat_inverse, label="Prediction", color='red')
-ax1.set_xlabel('Date')
-ax1.set_ylabel('Price')
-ax1.set_title('Bitcoin Price Prediction')
-ax1.legend()
+loss_history = model_data.history['loss']
 
-# Plot loss
-ax2.plot(model_data.history['loss'], label='Training Loss')
-if 'val_loss' in model_data.history:
-    ax2.plot(model_data.history['val_loss'], label='Validation Loss')
-ax2.set_xlabel('Epoch')
-ax2.set_ylabel('Loss')
-ax2.set_title(f'{lossfn.name}:{model_data.history['loss'][-1]} | MSE: {mean_squared_error(y.squeeze(), yhat.squeeze())}')
-ax2.legend()
-ax2.xaxis.set_major_locator(MaxNLocator(integer=True))
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'{lossfn.name}: {loss_history[-1]} | MSE: {mean_squared_error(y,yhat.squeeze())}'))
 
-plt.tight_layout()
-plt.show()
+fig.add_trace(go.Scatter(x=data['Datetime'], y=data["Close"].squeeze(), mode='lines', name='True', line=dict(color='blue')), row=1, col=1)
+fig.add_trace(go.Scatter(x=data['Datetime'], y=yhat_inverse, mode='lines', name='Prediction', line=dict(color='red')), row=1, col=1)
+
+
+fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name=f'{lossfn.name}', line=dict(color='orange')), row=2, col=1)
+
+fig.update_layout(template='plotly_dark', title_text='Price Prediction and Model Loss')
+fig.update_xaxes(tickmode='linear', tick0=0, dtick=1, row=2, col=1) # Update x-axis for loss plot to show integer values only
+
+fig.show()
