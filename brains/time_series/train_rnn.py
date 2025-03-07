@@ -12,7 +12,6 @@ from plotly.subplots import make_subplots
 
 from datetime import datetime, timedelta  # Ensure datetime is imported
 import os
-import pickle
 
 tf.config.threading.set_intra_op_parallelism_threads(16)
 tf.config.threading.set_inter_op_parallelism_threads(16)
@@ -20,7 +19,7 @@ tf.config.threading.set_inter_op_parallelism_threads(16)
 feature_scaler = MinMaxScaler() #create scaler object in public to inverse in final output.
 price_scaler = MinMaxScaler() #separate scaler object to store MinMax for OHLC features
 
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(os.path.dirname(os.path.abspath(__file__))) #set working directory to current file location
 
 ########################################
 ## PRE-PROCESSING
@@ -93,14 +92,14 @@ X_train, y_train = prepare_data(train_data)
 X_train = X_train.values.reshape((X_train.shape[0], 1, X_train.shape[1]))  # Reshaping to (samples, time_steps, features)
 
 ########################################
-## MODEL
+## TRAIN MODEL
 ########################################
 
 model = models.Sequential()
-reduce_lr = callbacks.ReduceLROnPlateau(monitor='loss',factor=0.5,patience=5,min_lr=1e-8)
-early_stopping = callbacks.EarlyStopping(monitor='loss', mode='auto', patience=5, restore_best_weights=True)
-rnn_width = 256
-dense_width = 256
+reduce_lr = callbacks.ReduceLROnPlateau(monitor='loss',factor=0.5,patience=3,min_lr=1e-8)
+early_stopping = callbacks.EarlyStopping(monitor='loss',min_delta=1e-4, mode='auto', patience=3, restore_best_weights=True)
+rnn_width = 512
+dense_width = 512
 
 inputs = layers.Input(shape=(X_train.shape[1], X_train.shape[2])) # X.shape = (num_samples, num_time_steps, num_features)
 
@@ -117,9 +116,9 @@ dense = layers.Dense(dense_width, activation='relu')(dense)
 outputs = layers.Dense(1)(dense)
 
 model = models.Model(inputs=inputs, outputs=outputs)
-lossfn = losses.Huber(delta=5)
+lossfn = losses.Huber(delta=5.0)
 model.compile(optimizer=optimizers.Adam(learning_rate=1e-4), loss=lossfn, metrics=['mean_squared_error'])
-model_data = model.fit(X_train, y_train, epochs=1, batch_size=64, callbacks=[early_stopping, reduce_lr])
+model_data = model.fit(X_train, y_train, epochs=50, batch_size=64, callbacks=[early_stopping, reduce_lr])
 
 ########################################
 ## PREDICT
@@ -153,4 +152,6 @@ fig.update_xaxes(tickmode='linear', tick0=0, dtick=1, row=2, col=1) # Update x-a
 
 fig.show()
 
-model.save(f'{ticker}_{interval}_{chunks}.keras')
+if input('Save Model? (Y/N): ').lower() == 'y':
+    model.save(f'{ticker}_{interval}_{model.count_params()}.keras', overwrite=True)
+    print(f'Model Saved to {os.getcwd()}')
