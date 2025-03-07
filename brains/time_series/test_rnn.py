@@ -15,112 +15,98 @@ import os
 import rich
 import re
 
+from train_rnn import TimeSeriesPredictor
+
 tf.config.threading.set_intra_op_parallelism_threads(16)
 tf.config.threading.set_inter_op_parallelism_threads(16)
 
-feature_scaler = MinMaxScaler()
-price_scaler = MinMaxScaler()
+class ModelTesting:
+    def __init__(self, ticker, chunks, interval, age_days):
+        self.ticker = ticker
+        self.chunks = chunks
+        self.interval = interval
+        self.age_days = age_days
+        self.feature_scaler = MinMaxScaler()
+        self.price_scaler = MinMaxScaler()
+        os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    ########################################
+    ## PRE-PROCESSING
+    ########################################
 
-########################################
-## PRE-PROCESSING
-########################################
+    def _fetch_data(self):
+        data = pd.DataFrame()
+        temp_data = None
+        for x in range(self.chunks):
+            start_date = (datetime.now() - timedelta(days=8) - timedelta(days=8*x) - timedelta(days=self.age_days)).strftime('%Y-%m-%d')
+            end_date = (datetime.now()- timedelta(days=8*x) - timedelta(days=self.age_days)).strftime('%Y-%m-%d')
+            temp_data = yf.download(self.ticker, start=start_date, end=end_date, interval=self.interval)
+            data = pd.concat([data, temp_data])
+        data.sort_index(inplace=True)
+        return data
 
-def fetch_data(ticker, chunks, interval='1m', age_days=0):
-    data = pd.DataFrame()
-    temp_data = None
-    for x in range(chunks):
-        start_date = (datetime.now() - timedelta(days=8) - timedelta(days=8*x) - timedelta(days=age_days)).strftime('%Y-%m-%d')
-        end_date = (datetime.now()- timedelta(days=8*x) - timedelta(days=age_days)).strftime('%Y-%m-%d')
-        temp_data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
-        data = pd.concat([data, temp_data])
-    data.sort_index(inplace=True)
-    return data
+    def _add_features(self, df):
+        return TimeSeriesPredictor.add_features(self, df)
 
-def add_features(df):
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    df['MA50'] = df['Close'].rolling(window=50).mean()
-    
-    df['RSI'] = compute_rsi(df['Close'], 14)
-    
-    df['Prev_Close'] = df['Close'].shift(1)
-    df['Prev_High'] = df['High'].shift(1)
-    df['Prev_Low'] = df['Low'].shift(1)
-    df['Prev_Open'] = df['Open'].shift(1)
-    df['Prev_Volume'] = df['Volume'].shift(1)
-    
-    df.dropna(inplace=True)
+    def _compute_rsi(self, series, period=14):
+        return TimeSeriesPredictor.compute_rsi(self, series, period)
 
-    return df
+    def _prepare_data(self, df):
+        X, y = TimeSeriesPredictor.prepare_data(self, df)
+        return X, y
 
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    ########################################
+    ## LOAD MODEL
+    ########################################
 
-def prepare_data(df):
-    ohlc_features = ['Open', 'High', 'Low', 'Close']
-    other_features = ['Volume', 'MA20', 'MA50', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']
-    
-    X_ohlc = df[ohlc_features]
-    X_other = df[other_features]
-    
-    X_ohlc_scaled = pd.DataFrame(price_scaler.fit_transform(X_ohlc), columns=X_ohlc.columns)
-    X_other_scaled = pd.DataFrame(feature_scaler.fit_transform(X_other), columns=X_other.columns)
-    X = pd.concat([X_ohlc_scaled, X_other_scaled], axis=1)
+    def _load_model(self):
+        print(" ".join(os.listdir(os.getcwd())))
+        result = re.search(r"BTC-USD_\dm_[0-9]+\.keras", " ".join(os.listdir(os.getcwd()))).group() #regex search for model in cwd
+        model = models.load_model(result)
+        rich.print(f"[bold purple]Using Model: {result}[/bold purple]")
+        print(model.summary())
+        rich.print(f"{model.loss}")
+        return model
 
-    X_ohlc_scaled['Target'] = X_ohlc_scaled['Close'].shift(-1)
-    y = X_ohlc_scaled[['Target']]
-    
-    X = X[:-1]
-    y = y[:-1]
-    
-    return X, y
+    ########################################
+    ## PREDICT
+    ########################################
 
-train_data = fetch_data('BTC-USD', 1, '5m', 0)
-train_data = add_features(train_data)
-X, y = prepare_data(train_data)
+    def _predict(self, model, X):
+        yhat = model.predict(X)
+        yhat_expanded = np.zeros((yhat.shape[0], 4))
+        yhat_expanded[:,3] = yhat.squeeze()
+        yhat_inverse = self.price_scaler.inverse_transform(yhat_expanded)[:,3]
+        
+        return yhat_inverse
 
-X = X.values.reshape((X.shape[0], 1, X.shape[1]))
+    ########################################
+    ## ANALYZE
+    ########################################
 
-########################################
-## LOAD MODEL
-########################################
-print(" ".join(os.listdir(os.getcwd())))
-result = re.search(r"BTC-USD_\dm_[0-9]+\.keras", " ".join(os.listdir(os.getcwd()))).group() #regex search for model in cwd
+    def _analyze(self, train_data, yhat_inverse, model, y):
+        train_data.index = pd.to_datetime(train_data.index)
+        train_data = train_data.iloc[:-1]
+        train_data.reset_index(inplace=True)
 
-model = models.load_model(result)
-rich.print(f"[bold purple]Using Model: {result}[/bold purple]")
-print(model.summary())
-rich.print(f"{model.loss}")
+        fig = go.Figure()
 
-########################################
-## PREDICT
-########################################
+        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data["Close"].squeeze(), mode='lines', name='True', line=dict(color='blue')))
+        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat_inverse, mode='lines', name='Prediction', line=dict(color='red')))
 
-yhat = model.predict(X)
+        fig.update_layout(template='plotly_dark', title_text=f'Price Prediction | {model.loss.name}: {model.loss(y,yhat_inverse)}')
 
-yhat_expanded = np.zeros((yhat.shape[0], 4))
-yhat_expanded[:,3] = yhat.squeeze()
-yhat_inverse = price_scaler.inverse_transform(yhat_expanded)[:,3]
+        fig.show()
 
-########################################
-## ANALYZE
-########################################
+    def run(self):
+        train_data = self._fetch_data()
+        train_data = self._add_features(train_data)
+        X, y = self._prepare_data(train_data)
+        X = X.values.reshape((X.shape[0], 1, X.shape[1]))
+        model = self._load_model()
+        yhat_inverse = self._predict(model, X)
+        self._analyze(train_data, yhat_inverse, model, y)
 
-train_data.index = pd.to_datetime(train_data.index)
-train_data = train_data.iloc[:-1]
-train_data.reset_index(inplace=True)
-
-fig = go.Figure()
-
-fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data["Close"].squeeze(), mode='lines', name='True', line=dict(color='blue')))
-fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat_inverse, mode='lines', name='Prediction', line=dict(color='red')))
-
-fig.update_layout(template='plotly_dark', title_text=f'Price Prediction | {model.loss.name}: {model.loss(y,yhat)}')
-
-fig.show()
+# Example usage
+tester = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
+tester.run()
