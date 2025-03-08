@@ -166,6 +166,3 @@ class TimeSeriesPredictor:
         if input('Save Model? (Y/N): ').lower() == 'y':
             model.save(f'{self.ticker}_{self.interval}_{model.count_params()}.keras', overwrite=True)
             print(f'Model Saved to {os.getcwd()}')
-
-model = TimeSeriesPredictor(rnn_width=512, dense_width=512, ticker='BTC-USD', chunks=5, interval='5m', age_days=10)
-model.run()
