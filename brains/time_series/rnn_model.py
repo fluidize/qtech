@@ -26,11 +26,16 @@ class TimeSeriesPredictor:
         self.interval = interval
         self.age_days = age_days
         self.feature_scaler = MinMaxScaler()
-        self.price_scaler = MinMaxScaler()
+        self.ohlcv_scaler = MinMaxScaler()  # Updated from price_scaler to ohlcv_scaler
+        self.train_data = None
+        self.X = None
+        self.y = None
+        self.model_data = None
+        self.yhat = None
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     ########################################
-    ## PRE-PROCESSING
+    ## PROCESSING FUNCTIONS
     ########################################
 
     def _fetch_data(self):
@@ -42,9 +47,10 @@ class TimeSeriesPredictor:
             temp_data = yf.download(self.ticker, start=start_date, end=end_date, interval=self.interval)
             data = pd.concat([data, temp_data])
         data.sort_index(inplace=True)
-        return data
+        self.train_data = data
 
-    def _add_features(self, df):
+    def _add_features(self):
+        df = self.train_data
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA50'] = df['Close'].rolling(window=50).mean()
         
@@ -58,7 +64,7 @@ class TimeSeriesPredictor:
         
         df.dropna(inplace=True)
 
-        return df
+        self.train_data = df
 
     def _compute_rsi(self, series, period=14):
         delta = series.diff()
@@ -68,31 +74,30 @@ class TimeSeriesPredictor:
         rsi = 100 - (100 / (1 + rs))
         return rsi
 
-    def _prepare_data(self, df):
-        ohlc_features = ['Open', 'High', 'Low', 'Close']
-        other_features = ['Volume', 'MA20', 'MA50', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']
+    def _prepare_data(self):
+        df = self.train_data
+        ohlcv_features = ['Open', 'High', 'Low', 'Close', 'Volume']
+        other_features = ['MA20', 'MA50', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']
         
-        X_ohlc = df[ohlc_features]
+        X_ohlcv = df[ohlcv_features]
         X_other = df[other_features]
         
-        X_ohlc_scaled = pd.DataFrame(self.price_scaler.fit_transform(X_ohlc), columns=X_ohlc.columns)
+        X_ohlcv_scaled = pd.DataFrame(self.ohlcv_scaler.fit_transform(X_ohlcv), columns=X_ohlcv.columns)  # Updated
         X_other_scaled = pd.DataFrame(self.feature_scaler.fit_transform(X_other), columns=X_other.columns)
-        X = pd.concat([X_ohlc_scaled, X_other_scaled], axis=1)
+        self.X = pd.concat([X_ohlcv_scaled, X_other_scaled], axis=1)
 
-        X_ohlc_scaled['Target'] = X_ohlc_scaled['Close'].shift(-1)
-        y = X_ohlc_scaled[['Target']]
+        self.y = X_ohlcv_scaled[['Close']].shift(-1)  # Shift the target variable to predict the next time step
         
-        X = X[:-1]
-        y = y[:-1]
-        
-        return X, y
+        self.X = self.X[:-1]
+        self.y = self.y[:-1]
 
     ########################################
     ## TRAIN MODEL
     ########################################
 
-    def _train_model(self, X, y, rnn_width=512, dense_width=512):
-        X = X.values.reshape((X.shape[0], 1, X.shape[1]))
+    def _train_model(self):
+        X = self.X.values.reshape((self.X.shape[0], 1, self.X.shape[1]))
+        y = self.y.values.reshape((self.y.shape[0], 1, self.y.shape[1]))
 
         model = models.Sequential()
         reduce_lr = callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=3, min_lr=1e-8)
@@ -106,36 +111,48 @@ class TimeSeriesPredictor:
 
         attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(rnn, rnn)
 
-        dense = layers.Dense(dense_width, activation='relu')(attention)
-        dense = layers.Dense(dense_width, activation='relu')(dense)
+        dense = layers.Dense(self.dense_width, activation='relu')(attention)
+        dense = layers.Dense(self.dense_width, activation='relu')(dense)
+        dense = layers.Dense(self.dense_width, activation='relu')(dense) 
 
-        outputs = layers.Dense(1)(dense)
+        outputs = layers.Dense(1, activation='relu')(dense)  # Adjusted to output 1 feature (Close)
 
         model = models.Model(inputs=inputs, outputs=outputs)
         lossfn = losses.Huber(delta=5.0)
         model.compile(optimizer=optimizers.Adam(learning_rate=1e-4), loss=lossfn, metrics=['mean_squared_error'])
-        model_data = model.fit(X, y, epochs=50, batch_size=64, callbacks=[early_stopping, reduce_lr])
+        self.model_data = model.fit(X, y, epochs=self.epochs, batch_size=64, callbacks=[early_stopping, reduce_lr])
 
-        return model, model_data
+        return model
+
+    ########################################
+    ## INVERSE TRANSFORM PREDICTIONS
+    ########################################
+
+    def _inverse_transform_predictions(self, yhat):
+        yhat_expanded = np.zeros((yhat.shape[0], 5))  # Create an array with 5 columns
+        yhat_expanded[:, 3] = yhat.squeeze()  # Place the predicted Close values in the 4th column
+        yhat_inverse = self.ohlcv_scaler.inverse_transform(yhat_expanded)[:, 3]  # Inverse transform and extract the Close values
+        return yhat_inverse
 
     ########################################
     ## PREDICT
     ########################################
 
-    def _predict(self, model, X):
+    def _predict(self, model):
+        X = self.X.values.reshape((self.X.shape[0], 1, self.X.shape[1]))
         yhat = model.predict(X)
-
-        yhat_expanded = np.zeros((yhat.shape[0], 4))
-        yhat_expanded[:,3] = yhat.squeeze()
-        yhat_inverse = self.price_scaler.inverse_transform(yhat_expanded)[:,3]
-
-        return yhat_inverse
+        self.yhat = self._inverse_transform_predictions(yhat)  # Use the new method
 
     ########################################
     ## ANALYZE
     ########################################
 
-    def _analyze(self, train_data, yhat_inverse, model_data, y):
+    def create_plot(self, show_graph=False):
+        train_data = self.train_data
+        y = self.y
+        yhat = self.yhat
+        model_data = self.model_data
+
         train_data.index = pd.to_datetime(train_data.index)
         train_data = train_data.iloc[:-1]
         train_data.reset_index(inplace=True)
@@ -144,25 +161,51 @@ class TimeSeriesPredictor:
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(y, yhat_inverse)}'))
 
-        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data["Close"].squeeze(), mode='lines', name='True', line=dict(color='blue')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat_inverse, mode='lines', name='Prediction', line=dict(color='red')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data["Close"].squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
 
         fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name='Loss', line=dict(color='orange')), row=2, col=1)
 
         fig.update_layout(template='plotly_dark', title_text='Price Prediction and Model Loss')
         fig.update_xaxes(tickmode='linear', tick0=0, dtick=1, row=2, col=1)
+        
+        if show_graph:
+            fig.show()
 
         fig.show()
 
-    def run(self):
-        train_data = self._fetch_data()
-        train_data = self._add_features(train_data)
-        X, y = self._prepare_data(train_data)
-        model, model_data = self._train_model(X, y)
+    def run(self, show_graph=False, save=False):
+        self._fetch_data()
+        self._add_features()
+        self._prepare_data()
+        model = self._train_model()
         print("Training complete")
-        yhat_inverse = self._predict(model, X)
-        self._analyze(train_data, yhat_inverse, model_data, y)
+        self._predict(model)  # Output is already inverse transformed
 
         if input('Save Model? (Y/N): ').lower() == 'y':
             model.save(f'{self.ticker}_{self.interval}_{model.count_params()}.keras', overwrite=True)
             print(f'Model Saved to {os.getcwd()}')
+        return self.model_data, self.create_plot(show_graph=show_graph)
+
+class ModelTesting(TimeSeriesPredictor):
+    def __init__(self, ticker, chunks, interval, age_days):
+        super().__init__(epochs=0, rnn_width=0, dense_width=0, ticker=ticker, chunks=chunks, interval=interval, age_days=age_days)
+        self.model = None
+
+    def _load_model(self, model_name):
+        self.model = models.load_model(model_name)
+        print(f"Using Model: {model_name}")
+        self.model.summary()
+        print(f"{self.model.loss}")
+        return self.model
+
+    def run(self, steps=1):
+        self._fetch_data()
+        self._add_features()
+        self._prepare_data()
+        self._predict(self.model)
+        return self.create_plot()
+
+# Example usage
+model = TimeSeriesPredictor(epochs=5, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=1, interval='5m', age_days=10)
+model.run(show_graph=True)
