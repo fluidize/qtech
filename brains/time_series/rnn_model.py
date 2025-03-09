@@ -126,23 +126,16 @@ class TimeSeriesPredictor:
         return model
 
     ########################################
-    ## INVERSE TRANSFORM PREDICTIONS
-    ########################################
-
-    def _inverse_transform_predictions(self, yhat):
-        yhat_expanded = np.zeros((yhat.shape[0], 5))  # Create an array with 5 columns
-        yhat_expanded[:, 3] = yhat.squeeze()  # Place the predicted Close values in the 4th column
-        yhat_inverse = self.ohlcv_scaler.inverse_transform(yhat_expanded)[:, 3]  # Inverse transform and extract the Close values
-        return yhat_inverse
-
-    ########################################
     ## PREDICT
     ########################################
 
     def _predict(self, model):
         X = self.X.values.reshape((self.X.shape[0], 1, self.X.shape[1]))
         yhat = model.predict(X)
-        self.yhat = self._inverse_transform_predictions(yhat)  # Use the new method
+        
+        yhat_expanded = np.zeros((yhat.shape[0], 5))  # Create an array with 5 columns
+        yhat_expanded[:, 3] = yhat.squeeze()  # Place the predicted Close values in the 4th column
+        self.yhat = self.ohlcv_scaler.inverse_transform(yhat_expanded)[:, 3]  # Inverse transform and extract the Close values
 
     ########################################
     ## ANALYZE
@@ -194,11 +187,8 @@ class ModelTesting(TimeSeriesPredictor):
         self.model = None
 
     def _load_model(self, model_name):
-        self.model = models.load_model(model_name)
-        print(f"Using Model: {model_name}")
+        self.model = models.load_model(model_name) #load model into class
         self.model.summary()
-        print(f"{self.model.loss}")
-        return self.model
 
     def _create_test_plot(self, show_graph=False):
         train_data = self.train_data
@@ -227,3 +217,7 @@ class ModelTesting(TimeSeriesPredictor):
         self._prepare_data()
         self._predict(self.model)
         return self._create_test_plot(show_graph=show_graph)
+
+# Example usage
+model = TimeSeriesPredictor(epochs=5, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=1, interval='5m', age_days=10)
+model.run(show_graph=True)
