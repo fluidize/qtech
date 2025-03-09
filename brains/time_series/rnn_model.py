@@ -17,7 +17,8 @@ tf.config.threading.set_intra_op_parallelism_threads(8)
 tf.config.threading.set_inter_op_parallelism_threads(8)
 
 class TimeSeriesPredictor:
-    def __init__(self, rnn_width, dense_width, ticker='BTC-USD', chunks=5, interval='5m', age_days=10):
+    def __init__(self, epochs, rnn_width, dense_width, ticker='BTC-USD', chunks=5, interval='5m', age_days=10):
+        self.epochs = epochs
         self.rnn_width = rnn_width
         self.dense_width = dense_width
 
@@ -104,10 +105,10 @@ class TimeSeriesPredictor:
         early_stopping = callbacks.EarlyStopping(monitor='loss', min_delta=1e-4, mode='auto', patience=3, restore_best_weights=True)
         inputs = layers.Input(shape=(X.shape[1], X.shape[2]))
 
-        rnn = layers.LSTM(units=rnn_width, return_sequences=True)(inputs)
-        rnn = layers.GRU(units=rnn_width, return_sequences=True)(rnn)
-        rnn = layers.LSTM(units=rnn_width, return_sequences=True)(rnn)
-        rnn = layers.GRU(units=rnn_width, return_sequences=True)(rnn)
+        rnn = layers.LSTM(units=self.rnn_width, return_sequences=True)(inputs)
+        rnn = layers.GRU(units=self.rnn_width, return_sequences=True)(rnn)
+        rnn = layers.LSTM(units=self.rnn_width, return_sequences=True)(rnn)
+        rnn = layers.GRU(units=self.rnn_width, return_sequences=True)(rnn)
 
         attention = layers.MultiHeadAttention(num_heads=13, key_dim=32)(rnn, rnn)
 
@@ -159,9 +160,9 @@ class TimeSeriesPredictor:
 
         loss_history = model_data.history['loss']
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(y, yhat_inverse)}'))
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(y, yhat)}'))
 
-        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data["Close"].squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
         fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
 
         fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name='Loss', line=dict(color='orange')), row=2, col=1)
@@ -172,7 +173,7 @@ class TimeSeriesPredictor:
         if show_graph:
             fig.show()
 
-        fig.show()
+        return fig
 
     def run(self, show_graph=False, save=False):
         self._fetch_data()
@@ -182,7 +183,7 @@ class TimeSeriesPredictor:
         print("Training complete")
         self._predict(model)  # Output is already inverse transformed
 
-        if input('Save Model? (Y/N): ').lower() == 'y':
+        if save: 
             model.save(f'{self.ticker}_{self.interval}_{model.count_params()}.keras', overwrite=True)
             print(f'Model Saved to {os.getcwd()}')
         return self.model_data, self.create_plot(show_graph=show_graph)
@@ -199,13 +200,30 @@ class ModelTesting(TimeSeriesPredictor):
         print(f"{self.model.loss}")
         return self.model
 
-    def run(self, steps=1):
+    def _create_test_plot(self, show_graph=False):
+        train_data = self.train_data
+        y = self.y
+        yhat = self.yhat
+
+        train_data.index = pd.to_datetime(train_data.index)
+        train_data = train_data.iloc[:-1]
+        train_data.reset_index(inplace=True)
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue')))
+        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')))
+
+        fig.update_layout(template='plotly_dark', title_text='Price Prediction')
+        
+        if show_graph:
+            fig.show()
+
+        return fig
+
+    def run(self, show_graph=False):
         self._fetch_data()
         self._add_features()
         self._prepare_data()
         self._predict(self.model)
-        return self.create_plot()
-
-# Example usage
-model = TimeSeriesPredictor(epochs=5, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=1, interval='5m', age_days=10)
-model.run(show_graph=True)
+        return self._create_test_plot(show_graph=show_graph)
