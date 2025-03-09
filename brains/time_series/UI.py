@@ -29,19 +29,19 @@ if st.sidebar.button('Run Training'):
         st.success('Model training complete!')
         st.plotly_chart(model.create_plot())
 
+
+st.sidebar.header('Adjust Test Parameters') #TESTING
+
 # Regex search for .keras files in the CWD
 directory_files = os.listdir(os.getcwd())
 keras_files = [f for f in directory_files if re.search(r'\.keras$', f)]
-
 test_model = st.sidebar.selectbox('Select Model', keras_files)
-
-st.sidebar.header('Adjust Test Parameters') #TESTING
 
 if st.sidebar.button('Test Model'):
     with st.spinner("Testing model...", show_time=True):
         test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-        test_client._load_model(model_name=test_model)
-        test_client.run()
+        test_client.load_model(model_name=test_model)
+        test_client.run
         plotly_figure = test_client.create_test_plot()
 
         st.plotly_chart(plotly_figure)

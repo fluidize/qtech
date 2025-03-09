@@ -28,16 +28,14 @@ class TimeSeriesPredictor:
         self.age_days = age_days
         self.feature_scaler = MinMaxScaler()
         self.ohlcv_scaler = MinMaxScaler()  # Updated from price_scaler to ohlcv_scaler
-        self.train_data = None
+        self.data = None
         self.X = None
         self.y = None
         self.model_data = None
         self.yhat = None
-        os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-    ########################################
-    ## PROCESSING FUNCTIONS
-    ########################################
+        self.model_filename = None
+        os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     def _fetch_data(self):
         data = pd.DataFrame()
@@ -48,24 +46,19 @@ class TimeSeriesPredictor:
             temp_data = yf.download(self.ticker, start=start_date, end=end_date, interval=self.interval)
             data = pd.concat([data, temp_data])
         data.sort_index(inplace=True)
-        self.train_data = data
+        data.columns = data.columns.droplevel(1)
+        data.reset_index(inplace=True)
+        data.rename(columns={'index': 'Datetime'}, inplace=True)
+        print(data['Datetime'].iloc[-1])
+        self.data = data
 
     def _add_features(self):
-        df = self.train_data
+        df = self.data
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA50'] = df['Close'].rolling(window=50).mean()
-        
         df['RSI'] = self._compute_rsi(df['Close'], 14)
-        
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Prev_High'] = df['High'].shift(1)
-        df['Prev_Low'] = df['Low'].shift(1)
-        df['Prev_Open'] = df['Open'].shift(1)
-        df['Prev_Volume'] = df['Volume'].shift(1)
-        
-        df.dropna(inplace=True)
 
-        self.train_data = df
+        self.data = df
 
     def _compute_rsi(self, series, period=14):
         delta = series.diff()
@@ -76,9 +69,9 @@ class TimeSeriesPredictor:
         return rsi
 
     def _prepare_data(self):
-        df = self.train_data
+        df = self.data
         ohlcv_features = ['Open', 'High', 'Low', 'Close', 'Volume']
-        other_features = ['MA20', 'MA50', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']
+        other_features = ['MA20', 'MA50', 'RSI']
         
         X_ohlcv = df[ohlcv_features]
         X_other = df[other_features]
@@ -91,10 +84,6 @@ class TimeSeriesPredictor:
         
         self.X = self.X[:-1]
         self.y = self.y[:-1]
-
-    ########################################
-    ## TRAIN MODEL
-    ########################################
 
     def _train_model(self):
         X = self.X.values.reshape((self.X.shape[0], 1, self.X.shape[1]))
@@ -125,36 +114,28 @@ class TimeSeriesPredictor:
 
         return model
 
-    ########################################
-    ## PREDICT
-    ########################################
-
     def _predict(self, model):
         X = self.X.values.reshape((self.X.shape[0], 1, self.X.shape[1]))
         yhat = model.predict(X)
         
         # Inverse transform predictions
-        self.yhat = self.ohlcv_scaler.inverse_transform(yhat.squeeze())  # Inverse transform and extract the OHLCV values
-
-    ########################################
-    ## ANALYZE
-    ########################################
+        self.yhat = self.ohlcv_scaler.inverse_transform(yhat.squeeze())
 
     def create_plot(self, show_graph=False):
-        train_data = self.train_data
+        data = self.data
         yhat = self.yhat[:, 3]  # Extract the predicted Close values
         model_data = self.model_data
 
-        train_data.index = pd.to_datetime(train_data.index)
-        train_data = train_data.iloc[:-1]
-        train_data.reset_index(inplace=True)
+        data.index = pd.to_datetime(data.index)
+        data = data.iloc[:-1]
+        data.reset_index(inplace=True)
 
         loss_history = model_data.history['loss']
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(train_data["Close"], yhat)}'))
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(data["Close"], yhat)}'))
 
-        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data['Datetime'], y=data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
 
         fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name='Loss', line=dict(color='orange')), row=2, col=1)
 
@@ -171,9 +152,7 @@ class TimeSeriesPredictor:
         self._add_features()
         self._prepare_data()
         model = self._train_model()
-        print("Training complete")
         self._predict(model)  # Output is already inverse transformed
-
         if save: 
             model.save(f'{self.ticker}_{self.interval}_{model.count_params()}.keras', overwrite=True)
             print(f'Model Saved to {os.getcwd()}')
@@ -181,24 +160,21 @@ class TimeSeriesPredictor:
 class ModelTesting(TimeSeriesPredictor):
     def __init__(self, ticker, chunks, interval, age_days):
         super().__init__(epochs=0, rnn_width=0, dense_width=0, ticker=ticker, chunks=chunks, interval=interval, age_days=age_days)
-        self.model = None
+        self.model = None #doesn't exist in TimeSeriesPredictor
 
-    def _load_model(self, model_name):
-        self.model = models.load_model(model_name) #load model into class
+    def load_model(self, model_name):
+        self.model = models.load_model(model_name) #models is a keras function
         self.model.summary()
+        self.model_filename = model_name #store it to get interval
 
     def create_test_plot(self, show_graph=False):
-        train_data = self.train_data
+        data = self.data
         yhat = self.yhat[:, 3]  # Extract the predicted Close values
-
-        train_data.index = pd.to_datetime(train_data.index)
-        train_data = train_data.iloc[:-1]
-        train_data.reset_index(inplace=True)
 
         fig = go.Figure()
 
-        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=train_data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue')))
-        fig.add_trace(go.Scatter(x=train_data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')))
+        fig.add_trace(go.Scatter(x=data['Datetime'], y=data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue'), connectgaps=True))
+        fig.add_trace(go.Scatter(x=data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red'), connectgaps=True))
 
         fig.update_layout(template='plotly_dark', title_text='Price Prediction')
         
@@ -207,14 +183,40 @@ class ModelTesting(TimeSeriesPredictor):
 
         return fig
 
-    def run(self, show_graph=False):
+    def _extended_predict(self, model, interval, extension=10):
+        # PARSE INTO A TIMEDELTA
+        number = int(interval[:-1])  # Take all characters except the last one as the number
+        unit = interval[-1]  # Last character will be the unit (e.g., 'm', 'h')
+
+        if unit == 'm':
+            extended_time = timedelta(minutes=number)
+        elif unit == 'h':
+            extended_time = timedelta(hours=number)
+        elif unit == 'd':
+            extended_time = timedelta(days=number)
+        else:
+            raise ValueError("Unsupported unit, please use 'm' for minutes or 'h' for hours.")
+        
+        print(extended_time)
+
+        for i in range(extension):
+            self._predict(model)  #set inverse and set self.yhat
+            # Append the new predictions to the data
+            new_data = pd.DataFrame(self.yhat, columns=self.data.columns[1:6]) #only ohlcv
+            new_data['Datetime'] = self.data['Datetime'].iloc[-1] + extended_time
+            self.data = pd.concat([self.data, new_data], axis=0)
+            print(len(self.data))
+            self._add_features()
+
+    def run(self, extension=10):
+        model_interval = self.model_filename.split("_")[1]
         self._fetch_data()
         self._add_features()
         self._prepare_data()
-        self._predict(self.model)
-        return self.create_test_plot(show_graph=show_graph)
+        self._extended_predict(model=self.model, interval=model_interval, extension=extension)
 
 # Example usage
-model = TimeSeriesPredictor(epochs=1, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=1, interval='5m', age_days=10)
-model.run()
-model.create_plot(show_graph=True)
+model = ModelTesting(ticker='BTC-USD', chunks=1, interval='1m', age_days=0)
+model.load_model('BTC-USD_5m_3005.keras')
+model.run(extension=10)
+model.create_test_plot(show_graph=True)

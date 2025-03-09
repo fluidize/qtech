@@ -184,7 +184,7 @@ class ModelTesting(TimeSeriesPredictor):
         super().__init__(epochs=0, rnn_width=0, dense_width=0, ticker=ticker, chunks=chunks, interval=interval, age_days=age_days)
         self.model = None
 
-    def _load_model(self, model_name):
+    def load_model(self, model_name):
         self.model = models.load_model(model_name) #load model into class
         self.model.summary()
 
@@ -214,7 +214,3 @@ class ModelTesting(TimeSeriesPredictor):
         self._prepare_data()
         self._predict(self.model)
         return self.create_test_plot(show_graph=show_graph)
-
-# Example usage
-model = TimeSeriesPredictor(epochs=5, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=1, interval='5m', age_days=10)
-model.run()
