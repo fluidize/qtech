@@ -25,9 +25,9 @@ save_model = st.sidebar.checkbox('Save Model as .keras file')
 if st.sidebar.button('Run Training'):
     with st.spinner("Training model...", show_time=True):
         model = TimeSeriesPredictor(epochs, rnn_width, dense_width, ticker, chunks, interval, age_days)
-        model_data, plotly_figure = model.run(save=save_model)
+        model.run(save=save_model)
         st.success('Model training complete!')
-        st.plotly_chart(plotly_figure)
+        st.plotly_chart(model.create_plot())
 
 # Regex search for .keras files in the CWD
 directory_files = os.listdir(os.getcwd())
@@ -41,7 +41,8 @@ if st.sidebar.button('Test Model'):
     with st.spinner("Testing model...", show_time=True):
         test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
         test_client._load_model(model_name=test_model)
-        plotly_figure = test_client.run()
+        test_client.run()
+        plotly_figure = test_client.create_test_plot()
 
         st.plotly_chart(plotly_figure)
         

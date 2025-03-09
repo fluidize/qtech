@@ -116,7 +116,7 @@ class TimeSeriesPredictor:
         dense = layers.Dense(self.dense_width, activation='relu')(dense)
         dense = layers.Dense(self.dense_width, activation='relu')(dense) 
 
-        outputs = layers.Dense(1, activation='relu')(dense)  # Adjusted to output 1 feature (Close)
+        outputs = layers.Dense(5, activation='relu')(dense)  # Adjusted to output 5 features (OHLCV)
 
         model = models.Model(inputs=inputs, outputs=outputs)
         lossfn = losses.Huber(delta=5.0)
@@ -133,9 +133,8 @@ class TimeSeriesPredictor:
         X = self.X.values.reshape((self.X.shape[0], 1, self.X.shape[1]))
         yhat = model.predict(X)
         
-        yhat_expanded = np.zeros((yhat.shape[0], 5))  # Create an array with 5 columns
-        yhat_expanded[:, 3] = yhat.squeeze()  # Place the predicted Close values in the 4th column
-        self.yhat = self.ohlcv_scaler.inverse_transform(yhat_expanded)[:, 3]  # Inverse transform and extract the Close values
+        # Inverse transform predictions
+        self.yhat = self.ohlcv_scaler.inverse_transform(yhat.squeeze())  # Inverse transform and extract the OHLCV values
 
     ########################################
     ## ANALYZE
@@ -143,7 +142,7 @@ class TimeSeriesPredictor:
 
     def create_plot(self, show_graph=False):
         train_data = self.train_data
-        yhat = self.yhat
+        yhat = self.yhat[:, 3]  # Extract the predicted Close values
         model_data = self.model_data
 
         train_data.index = pd.to_datetime(train_data.index)
@@ -190,7 +189,7 @@ class ModelTesting(TimeSeriesPredictor):
 
     def create_test_plot(self, show_graph=False):
         train_data = self.train_data
-        yhat = self.yhat
+        yhat = self.yhat[:, 3]  # Extract the predicted Close values
 
         train_data.index = pd.to_datetime(train_data.index)
         train_data = train_data.iloc[:-1]
@@ -216,5 +215,6 @@ class ModelTesting(TimeSeriesPredictor):
         return self.create_test_plot(show_graph=show_graph)
 
 # Example usage
-model = TimeSeriesPredictor(epochs=5, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=1, interval='5m', age_days=10)
+model = TimeSeriesPredictor(epochs=1, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=1, interval='5m', age_days=10)
 model.run()
+model.create_plot(show_graph=True)
