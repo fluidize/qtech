@@ -26,8 +26,7 @@ class TimeSeriesPredictor:
         self.chunks = chunks
         self.interval = interval
         self.age_days = age_days
-        self.feature_scaler = MinMaxScaler()
-        self.ohlcv_scaler = MinMaxScaler()  # Updated from price_scaler to ohlcv_scaler
+        self.ohlcv_scaler = MinMaxScaler()
         self.data = None
         self.X = None
         self.y = None
@@ -51,38 +50,14 @@ class TimeSeriesPredictor:
         data.rename(columns={'index': 'Datetime'}, inplace=True)
         self.data = data
 
-    def _add_features(self):
-        df = self.data
-
-        # Remove indicator columns if they exist
-        df = df.drop(columns=['MA20', 'MA50', 'RSI'], errors='ignore')
-
-        # Recalculate indicators
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['RSI'] = self._compute_rsi(df['Close'], 14)
-
-        self.data = df
-
-    def _compute_rsi(self, series, period=14):
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))  # Fill NaN values with a neutral RSI value
-        return rsi
-
     def _prepare_data(self):
         df = self.data
         ohlcv_features = ['Open', 'High', 'Low', 'Close', 'Volume']
-        other_features = ['MA20', 'MA50', 'RSI']
         
         X_ohlcv = df[ohlcv_features]
-        X_other = df[other_features]
         
-        X_ohlcv_scaled = pd.DataFrame(self.ohlcv_scaler.fit_transform(X_ohlcv), columns=X_ohlcv.columns)  # Updated
-        X_other_scaled = pd.DataFrame(self.feature_scaler.fit_transform(X_other), columns=X_other.columns)
-        self.X = pd.concat([X_ohlcv_scaled, X_other_scaled], axis=1)
+        X_ohlcv_scaled = pd.DataFrame(self.ohlcv_scaler.fit_transform(X_ohlcv), columns=X_ohlcv.columns)
+        self.X = X_ohlcv_scaled
 
         self.y = X_ohlcv_scaled.shift(-1)  # Shift the target variable to predict the next time step
         
@@ -153,7 +128,6 @@ class TimeSeriesPredictor:
 
     def run(self, save=False):
         self._fetch_data()
-        self._add_features()
         self._prepare_data()
         model = self._train_model()
         self._predict(model)  # Output is already inverse transformed
@@ -203,26 +177,24 @@ class ModelTesting(TimeSeriesPredictor):
 
         for i in range(extension):
             self._predict(model)  #set inverse and set self.yhat
-            
-            print(self.data)
-            print(self.data['Close'].isna().sum())  #it appears that every iteration, 49 rows have NaN
-
+            # Append the new predictions to the data
             new_data = pd.DataFrame(self.yhat, columns=self.data.columns[1:6]) #only ohlcv
             new_data['Datetime'] = self.data['Datetime'].iloc[-1] + extended_time
             self.data = pd.concat([self.data, new_data], axis=0)
-            self.data.sort_values(by='Datetime', inplace=True)
-            self._add_features()  # Do not drop rows with NaN values during extended prediction
 
     def run(self, extension=10):
         model_interval = self.model_filename.split("_")[1]
         self._fetch_data()
-        self._add_features()
         self._prepare_data()
         self._extended_predict(model=self.model, interval=model_interval, extension=extension)
 
+model = TimeSeriesPredictor(epochs=5, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=7, interval='5m', age_days=3)
+model.run(save=True)
+model.create_plot(show_graph=True)
+
 # Example usage
 test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-test_client.load_model(model_name="BTC-USD_5m_664421.keras")
+test_client.load_model(model_name=input("Enter the model name: "))
 test_client.run(extension=10)
 test_client.create_test_plot(show_graph=True)
 
