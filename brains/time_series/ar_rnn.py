@@ -16,6 +16,9 @@ import os
 tf.config.threading.set_intra_op_parallelism_threads(8)
 tf.config.threading.set_inter_op_parallelism_threads(8)
 
+def check_for_nan(data):
+    return np.sum(np.isnan(data))
+
 class TimeSeriesPredictor:
     def __init__(self, epochs, rnn_width, dense_width, ticker='BTC-USD', chunks=5, interval='5m', age_days=10):
         self.epochs = epochs
@@ -211,9 +214,18 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
 
-# Example usage
-test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-test_client.load_model(model_name="BTC-USD_5m_664421.keras")
-original_data, predicted_data = test_client.run(extension=10)
-test_client.create_test_plot(original_data, predicted_data, show_graph=True)
+test_client = TimeSeriesPredictor(epochs=5, rnn_width=1, dense_width=1, ticker='BTC-USD', chunks=5, interval='5m', age_days=10)
+data, yhat, model_data = test_client.run()
 
+print(data)
+print("yhat: ", check_for_nan(yhat))
+
+
+test_client.create_plot(data, yhat, model_data, show_graph=True)
+
+
+# Example usage
+# test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
+# test_client.load_model(model_name="BTC-USD_5m_664421.keras")
+# original_data, predicted_data = test_client.run(extension=100)
+# test_client.create_test_plot(original_data, predicted_data, show_graph=True)

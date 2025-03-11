@@ -16,6 +16,9 @@ import os
 tf.config.threading.set_intra_op_parallelism_threads(8)
 tf.config.threading.set_inter_op_parallelism_threads(8)
 
+def check_for_nan(data):
+    print(np.sum(np.isnan(data)))
+
 class TimeSeriesPredictor:
     def __init__(self, epochs, rnn_width, dense_width, ticker='BTC-USD', chunks=5, interval='5m', age_days=10):
         self.epochs = epochs
@@ -27,46 +30,40 @@ class TimeSeriesPredictor:
         self.interval = interval
         self.age_days = age_days
         self.ohlcv_scaler = MinMaxScaler()
-        self.data = None
-        self.X = None
-        self.y = None
-        self.model_data = None
-        self.yhat = None
-
-        self.model_filename = None
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-    def _fetch_data(self):
+    def _fetch_data(self, ticker, chunks, interval, age_days):
         data = pd.DataFrame()
-        temp_data = None
-        for x in range(self.chunks):
-            start_date = (datetime.now() - timedelta(days=8) - timedelta(days=8*x) - timedelta(days=self.age_days)).strftime('%Y-%m-%d')
-            end_date = (datetime.now()- timedelta(days=8*x) - timedelta(days=self.age_days)).strftime('%Y-%m-%d')
-            temp_data = yf.download(self.ticker, start=start_date, end=end_date, interval=self.interval)
+        for x in range(chunks):
+            start_date = (datetime.now() - timedelta(days=8) - timedelta(days=8*x) - timedelta(days=age_days)).strftime('%Y-%m-%d')
+            end_date = (datetime.now() - timedelta(days=8*x) - timedelta(days=age_days)).strftime('%Y-%m-%d')
+            temp_data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
             data = pd.concat([data, temp_data])
         data.sort_index(inplace=True)
         data.columns = data.columns.droplevel(1)
         data.reset_index(inplace=True)
         data.rename(columns={'index': 'Datetime'}, inplace=True)
-        self.data = data
+        return data
 
-    def _prepare_data(self):
-        df = self.data
-        ohlcv_features = ['Open', 'High', 'Low', 'Close', 'Volume']
-        
-        X_ohlcv = df[ohlcv_features]
-        
-        X_ohlcv_scaled = pd.DataFrame(self.ohlcv_scaler.fit_transform(X_ohlcv), columns=X_ohlcv.columns)
-        self.X = X_ohlcv_scaled
+    def _prepare_data(self, data):
+        df = data.copy()
 
-        self.y = X_ohlcv_scaled.shift(-1)  # Shift the target variable to predict the next time step
+        ohlc_features = ['Open', 'High', 'Low', 'Close']
         
-        self.X = self.X[:-1]
-        self.y = self.y[:-1]
+        X_ohlc = df[ohlc_features]
+        
+        X_ohlc_scaled = pd.DataFrame(self.ohlcv_scaler.fit_transform(X_ohlc), columns=X_ohlc.columns)
+    
+        X = X_ohlc_scaled
+        y = X_ohlc_scaled.shift(-1)  # Shift the target variable to predict the next time step
+        
+        X = X[:-1]
+        y = y[:-1]
 
-    def _train_model(self):
-        X = self.X.values.reshape((self.X.shape[0], 1, self.X.shape[1]))
-        y = self.y.values.reshape((self.y.shape[0], 1, self.y.shape[1]))
+        return X, y
+
+    def _train_model(self, X, y):
+        X = X.values.reshape((X.shape[0], 1, X.shape[1]))
 
         model = models.Sequential()
         reduce_lr = callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=3, min_lr=1e-8)
@@ -84,26 +81,26 @@ class TimeSeriesPredictor:
         dense = layers.Dense(self.dense_width, activation='relu')(dense)
         dense = layers.Dense(self.dense_width, activation='relu')(dense) 
 
-        outputs = layers.Dense(5, activation='relu')(dense)  # Adjusted to output 5 features (OHLCV)
+        outputs = layers.Dense(4, activation='relu')(dense)  # Adjusted to output 4 features (OHLC)
 
         model = models.Model(inputs=inputs, outputs=outputs)
         lossfn = losses.Huber(delta=5.0)
         model.compile(optimizer=optimizers.Adam(learning_rate=1e-4), loss=lossfn, metrics=['mean_squared_error'])
-        self.model_data = model.fit(X, y, epochs=self.epochs, batch_size=64, callbacks=[early_stopping, reduce_lr])
+        model_data = model.fit(X, y, epochs=self.epochs, batch_size=64, callbacks=[early_stopping, reduce_lr])
 
-        return model
+        return model, model_data
 
-    def _predict(self, model):
-        X = self.X.values.reshape((self.X.shape[0], 1, self.X.shape[1]))
+    def _predict(self, model, X):
+        X = X.values.reshape((X.shape[0], 1, X.shape[1]))
         yhat = model.predict(X)
         
         # Inverse transform predictions
-        self.yhat = self.ohlcv_scaler.inverse_transform(yhat.squeeze())
+        yhat = self.ohlcv_scaler.inverse_transform(yhat.squeeze())
+        return yhat
 
-    def create_plot(self, show_graph=False):
-        data = self.data
-        yhat = self.yhat[:, 3]  # Extract the predicted Close values
-        model_data = self.model_data
+    def create_plot(self, data, yhat, model_data, show_graph=False):
+        data = data.copy()
+        yhat = yhat[:, 3]  # Extract the predicted Close values
 
         data.index = pd.to_datetime(data.index)
         data = data.iloc[:-1]
@@ -127,13 +124,14 @@ class TimeSeriesPredictor:
         return fig
 
     def run(self, save=False):
-        self._fetch_data()
-        self._prepare_data()
-        model = self._train_model()
-        self._predict(model)  # Output is already inverse transformed
+        data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
+        X, y = self._prepare_data(data)
+        model, model_data = self._train_model(X, y)
+        yhat = self._predict(model, X)
         if save: 
             model.save(f'{self.ticker}_{self.interval}_{model.count_params()}.keras', overwrite=True)
             print(f'Model Saved to {os.getcwd()}')
+        return data, yhat, model_data
 
 class ModelTesting(TimeSeriesPredictor):
     def __init__(self, ticker, chunks, interval, age_days):
@@ -145,14 +143,11 @@ class ModelTesting(TimeSeriesPredictor):
         self.model.summary()
         self.model_filename = model_name #store it to get interval
 
-    def create_test_plot(self, show_graph=False):
-        data = self.data
-        yhat = self.yhat[:, 3]  # Extract the predicted Close values
-
+    def create_test_plot(self, data, yhat, show_graph=False):
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(x=data['Datetime'], y=data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue'), connectgaps=True))
-        fig.add_trace(go.Scatter(x=data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red'), connectgaps=True))
+        fig.add_trace(go.Scatter(x=yhat['Datetime'], y=yhat['Close'], mode='lines', name='Predicted Close', line=dict(color='red'), connectgaps=True))
 
         fig.update_layout(template='plotly_dark', title_text='Price Prediction')
         
@@ -161,7 +156,7 @@ class ModelTesting(TimeSeriesPredictor):
 
         return fig
 
-    def _extended_predict(self, model, interval, extension=10):
+    def _extended_predict(self, model, data, interval, extension=10):
         # PARSE INTO A TIMEDELTA
         number = int(interval[:-1])  # Take all characters except the last one as the number
         unit = interval[-1]  # Last character will be the unit (e.g., 'm', 'h')
@@ -175,26 +170,34 @@ class ModelTesting(TimeSeriesPredictor):
         else:
             raise ValueError("Unsupported unit, please use 'm' for minutes or 'h' for hours.")
 
+        original_data = data.copy()
+        predicted_data = data.copy()
+
         for i in range(extension):
-            self._predict(model)  #set inverse and set self.yhat
-            # Append the new predictions to the data
-            new_data = pd.DataFrame(self.yhat, columns=self.data.columns[1:6]) #only ohlcv
-            new_data['Datetime'] = self.data['Datetime'].iloc[-1] + extended_time
-            self.data = pd.concat([self.data, new_data], axis=0)
+            # Use only the last row for prediction
+            X, _ = self._prepare_data(predicted_data)
+            yhat = self._predict(model, X)
+            
+            new_data = pd.DataFrame(yhat[-1].reshape(1, -1), columns=data.columns[1:5]) #only ohlc
+            new_data['Datetime'] = predicted_data['Datetime'].iloc[-1] + extended_time #append extended time to end
+            predicted_data = pd.concat([predicted_data, new_data], axis=0)
+
+        return original_data, predicted_data
 
     def run(self, extension=10):
         model_interval = self.model_filename.split("_")[1]
-        self._fetch_data()
-        self._prepare_data()
-        self._extended_predict(model=self.model, interval=model_interval, extension=extension)
+        data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
+        original_data, predicted_data = self._extended_predict(self.model, data, model_interval, extension)
+        return original_data, predicted_data
 
-model = TimeSeriesPredictor(epochs=5, rnn_width=128, dense_width=128, ticker='BTC-USD', chunks=7, interval='5m', age_days=3)
-model.run(save=True)
-model.create_plot(show_graph=True)
+test_client = TimeSeriesPredictor(epochs=5, rnn_width=1, dense_width=1, ticker='BTC-USD', chunks=5, interval='5m', age_days=10)
+data, yhat, model_data = test_client.run()
+test_client.create_plot(data, yhat, model_data, show_graph=True)
+
+check_for_nan(data)
 
 # Example usage
-test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-test_client.load_model(model_name=input("Enter the model name: "))
-test_client.run(extension=10)
-test_client.create_test_plot(show_graph=True)
-
+# test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
+# test_client.load_model(model_name="BTC-USD_5m_7956197.keras")
+# original_data, predicted_data = test_client.run(extension=100)
+# test_client.create_test_plot(original_data, predicted_data, show_graph=True)

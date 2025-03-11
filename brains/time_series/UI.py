@@ -2,7 +2,7 @@ import streamlit as st
 import io
 import os
 import re
-
+import numpy as np
 import plotly.graph_objects as go
 
 from ar_rnn import TimeSeriesPredictor, ModelTesting  # Import from ar_rnn.py
@@ -25,9 +25,11 @@ save_model = st.sidebar.checkbox('Save Model as .keras file')
 if st.sidebar.button('Run Training'):
     with st.spinner("Training model...", show_time=True):
         model = TimeSeriesPredictor(epochs, rnn_width, dense_width, ticker, chunks, interval, age_days)
-        model.run(save=save_model)
+        data, yhat, model_data = model.run(save=save_model)
+        print(data)
+        print(data.isna().sum(), np.sum(np.isnan(yhat)))
         st.success('Model training complete!')
-        st.plotly_chart(model.create_plot())
+        st.plotly_chart(model.create_plot(data, yhat, model_data))
 
 st.sidebar.header('Adjust Test Parameters')  # TESTING
 
