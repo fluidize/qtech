@@ -16,8 +16,10 @@ import os
 tf.config.threading.set_intra_op_parallelism_threads(8)
 tf.config.threading.set_inter_op_parallelism_threads(8)
 
-def check_for_nan(data):
-    return np.sum(np.isnan(data))
+def check_for_nan(data, stage):
+    nan_count = np.sum(np.isnan(data))
+    print(f"NaNs found at {stage}: {nan_count}")
+    return nan_count
 
 class TimeSeriesPredictor:
     def __init__(self, epochs, rnn_width, dense_width, ticker='BTC-USD', chunks=5, interval='5m', age_days=10):
@@ -54,7 +56,7 @@ class TimeSeriesPredictor:
         rsi = 100 - (100 / (1 + rs))
         return rsi
 
-    def _prepare_data(self, data):
+    def _prepare_data(self, data, train_split=True):
         df = data.copy()
 
         # Remove indicator columns if they exist
@@ -64,6 +66,8 @@ class TimeSeriesPredictor:
         df['MA50'] = df['Close'].rolling(window=50).mean()
         df['RSI'] = self._compute_rsi(df['Close'], 14)
 
+        df.dropna(inplace=True)
+
         ohlcv_features = ['Open', 'High', 'Low', 'Close', 'Volume']
         other_features = ['MA20', 'MA50', 'RSI']
         
@@ -72,15 +76,17 @@ class TimeSeriesPredictor:
         
         X_ohlcv_scaled = pd.DataFrame(self.ohlcv_scaler.fit_transform(X_ohlcv), columns=X_ohlcv.columns)
         X_other_scaled = pd.DataFrame(self.feature_scaler.fit_transform(X_other), columns=X_other.columns)
-    
         
-        X = pd.concat([X_ohlcv_scaled, X_other_scaled], axis=1)
-        y = X_ohlcv_scaled.shift(-1)  # Shift the target variable to predict the next time step
-        
-        X = X[:-1]
-        y = y[:-1]
+        if train_split:
+            X = pd.concat([X_ohlcv_scaled, X_other_scaled], axis=1)
+            y = X_ohlcv_scaled.shift(-1)  # Shift the target variable to predict the next time step
+            
+            X = X[:-1]
+            y = y[:-1]
 
-        return X, y
+            return X, y
+        
+        return df
 
     def _train_model(self, X, y):
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
@@ -119,19 +125,18 @@ class TimeSeriesPredictor:
         return yhat
 
     def create_plot(self, data, yhat, model_data, show_graph=False):
-        data = data.copy()
-        yhat = yhat[:, 3]  # Extract the predicted Close values
-
-        data.index = pd.to_datetime(data.index)
-        data = data.iloc[:-1]
+        data = self._prepare_data(data.copy(), train_split=False) #NA columns can get removed
         data.reset_index(inplace=True)
 
         loss_history = model_data.history['loss']
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(data["Close"], yhat)}'))
+        X_plot = data["Close"][:-1]
+        y_plot = yhat[:, 3]
 
-        fig.add_trace(go.Scatter(x=data['Datetime'], y=data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data['Datetime'], y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(X_plot, y_plot)}'))
+
+        fig.add_trace(go.Scatter(x=data['Datetime'], y=X_plot.squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data['Datetime'], y=y_plot, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
 
         fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name='Loss', line=dict(color='orange')), row=2, col=1)
 
@@ -146,6 +151,7 @@ class TimeSeriesPredictor:
     def run(self, save=False):
         data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
         X, y = self._prepare_data(data)
+        print(X)
         model, model_data = self._train_model(X, y)
         yhat = self._predict(model, X)
         if save: 
@@ -200,7 +206,7 @@ class ModelTesting(TimeSeriesPredictor):
             X, _ = self._prepare_data(predicted_data)
             yhat = self._predict(model, X)
             
-            new_data = pd.DataFrame(yhat[-1].reshape(1, -1), columns=data.columns[1:6]) #only ohlcv
+            new_data = pd.DataFrame(yhat[-1].reshape(1, -1), columns=original_data.columns[1:6]) #only ohlcv
             new_data['Datetime'] = predicted_data['Datetime'].iloc[-1] + extended_time
             predicted_data = pd.concat([predicted_data, new_data], axis=0)
             print(predicted_data)
@@ -214,13 +220,8 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
 
-test_client = TimeSeriesPredictor(epochs=5, rnn_width=1, dense_width=1, ticker='BTC-USD', chunks=5, interval='5m', age_days=10)
+test_client = TimeSeriesPredictor(epochs=5, rnn_width=256, dense_width=256, ticker='BTC-USD', chunks=5, interval='5m', age_days=10)
 data, yhat, model_data = test_client.run()
-
-print(data)
-print("yhat: ", check_for_nan(yhat))
-
-
 test_client.create_plot(data, yhat, model_data, show_graph=True)
 
 
