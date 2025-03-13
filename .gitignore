@@ -19,3 +19,5 @@ __pycache__/
 # Ignore other files and directories
 node_modules/
 .DS_Store
+
+*.json

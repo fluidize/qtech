@@ -87,7 +87,8 @@ class TimeSeriesPredictor:
         
         if train_split:
             X = pd.concat([X_ohlcv_scaled, X_other_scaled], axis=1)
-            y = X_ohlcv_scaled.shift(-1)  # Shift the target variable to predict the next time step
+            y = X_ohlcv_scaled[['Open']].shift(-1)  # Shift the target variable to predict the next time step
+            self.output_dimensions = len(y.columns)
             
             X = X[:-1]
             y = y[:-1]
@@ -116,7 +117,7 @@ class TimeSeriesPredictor:
         dense = layers.Dense(self.dense_width)(dense)
         dense = layers.LeakyReLU(alpha=0.3)(dense)
         
-        outputs = layers.Dense(5)(dense)  # Adjusted to output 5 features (OHLCV)
+        outputs = layers.Dense(self.output_dimensions)(dense)
 
         model = models.Model(inputs=inputs, outputs=outputs)
         lossfn = losses.Huber(delta=5.0)
@@ -129,8 +130,10 @@ class TimeSeriesPredictor:
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
         yhat = model.predict(X)
         
-        # Inverse transform predictions
-        yhat = self.ohlcv_scaler.inverse_transform(yhat.squeeze())
+        yhat_expanded = np.zeros((yhat.shape[0], 5))
+        yhat_expanded[:, 3] = yhat.squeeze()
+        yhat = self.ohlcv_scaler.inverse_transform(yhat_expanded)[:, 1]
+        print(yhat)
         return yhat
 
     def create_plot(self, data, yhat, model_data, show_graph=False, save_image=False):
@@ -140,7 +143,7 @@ class TimeSeriesPredictor:
         loss_history = model_data.history['loss']
 
         X_plot = data["Close"][:-1]
-        y_plot = yhat[:, 3]
+        y_plot = yhat  # Only plot the Close values
 
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(X_plot, y_plot)}'))
 
@@ -227,7 +230,7 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
 
-test_client = TimeSeriesPredictor(epochs=3, rnn_width=1, dense_width=1, ticker='BTC-USD', chunks=5, interval='5m', age_days=1)
+test_client = TimeSeriesPredictor(epochs=1, rnn_width=256, dense_width=256, ticker='BTC-USD', chunks=5, interval='5m', age_days=1)
 data, yhat, model_data = test_client.run(save=False)
 test_client.create_plot(data, yhat, model_data, show_graph=True)
 
