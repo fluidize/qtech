@@ -93,84 +93,42 @@ class TimeSeriesPredictor:
         df = data.copy()
         indicator_columns = ['MA50', 'MA20', 'MA10', 'RSI']
         df = df.drop(columns=indicator_columns, errors='ignore')
-
-        # Price-based features
         df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
         df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
-        
-        # Volume features (highly skewed)
         df['Volume_Change'] = df['Volume'].pct_change()
-        
-        # Momentum indicators
         df['RSI'] = self._compute_rsi(df['Close'], 14)
-        
-        # Volatility indicators
         upper_bb, middle_bb, lower_bb = self._compute_bollinger_bands(df['Close'], 20, 2)
         df['BB_Upper'] = upper_bb
         df['BB_Middle'] = middle_bb
         df['BB_Lower'] = lower_bb
         df['BB_Width'] = (upper_bb - lower_bb) / middle_bb
-        
-        # Trend indicators
         macd, signal_line = self._compute_macd(df['Close'])
         df['MACD'] = macd
         df['MACD_Signal'] = signal_line
         df['MACD_Hist'] = macd - signal_line
-        
-        # Moving averages (normalized by current price)
-        df['MA10'] = df['Close'].rolling(window=10).mean() / df['Close']
-        df['MA20'] = df['Close'].rolling(window=20).mean() / df['Close']
-        df['MA50'] = df['Close'].rolling(window=50).mean() / df['Close']
+        df['MA10'] = df['Close'].rolling(window=10).mean()
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA50'] = df['Close'].rolling(window=50).mean()
         df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
-        
-        # Volatility features
         df['ATR'] = self._compute_atr(df['High'], df['Low'], df['Close'], 14)
-        df['Volatility'] = df['Close'].rolling(window=20).std() / df['Close']
-        
-        # Momentum features
+        df['Volatility'] = df['Close'].rolling(window=20).std()
         df['ROC'] = df['Close'].pct_change(periods=10) * 100
-        df['Price_Momentum'] = (df['Close'] - df['Close'].rolling(window=10).mean()) / df['Close']
-        
-        # Cyclical time features
+        df['Price_Momentum'] = df['Close'] - df['Close'].rolling(window=10).mean()
         df = self._add_time_features(df)
-        
-        # Previous values
         for period in [1, 2, 3]:
             df[f'Prev{period}_Close'] = df['Close'].shift(period)
             df[f'Prev{period}_Volume'] = df['Volume'].shift(period)
-        
         df.dropna(inplace=True)
         
         if train_split:
-            # Group features by their characteristics
             price_features = ['Open', 'High', 'Low', 'Close']
-            
-            volume_features = ['Volume', 'Volume_Change'] + [f'Prev{period}_Volume' for period in [1, 2, 3]]
-            
-            bounded_features = ['RSI']  # Features that are already bounded (e.g., 0-100)
-            
-            normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'Volatility', 
-                                 'Price_Momentum', 'BB_Width']  # Already normalized by price
-            
-            cyclical_features = ['Hour_sin', 'Hour_cos', 'DayOfWeek_sin', 'DayOfWeek_cos']  # Already bounded [-1, 1]
-            
-            # Remaining features need standardization
-            technical_features = [col for col in df.columns 
-                               if col not in (price_features + volume_features + bounded_features + 
-                                            normalized_features + cyclical_features + ['Datetime'])]
-            
-            # Scale absolute price values with MinMaxScaler
+            volume_features = ['Volume', 'Volume_Change'] + [f'Prev{i}_Volume' for i in [1, 2, 3]]
+            technical_features = [col for col in df.columns if col not in price_features + volume_features + ['Datetime']]
             df[price_features] = self.scalers['price'].fit_transform(df[price_features])
-            
-            # Transform volume features to normal distribution to handle outliers
             df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
             df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
             df[volume_features] = self.scalers['volume'].fit_transform(df[volume_features])
-            
-            # Standardize technical features that aren't already normalized
-            if technical_features:
-                df[technical_features] = self.scalers['technical'].fit_transform(df[technical_features])
-            
+            df[technical_features] = self.scalers['technical'].fit_transform(df[technical_features])
             X = df.drop(['Datetime'], axis=1)
             y = df[['Close']].shift(-1)
             self.output_dimensions = len(y.columns)
@@ -230,11 +188,9 @@ class TimeSeriesPredictor:
                           f'Training Loss History (Final Loss: {model_data.history["loss"][-1]:.6f})'))
         fig.add_trace(go.Scatter(x=dates, y=actual_prices, mode='lines', name='Actual Close', line=dict(color='blue')), row=1, col=1)
         fig.add_trace(go.Scatter(x=dates, y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
-        
         error = actual_prices - yhat
         fig.add_trace(go.Scatter(x=dates, y=error, mode='lines', name='Prediction Error', line=dict(color='orange')), row=2, col=1)
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=2, col=1)
-        
         fig.add_trace(go.Scatter(x=list(range(len(model_data.history['loss']))), y=model_data.history['loss'],
                                mode='lines', name='Training Loss', line=dict(color='green')), row=3, col=1)
         fig.update_layout(height=900, template='plotly_dark', showlegend=True, title_text='Cryptocurrency Price Prediction Analysis')
@@ -247,59 +203,8 @@ class TimeSeriesPredictor:
             fig.write_image(f"images/prediction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         return fig
 
-    def _visualize_volume_scaling(self, data):
-        df = data.copy()
-        volume = df['Volume'].values.reshape(-1, 1)
-        
-        # Different scaling approaches
-        qt = QuantileTransformer(output_distribution='normal')
-        ss = StandardScaler()
-        mm = MinMaxScaler()
-        
-        # Apply transformations
-        vol_qt = qt.fit_transform(volume)
-        vol_ss = ss.fit_transform(volume)
-        vol_mm = mm.fit_transform(volume)
-        
-        # Create visualization
-        fig = make_subplots(rows=2, cols=2, 
-                           subplot_titles=('Original Volume Distribution',
-                                         'QuantileTransformer (Normal)',
-                                         'StandardScaler',
-                                         'MinMaxScaler'))
-        
-        # Original distribution
-        fig.add_trace(go.Histogram(x=volume.flatten(), name='Original',
-                                 nbinsx=50), row=1, col=1)
-        
-        # QuantileTransformer
-        fig.add_trace(go.Histogram(x=vol_qt.flatten(), name='QuantileTransformer',
-                                 nbinsx=50), row=1, col=2)
-        
-        # StandardScaler
-        fig.add_trace(go.Histogram(x=vol_ss.flatten(), name='StandardScaler',
-                                 nbinsx=50), row=2, col=1)
-        
-        # MinMaxScaler
-        fig.add_trace(go.Histogram(x=vol_mm.flatten(), name='MinMaxScaler',
-                                 nbinsx=50), row=2, col=2)
-        
-        fig.update_layout(height=800, title_text='Volume Scaling Comparison')
-        fig.show()
-        
-        # Print statistics
-        print("\nScaling Statistics:")
-        print(f"Original - Mean: {np.mean(volume):.2f}, Std: {np.std(volume):.2f}, Skew: {pd.Series(volume.flatten()).skew():.2f}")
-        print(f"QuantileTransformer - Mean: {np.mean(vol_qt):.2f}, Std: {np.std(vol_qt):.2f}, Skew: {pd.Series(vol_qt.flatten()).skew():.2f}")
-        print(f"StandardScaler - Mean: {np.mean(vol_ss):.2f}, Std: {np.std(vol_ss):.2f}, Skew: {pd.Series(vol_ss.flatten()).skew():.2f}")
-        print(f"MinMaxScaler - Mean: {np.mean(vol_mm):.2f}, Std: {np.std(vol_mm):.2f}, Skew: {pd.Series(vol_mm.flatten()).skew():.2f}")
-
     def run(self, save=False):
         data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
-        
-        # Visualize volume scaling
-        self._visualize_volume_scaling(data)
-        
         X, y = self._prepare_data(data)
         print(f"Training data shape: X={X.shape}, y={y.shape}")
         print(f"X range: min={np.min(X.values):.2f}, max={np.max(X.values):.2f}")

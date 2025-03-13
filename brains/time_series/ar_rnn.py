@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 import tensorflow as tf
-from keras import layers, models, optimizers, callbacks, losses
+from keras import layers, models, optimizers, callbacks, losses, regularizers
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.metrics import mean_squared_error
@@ -120,34 +120,57 @@ class TimeSeriesPredictor:
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
         print(f"Training shapes - X: {X.shape}, y: {y.shape}")
         
+        # Hyperparameters for regularization
+        lstm_dropout = 0.05  # Reduced LSTM dropout
+        dense_dropout = 0.05  # Reduced dense layer dropout
+        l2_reg = 1e-5  # L2 regularization factor
+        
         inputs = layers.Input(shape=(X.shape[1], X.shape[2]))
-        x = layers.LSTM(units=self.rnn_width, return_sequences=True, kernel_regularizer=tf.keras.regularizers.l2(1e-4))(inputs)
-        x = layers.BatchNormalization()(x)
-        x = layers.Dropout(0.2)(x)
-        x = layers.LSTM(units=self.rnn_width//2, kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
-        x = layers.BatchNormalization()(x)
-        x = layers.Dropout(0.2)(x)
-        x = layers.Dense(self.dense_width, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
-        x = layers.BatchNormalization()(x)
-        x = layers.Dropout(0.2)(x)
-        x = layers.Dense(self.dense_width//2, activation='relu')(x)
-        x = layers.BatchNormalization()(x)
+        
+        # First LSTM layer
+        x = layers.LSTM(units=self.rnn_width, return_sequences=True, 
+                       kernel_regularizer=regularizers.l2(l2_reg))(inputs)
+        # x = layers.BatchNormalization()(x)
+        # x = layers.Dropout(lstm_dropout)(x)
+        
+        # Second LSTM layer
+        x = layers.LSTM(units=self.rnn_width, 
+                       kernel_regularizer=regularizers.l2(l2_reg))(x)
+        # x = layers.BatchNormalization()(x)
+        # x = layers.Dropout(lstm_dropout)(x)
+        
+        # Dense layers
+        x = layers.Dense(self.dense_width, activation='relu')(x)
+        # x = layers.BatchNormalization()(x)
+        # x = layers.Dropout(dense_dropout)(x)
+        
+        x = layers.Dense(self.dense_width, activation='relu')(x)
+        # x = layers.BatchNormalization()(x)
+        
         outputs = layers.Dense(5)(x)  # Output OHLCV (5 features)
         
         lossfn = losses.Huber(delta=5.0)
         model = models.Model(inputs=inputs, outputs=outputs)
-        model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mae'])
+        model.compile(optimizer=optimizers.Adam(learning_rate=2e-3),
+                     loss=lossfn,
+                     metrics=['mae'])
         
         callbacks_list = [
-            callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
-            callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
-            callbacks.ModelCheckpoint('best_model.keras', monitor='val_loss', save_best_only=True)
+            callbacks.EarlyStopping(monitor='val_loss', patience=15,
+                                  restore_best_weights=True),
+            callbacks.ReduceLROnPlateau(monitor='val_loss', 
+                                      factor=0.5, 
+                                      patience=7,
+                                      min_lr=1e-6)
+            # callbacks.ModelCheckpoint('best_model.keras', 
+            #                         monitor='val_loss', 
+            #                         save_best_only=True)
         ]
         
         model_data = model.fit(X, y, 
                              epochs=self.epochs,
                              batch_size=32,
-                             validation_split=0.2,
+                             validation_split=0.1,
                              callbacks=callbacks_list,
                              verbose=1)
         
@@ -302,8 +325,8 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
 
-test_client = TimeSeriesPredictor(epochs=5, rnn_width=256, dense_width=128, ticker='BTC-USD', chunks=5, interval='5m', age_days=1)
-data, yhat, model_data = test_client.run(save=True)
+test_client = TimeSeriesPredictor(epochs=5, rnn_width=1024, dense_width=512, ticker='BTC-USD', chunks=7, interval='5m', age_days=1)
+data, yhat, model_data = test_client.run(save=False)
 test_client.create_plot(data, yhat, model_data, show_graph=True)
 
 # Extended prediction testing
