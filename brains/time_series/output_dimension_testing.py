@@ -28,14 +28,10 @@ class TimeSeriesPredictor:
         self.epochs = epochs
         self.rnn_width = rnn_width
         self.dense_width = dense_width
-
         self.ticker = ticker
         self.chunks = chunks
         self.interval = interval
         self.age_days = age_days
-        self.feature_scaler = QuantileTransformer()
-        self.ohlcv_scaler = QuantileTransformer()
-        # Initialize scalers dictionary
         self.scalers = {
             'price': MinMaxScaler(feature_range=(0, 1)),
             'volume': QuantileTransformer(output_distribution='normal'),
@@ -87,7 +83,6 @@ class TimeSeriesPredictor:
     def _add_time_features(self, df):
         df['Hour'] = pd.to_datetime(df['Datetime']).dt.hour
         df['DayOfWeek'] = pd.to_datetime(df['Datetime']).dt.dayofweek
-        # Convert to sine and cosine for cyclical features
         df['Hour_sin'] = np.sin(2 * np.pi * df['Hour']/24)
         df['Hour_cos'] = np.cos(2 * np.pi * df['Hour']/24)
         df['DayOfWeek_sin'] = np.sin(2 * np.pi * df['DayOfWeek']/7)
@@ -96,47 +91,50 @@ class TimeSeriesPredictor:
 
     def _prepare_data(self, data, train_split=True):
         df = data.copy()
-        
-        # Remove existing indicator columns if they exist
         indicator_columns = ['MA50', 'MA20', 'MA10', 'RSI']
         df = df.drop(columns=indicator_columns, errors='ignore')
 
-        # Price and volume features
+        # Price-based features
         df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
         df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+        
+        # Volume features (highly skewed)
         df['Volume_Change'] = df['Volume'].pct_change()
         
-        # Technical indicators
+        # Momentum indicators
         df['RSI'] = self._compute_rsi(df['Close'], 14)
+        
+        # Volatility indicators
         upper_bb, middle_bb, lower_bb = self._compute_bollinger_bands(df['Close'], 20, 2)
         df['BB_Upper'] = upper_bb
         df['BB_Middle'] = middle_bb
         df['BB_Lower'] = lower_bb
         df['BB_Width'] = (upper_bb - lower_bb) / middle_bb
         
+        # Trend indicators
         macd, signal_line = self._compute_macd(df['Close'])
         df['MACD'] = macd
         df['MACD_Signal'] = signal_line
         df['MACD_Hist'] = macd - signal_line
         
-        # Moving averages and crosses
-        df['MA10'] = df['Close'].rolling(window=10).mean()
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA50'] = df['Close'].rolling(window=50).mean()
+        # Moving averages (normalized by current price)
+        df['MA10'] = df['Close'].rolling(window=10).mean() / df['Close']
+        df['MA20'] = df['Close'].rolling(window=20).mean() / df['Close']
+        df['MA50'] = df['Close'].rolling(window=50).mean() / df['Close']
         df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
         
-        # Volatility indicators
+        # Volatility features
         df['ATR'] = self._compute_atr(df['High'], df['Low'], df['Close'], 14)
-        df['Volatility'] = df['Close'].rolling(window=20).std()
+        df['Volatility'] = df['Close'].rolling(window=20).std() / df['Close']
         
-        # Price momentum and trend features
+        # Momentum features
         df['ROC'] = df['Close'].pct_change(periods=10) * 100
-        df['Price_Momentum'] = df['Close'] - df['Close'].rolling(window=10).mean()
+        df['Price_Momentum'] = (df['Close'] - df['Close'].rolling(window=10).mean()) / df['Close']
         
-        # Add time-based features
+        # Cyclical time features
         df = self._add_time_features(df)
         
-        # Previous period features
+        # Previous values
         for period in [1, 2, 3]:
             df[f'Prev{period}_Close'] = df['Close'].shift(period)
             df[f'Prev{period}_Volume'] = df['Volume'].shift(period)
@@ -144,115 +142,168 @@ class TimeSeriesPredictor:
         df.dropna(inplace=True)
         
         if train_split:
-            # Separate features for different scaling approaches
+            # Group features by their characteristics
             price_features = ['Open', 'High', 'Low', 'Close']
-            volume_features = ['Volume', 'Volume_Change'] + [f'Prev{i}_Volume' for i in [1, 2, 3]]
-            technical_features = [col for col in df.columns if col not in price_features + volume_features + ['Datetime']]
             
-            # Scale price features
-            price_scaler = MinMaxScaler(feature_range=(0, 1))
-            df[price_features] = price_scaler.fit_transform(df[price_features])
+            volume_features = ['Volume', 'Volume_Change'] + [f'Prev{period}_Volume' for period in [1, 2, 3]]
             
-            # Scale volume features using robust scaler due to outliers
-            volume_scaler = QuantileTransformer(output_distribution='normal')
-            # Handle infinite values before scaling
+            bounded_features = ['RSI']  # Features that are already bounded (e.g., 0-100)
+            
+            normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'Volatility', 
+                                 'Price_Momentum', 'BB_Width']  # Already normalized by price
+            
+            cyclical_features = ['Hour_sin', 'Hour_cos', 'DayOfWeek_sin', 'DayOfWeek_cos']  # Already bounded [-1, 1]
+            
+            # Remaining features need standardization
+            technical_features = [col for col in df.columns 
+                               if col not in (price_features + volume_features + bounded_features + 
+                                            normalized_features + cyclical_features + ['Datetime'])]
+            
+            # Scale absolute price values with MinMaxScaler
+            df[price_features] = self.scalers['price'].fit_transform(df[price_features])
+            
+            # Transform volume features to normal distribution to handle outliers
             df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
             df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
-            df[volume_features] = volume_scaler.fit_transform(df[volume_features])
+            df[volume_features] = self.scalers['volume'].fit_transform(df[volume_features])
             
-            # Scale technical features
-            tech_scaler = StandardScaler()
-            df[technical_features] = tech_scaler.fit_transform(df[technical_features])
-            
-            # Store scalers for later use
-            self.scalers = {
-                'price': price_scaler,
-                'volume': volume_scaler,
-                'technical': tech_scaler
-            }
+            # Standardize technical features that aren't already normalized
+            if technical_features:
+                df[technical_features] = self.scalers['technical'].fit_transform(df[technical_features])
             
             X = df.drop(['Datetime'], axis=1)
-            y = df[['Close']].shift(-1)  # Predict next period's close price
+            y = df[['Close']].shift(-1)
             self.output_dimensions = len(y.columns)
-            
-            X = X[:-1]  # Remove last row since we won't have target for it
-            y = y[:-1]  # Remove last row to match X
-            
+            X = X[:-1]
+            y = y[:-1]
             return X, y
-        
         return df
 
     def _train_model(self, X, y):
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
-
-        model = models.Sequential()
-        reduce_lr = callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=3, min_lr=1e-8)
-        early_stopping = callbacks.EarlyStopping(monitor='loss', min_delta=1e-4, mode='auto', patience=3, restore_best_weights=True)
+        print(f"Training shapes - X: {X.shape}, y: {y.shape}")
         inputs = layers.Input(shape=(X.shape[1], X.shape[2]))
-
-        rnn = layers.Bidirectional(layers.LSTM(units=self.rnn_width, return_sequences=True))(inputs)
-        rnn = layers.GRU(units=self.rnn_width, return_sequences=True)(rnn)
-        rnn = layers.GRU(units=self.rnn_width, return_sequences=True)(rnn)
-
-        attention = layers.MultiHeadAttention(num_heads=14, key_dim=32)(rnn, rnn)
-
-        dense = layers.Dense(self.dense_width)(attention)
-        dense = layers.LeakyReLU(alpha=0.3)(dense)
-        dense = layers.Dense(self.dense_width)(dense)
-        dense = layers.LeakyReLU(alpha=0.3)(dense)
-        dense = layers.Dense(self.dense_width)(dense)
-        dense = layers.LeakyReLU(alpha=0.3)(dense)
-        
-        outputs = layers.Dense(self.output_dimensions)(dense)
-
+        x = layers.LSTM(units=self.rnn_width, return_sequences=True, kernel_regularizer=tf.keras.regularizers.l2(1e-4))(inputs)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.LSTM(units=self.rnn_width//2, kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(self.dense_width, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(self.dense_width//2, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        outputs = layers.Dense(self.output_dimensions)(x)
         model = models.Model(inputs=inputs, outputs=outputs)
-        lossfn = losses.Huber(delta=5.0)
-        model.compile(optimizer=optimizers.Adam(learning_rate=1e-4), loss=lossfn, metrics=['mean_squared_error'])
-        model_data = model.fit(X, y, epochs=self.epochs, batch_size=64, callbacks=[early_stopping, reduce_lr])
-
+        model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss='mse', metrics=['mae'])
+        callbacks_list = [
+            callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
+            callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
+            callbacks.ModelCheckpoint('best_model.keras', monitor='val_loss', save_best_only=True)
+        ]
+        model_data = model.fit(X, y, epochs=self.epochs, batch_size=32, validation_split=0.2, callbacks=callbacks_list, verbose=1)
+        print("\nTraining Results:")
+        print(f"Final loss: {model_data.history['loss'][-1]:.6f}")
+        print(f"Final validation loss: {model_data.history['val_loss'][-1]:.6f}")
         return model, model_data
 
     def _predict(self, model, X):
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
         yhat = model.predict(X)
-        
-        # Create a dummy array with the same number of columns as price features
-        yhat_expanded = np.zeros((yhat.shape[0], 4))  # 4 columns for OHLC
-        yhat_expanded[:, 3] = yhat.squeeze()  # Put predictions in Close position
-        
-        # Use the price scaler for inverse transform
-        yhat = self.scalers['price'].inverse_transform(yhat_expanded)[:, 3]  # Get Close price back
+        yhat_expanded = np.zeros((yhat.shape[0], 4))
+        yhat_expanded[:, 3] = yhat.squeeze()
+        yhat = self.scalers['price'].inverse_transform(yhat_expanded)[:, 3]
+        print(f"Prediction shape: {yhat.shape}")
+        print(f"Prediction range: min={np.min(yhat):.2f}, max={np.max(yhat):.2f}")
+        print(f"Prediction std: {np.std(yhat):.2f}")
         return yhat
 
     def create_plot(self, data, yhat, model_data, show_graph=False, save_image=False):
-        data = self._prepare_data(data.copy(), train_split=False) #NA columns can get removed
-        data.reset_index(inplace=True)
-
-        loss_history = model_data.history['loss']
-
-        X_plot = data["Close"][:-1]
-        y_plot = yhat  # Only plot the Close values
-
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(X_plot, y_plot)}'))
-
-        fig.add_trace(go.Scatter(x=data['Datetime'], y=X_plot.squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data['Datetime'], y=y_plot, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
-
-        fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name='Loss', line=dict(color='orange')), row=2, col=1)
-
-        fig.update_layout(template='plotly_dark', title_text='Price Prediction and Model Loss')
-        fig.update_xaxes(tickmode='linear', tick0=0, dtick=1, row=2, col=1)
+        df = self._prepare_data(data.copy(), train_split=False)
+        actual_prices = df['Close'].values[:-1]
+        dates = df['Datetime'].values[:-1]
+        mse = mean_squared_error(actual_prices, yhat)
+        mape = np.mean(np.abs((actual_prices - yhat) / actual_prices)) * 100
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+            subplot_titles=('Price Prediction', f'Prediction Error (MSE: {mse:.2f}, MAPE: {mape:.2f}%)',
+                          f'Training Loss History (Final Loss: {model_data.history["loss"][-1]:.6f})'))
+        fig.add_trace(go.Scatter(x=dates, y=actual_prices, mode='lines', name='Actual Close', line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=dates, y=yhat, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
         
+        error = actual_prices - yhat
+        fig.add_trace(go.Scatter(x=dates, y=error, mode='lines', name='Prediction Error', line=dict(color='orange')), row=2, col=1)
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", row=2, col=1)
+        
+        fig.add_trace(go.Scatter(x=list(range(len(model_data.history['loss']))), y=model_data.history['loss'],
+                               mode='lines', name='Training Loss', line=dict(color='green')), row=3, col=1)
+        fig.update_layout(height=900, template='plotly_dark', showlegend=True, title_text='Cryptocurrency Price Prediction Analysis')
+        fig.update_yaxes(title_text="Price", row=1, col=1)
+        fig.update_yaxes(title_text="Error", row=2, col=1)
+        fig.update_yaxes(title_text="Loss", row=3, col=1)
         if show_graph:
             fig.show()
         if save_image:
-            fig.write_image(f"images/{self.ohlcv_scaler}")
+            fig.write_image(f"images/prediction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         return fig
+
+    def _visualize_volume_scaling(self, data):
+        df = data.copy()
+        volume = df['Volume'].values.reshape(-1, 1)
+        
+        # Different scaling approaches
+        qt = QuantileTransformer(output_distribution='normal')
+        ss = StandardScaler()
+        mm = MinMaxScaler()
+        
+        # Apply transformations
+        vol_qt = qt.fit_transform(volume)
+        vol_ss = ss.fit_transform(volume)
+        vol_mm = mm.fit_transform(volume)
+        
+        # Create visualization
+        fig = make_subplots(rows=2, cols=2, 
+                           subplot_titles=('Original Volume Distribution',
+                                         'QuantileTransformer (Normal)',
+                                         'StandardScaler',
+                                         'MinMaxScaler'))
+        
+        # Original distribution
+        fig.add_trace(go.Histogram(x=volume.flatten(), name='Original',
+                                 nbinsx=50), row=1, col=1)
+        
+        # QuantileTransformer
+        fig.add_trace(go.Histogram(x=vol_qt.flatten(), name='QuantileTransformer',
+                                 nbinsx=50), row=1, col=2)
+        
+        # StandardScaler
+        fig.add_trace(go.Histogram(x=vol_ss.flatten(), name='StandardScaler',
+                                 nbinsx=50), row=2, col=1)
+        
+        # MinMaxScaler
+        fig.add_trace(go.Histogram(x=vol_mm.flatten(), name='MinMaxScaler',
+                                 nbinsx=50), row=2, col=2)
+        
+        fig.update_layout(height=800, title_text='Volume Scaling Comparison')
+        fig.show()
+        
+        # Print statistics
+        print("\nScaling Statistics:")
+        print(f"Original - Mean: {np.mean(volume):.2f}, Std: {np.std(volume):.2f}, Skew: {pd.Series(volume.flatten()).skew():.2f}")
+        print(f"QuantileTransformer - Mean: {np.mean(vol_qt):.2f}, Std: {np.std(vol_qt):.2f}, Skew: {pd.Series(vol_qt.flatten()).skew():.2f}")
+        print(f"StandardScaler - Mean: {np.mean(vol_ss):.2f}, Std: {np.std(vol_ss):.2f}, Skew: {pd.Series(vol_ss.flatten()).skew():.2f}")
+        print(f"MinMaxScaler - Mean: {np.mean(vol_mm):.2f}, Std: {np.std(vol_mm):.2f}, Skew: {pd.Series(vol_mm.flatten()).skew():.2f}")
 
     def run(self, save=False):
         data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
+        
+        # Visualize volume scaling
+        self._visualize_volume_scaling(data)
+        
         X, y = self._prepare_data(data)
-        print(X)
+        print(f"Training data shape: X={X.shape}, y={y.shape}")
+        print(f"X range: min={np.min(X.values):.2f}, max={np.max(X.values):.2f}")
+        print(f"y range: min={np.min(y.values):.2f}, max={np.max(y.values):.2f}")
         model, model_data = self._train_model(X, y)
         yhat = self._predict(model, X)
         if save: 
@@ -263,31 +314,25 @@ class TimeSeriesPredictor:
 class ModelTesting(TimeSeriesPredictor):
     def __init__(self, ticker, chunks, interval, age_days):
         super().__init__(epochs=0, rnn_width=0, dense_width=0, ticker=ticker, chunks=chunks, interval=interval, age_days=age_days)
-        self.model = None #doesn't exist in TimeSeriesPredictor
+        self.model = None
 
     def load_model(self, model_name):
-        self.model = models.load_model(model_name) #models is a keras function
+        self.model = models.load_model(model_name)
         self.model.summary()
-        self.model_filename = model_name #store it to get interval
+        self.model_filename = model_name
 
     def create_test_plot(self, data, yhat, show_graph=False):
         fig = go.Figure()
-
         fig.add_trace(go.Scatter(x=yhat['Datetime'], y=data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue'), connectgaps=True))
         fig.add_trace(go.Scatter(x=yhat['Datetime'], y=yhat['Close'], mode='lines', name='Predicted Close', line=dict(color='red'), connectgaps=True))
-
         fig.update_layout(template='plotly_dark', title_text='Price Prediction')
-        
         if show_graph:
             fig.show()
-
         return fig
 
     def _extended_predict(self, model, data, interval, extension=10):
-        # PARSE INTO A TIMEDELTA
-        number = int(interval[:-1])  # Take all characters except the last one as the number
-        unit = interval[-1]  # Last character will be the unit (e.g., 'm', 'h')
-
+        number = int(interval[:-1])
+        unit = interval[-1]
         if unit == 'm':
             extended_time = timedelta(minutes=number)
         elif unit == 'h':
@@ -296,20 +341,19 @@ class ModelTesting(TimeSeriesPredictor):
             extended_time = timedelta(days=number)
         else:
             raise ValueError("Unsupported unit, please use 'm' for minutes or 'h' for hours.")
-          
         original_data = data.copy()
         predicted_data = data
-
         for i in range(extension):
-            # Use only the last row for prediction
             X, _ = self._prepare_data(predicted_data)
             yhat = self._predict(model, X)
-            
-            new_data = pd.DataFrame(yhat[-1].reshape(1, -1), columns=original_data.columns[1:6]) #only ohlcv
-            new_data['Datetime'] = predicted_data['Datetime'].iloc[-1] + extended_time
-            predicted_data = pd.concat([predicted_data, new_data], axis=0)
-            print(predicted_data)
-
+            new_row = pd.DataFrame(index=[0])
+            new_row['Datetime'] = predicted_data['Datetime'].iloc[-1] + extended_time
+            new_row['Close'] = yhat[-1]
+            new_row['Open'] = predicted_data['Open'].iloc[-1]
+            new_row['High'] = predicted_data['High'].iloc[-1]
+            new_row['Low'] = predicted_data['Low'].iloc[-1]
+            new_row['Volume'] = predicted_data['Volume'].iloc[-1]
+            predicted_data = pd.concat([predicted_data, new_row], axis=0)
         return original_data, predicted_data
 
     def run(self, extension=10):
@@ -318,11 +362,6 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
 
-test_client = TimeSeriesPredictor(epochs=10, rnn_width=256, dense_width=256, ticker='BTC-USD', chunks=5, interval='5m', age_days=1)
-data, yhat, model_data = test_client.run(save=False)
+test_client = TimeSeriesPredictor(epochs=50, rnn_width=128, dense_width=64, ticker='BTC-USD', chunks=10, interval='5m', age_days=2)
+data, yhat, model_data = test_client.run(save=True)
 test_client.create_plot(data, yhat, model_data, show_graph=True)
-
-# test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-# test_client.load_model(model_name="BTC-USD_5m_2212325.keras")
-# original_data, predicted_data = test_client.run(extension=100)
-# test_client.create_test_plot(original_data, predicted_data, show_graph=True)

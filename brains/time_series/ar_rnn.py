@@ -7,6 +7,7 @@ from keras import layers, models, optimizers, callbacks, losses
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -27,13 +28,15 @@ class TimeSeriesPredictor:
         self.epochs = epochs
         self.rnn_width = rnn_width
         self.dense_width = dense_width
-
         self.ticker = ticker
         self.chunks = chunks
         self.interval = interval
         self.age_days = age_days
-        self.feature_scaler = QuantileTransformer()
-        self.ohlcv_scaler = QuantileTransformer()
+        self.scalers = {
+            'price': MinMaxScaler(feature_range=(0, 1)),
+            'volume': QuantileTransformer(output_distribution='normal'),
+            'technical': StandardScaler()
+        }
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     def _fetch_data(self, ticker, chunks, interval, age_days):
@@ -59,103 +62,175 @@ class TimeSeriesPredictor:
 
     def _prepare_data(self, data, train_split=True):
         df = data.copy()
-
-        # Remove indicator columns if they exist
         df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
 
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Prev_High'] = df['High'].shift(1)
-        df['Prev_Low'] = df['Low'].shift(1)
-        df['Prev_Open'] = df['Open'].shift(1)
-        df['Prev_Volume'] = df['Volume'].shift(1)
-
-        df['MA10'] = df['Close'].rolling(window=10).mean()
-        df['MA20'] = df['Close'].rolling(window=20).mean()
-        df['MA50'] = df['Close'].rolling(window=50).mean()
+        # Price-based features
+        df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
+        df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+        
+        # Previous values
+        for period in [1, 2, 3]:
+            df[f'Prev{period}_Close'] = df['Close'].shift(period)
+            df[f'Prev{period}_Volume'] = df['Volume'].shift(period)
+        
+        # Moving averages (normalized by current price)
+        df['MA10'] = df['Close'].rolling(window=10).mean() / df['Close']
+        df['MA20'] = df['Close'].rolling(window=20).mean() / df['Close']
+        df['MA50'] = df['Close'].rolling(window=50).mean() / df['Close']
+        df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
+        
+        # RSI and other technical indicators
         df['RSI'] = self._compute_rsi(df['Close'], 14)
 
         df.dropna(inplace=True)
-
-        ohlcv_features = ['Open', 'High', 'Low', 'Close', 'Volume']
-        other_features = ['MA50', 'MA20', 'MA10', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']
-        
-        X_ohlcv = df[ohlcv_features]
-        X_other = df[other_features]
-        
-        X_ohlcv_scaled = pd.DataFrame(self.ohlcv_scaler.fit_transform(X_ohlcv), columns=X_ohlcv.columns)
-        X_other_scaled = pd.DataFrame(self.feature_scaler.fit_transform(X_other), columns=X_other.columns)
         
         if train_split:
-            X = pd.concat([X_ohlcv_scaled, X_other_scaled], axis=1)
-            y = X_ohlcv_scaled.shift(-1)  # Shift the target variable to predict the next time step
+            # Group features by their characteristics
+            price_features = ['Open', 'High', 'Low', 'Close']
+            volume_features = ['Volume'] + [f'Prev{period}_Volume' for period in [1, 2, 3]]
+            bounded_features = ['RSI']  # Features that are already bounded (e.g., 0-100)
+            normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross']
+            
+            # Remaining features need standardization
+            technical_features = [col for col in df.columns 
+                               if col not in (price_features + volume_features + bounded_features + 
+                                            normalized_features + ['Datetime'])]
+            
+            # Scale absolute price values with MinMaxScaler
+            df[price_features] = self.scalers['price'].fit_transform(df[price_features])
+            
+            # Transform volume features to normal distribution
+            df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
+            df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
+            df[volume_features] = self.scalers['volume'].fit_transform(df[volume_features])
+            
+            # Standardize technical features that aren't already normalized
+            if technical_features:
+                df[technical_features] = self.scalers['technical'].fit_transform(df[technical_features])
+            
+            X = df.drop(['Datetime'], axis=1)
+            y = df[['Open', 'High', 'Low', 'Close', 'Volume']].shift(-1)  # Predict next OHLCV
             
             X = X[:-1]
             y = y[:-1]
             return X, y
-        
         return df
 
     def _train_model(self, X, y):
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
-
-        model = models.Sequential()
-        reduce_lr = callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=3, min_lr=1e-8)
-        early_stopping = callbacks.EarlyStopping(monitor='loss', min_delta=1e-4, mode='auto', patience=3, restore_best_weights=True)
-        inputs = layers.Input(shape=(X.shape[1], X.shape[2]))
-
-        rnn = layers.Bidirectional(layers.LSTM(units=self.rnn_width, return_sequences=True))(inputs)
-        rnn = layers.GRU(units=self.rnn_width, return_sequences=True)(rnn)
-        rnn = layers.GRU(units=self.rnn_width, return_sequences=True)(rnn)
-
-        attention = layers.MultiHeadAttention(num_heads=14, key_dim=32)(rnn, rnn)
-
-        dense = layers.Dense(self.dense_width)(attention)
-        dense = layers.LeakyReLU(alpha=0.3)(dense)
-        dense = layers.Dense(self.dense_width)(dense)
-        dense = layers.LeakyReLU(alpha=0.3)(dense)
-        dense = layers.Dense(self.dense_width)(dense)
-        dense = layers.LeakyReLU(alpha=0.3)(dense)
+        print(f"Training shapes - X: {X.shape}, y: {y.shape}")
         
-        outputs = layers.Dense(5)(dense)  # Adjusted to output 5 features (OHLCV)
-
-        model = models.Model(inputs=inputs, outputs=outputs)
+        inputs = layers.Input(shape=(X.shape[1], X.shape[2]))
+        x = layers.LSTM(units=self.rnn_width, return_sequences=True, kernel_regularizer=tf.keras.regularizers.l2(1e-4))(inputs)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.LSTM(units=self.rnn_width//2, kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(self.dense_width, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(1e-4))(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(self.dense_width//2, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        outputs = layers.Dense(5)(x)  # Output OHLCV (5 features)
+        
         lossfn = losses.Huber(delta=5.0)
-        model.compile(optimizer=optimizers.Adam(learning_rate=1e-4), loss=lossfn, metrics=['mean_squared_error'])
-        model_data = model.fit(X, y, epochs=self.epochs, batch_size=64, callbacks=[early_stopping, reduce_lr])
-
+        model = models.Model(inputs=inputs, outputs=outputs)
+        model.compile(optimizer=optimizers.Adam(learning_rate=1e-3), loss=lossfn, metrics=['mae'])
+        
+        callbacks_list = [
+            callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
+            callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6),
+            callbacks.ModelCheckpoint('best_model.keras', monitor='val_loss', save_best_only=True)
+        ]
+        
+        model_data = model.fit(X, y, 
+                             epochs=self.epochs,
+                             batch_size=32,
+                             validation_split=0.2,
+                             callbacks=callbacks_list,
+                             verbose=1)
+        
+        print("\nTraining Results:")
+        print(f"Final loss: {model_data.history['loss'][-1]:.6f}")
+        print(f"Final validation loss: {model_data.history['val_loss'][-1]:.6f}")
+        
         return model, model_data
 
     def _predict(self, model, X):
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
         yhat = model.predict(X)
+        yhat = yhat.squeeze()
         
-        # Inverse transform predictions
-        yhat = self.ohlcv_scaler.inverse_transform(yhat.squeeze())
-        return yhat
+        # Split predictions into price and volume
+        price_predictions = yhat[:, :4]  # OHLC
+        volume_predictions = yhat[:, 4].reshape(-1, 1)
+        volume_predictions_extended = np.zeros((volume_predictions.shape[0], 4))
+        volume_predictions_extended[:, 0] = volume_predictions.squeeze()
+
+        # Inverse transform price and volume separately
+        price_pred = self.scalers['price'].inverse_transform(price_predictions)
+        volume_pred = self.scalers['volume'].inverse_transform(volume_predictions_extended)
+        
+        # Combine predictions
+        final_pred = np.column_stack((price_pred, volume_pred))
+        
+        print(f"Prediction shape: {final_pred.shape}")
+        print(f"Price prediction range: min={np.min(final_pred[:, :4]):.2f}, max={np.max(final_pred[:, :4]):.2f}")
+        print(f"Volume prediction range: min={np.min(final_pred[:, 4]):.2f}, max={np.max(final_pred[:, 4]):.2f}")
+        return final_pred
 
     def create_plot(self, data, yhat, model_data, show_graph=False, save_image=False):
-        data = self._prepare_data(data.copy(), train_split=False) #NA columns can get removed
-        data.reset_index(inplace=True)
+        df = self._prepare_data(data.copy(), train_split=False)
+        actual_prices = df['Close'].values[:-1]
+        dates = df['Datetime'].values[:-1]
+        
+        # Calculate metrics
+        mse = mean_squared_error(actual_prices, yhat[:, 3])  # Compare with Close prices
+        mape = np.mean(np.abs((actual_prices - yhat[:, 3]) / actual_prices)) * 100
+        
+        fig = make_subplots(rows=3, cols=1, 
+                          shared_xaxes=True, 
+                          vertical_spacing=0.05,
+                          subplot_titles=('Price Prediction', 
+                                        f'Prediction Error (MSE: {mse:.2f}, MAPE: {mape:.2f}%)',
+                                        f'Training Loss History (Final Loss: {model_data.history["loss"][-1]:.6f})'))
 
-        loss_history = model_data.history['loss']
+        # Price prediction plot
+        fig.add_trace(go.Scatter(x=dates, y=actual_prices, 
+                               mode='lines', name='Actual Close', 
+                               line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=dates, y=yhat[:, 3], 
+                               mode='lines', name='Predicted Close', 
+                               line=dict(color='red')), row=1, col=1)
 
-        X_plot = data["Close"][:-1]
-        y_plot = yhat[:, 3]
+        # Error plot
+        error = actual_prices - yhat[:, 3]
+        fig.add_trace(go.Scatter(x=dates, y=error, 
+                               mode='lines', name='Prediction Error', 
+                               line=dict(color='orange')), row=2, col=1)
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", row=2, col=1)
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1, subplot_titles=('Price Prediction', f'Loss: {loss_history[-1]} | MSE: {mean_squared_error(X_plot, y_plot)}'))
+        # Loss history plot
+        fig.add_trace(go.Scatter(x=list(range(len(model_data.history['loss']))), 
+                               y=model_data.history['loss'],
+                               mode='lines', name='Training Loss', 
+                               line=dict(color='green')), row=3, col=1)
 
-        fig.add_trace(go.Scatter(x=data['Datetime'], y=X_plot.squeeze(), mode='lines', name='True Close', line=dict(color='blue')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data['Datetime'], y=y_plot, mode='lines', name='Predicted Close', line=dict(color='red')), row=1, col=1)
-
-        fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name='Loss', line=dict(color='orange')), row=2, col=1)
-
-        fig.update_layout(template='plotly_dark', title_text='Price Prediction and Model Loss')
-        fig.update_xaxes(tickmode='linear', tick0=0, dtick=1, row=2, col=1)
+        # Update layout
+        fig.update_layout(
+                         template='plotly_dark', 
+                         showlegend=True, 
+                         title_text='Cryptocurrency Price Prediction Analysis'
+                         )
+        fig.update_yaxes(title_text="Price", row=1, col=1)
+        fig.update_yaxes(title_text="Error", row=2, col=1)
+        fig.update_yaxes(title_text="Loss", row=3, col=1)
         
         if show_graph:
             fig.show()
         if save_image:
-            fig.write_image(f"images/{self.ohlcv_scaler}")
+            fig.write_image(f"images/{self.ticker}_{self.interval}_{model_data.model.count_params()}.png")
         return fig
 
     def run(self, save=False):
@@ -227,11 +302,12 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
 
-test_client = TimeSeriesPredictor(epochs=3, rnn_width=1, dense_width=1, ticker='BTC-USD', chunks=5, interval='5m', age_days=1)
-data, yhat, model_data = test_client.run(save=False)
+test_client = TimeSeriesPredictor(epochs=5, rnn_width=256, dense_width=128, ticker='BTC-USD', chunks=5, interval='5m', age_days=1)
+data, yhat, model_data = test_client.run(save=True)
 test_client.create_plot(data, yhat, model_data, show_graph=True)
 
+# Extended prediction testing
 # test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-# test_client.load_model(model_name="BTC-USD_5m_2212325.keras")
+# test_client.load_model(model_name="best_model.keras")
 # original_data, predicted_data = test_client.run(extension=100)
 # test_client.create_test_plot(original_data, predicted_data, show_graph=True)
