@@ -180,7 +180,7 @@ class ModelTesting(TimeSeriesPredictor):
         self.model_filename = model_name #store it to get interval
 
     def create_test_plot(self, data, yhat, show_graph=False):
-        fig = go.Figure()
+        fig = go.Figure() 
 
         fig.add_trace(go.Scatter(x=yhat['Datetime'], y=data['Close'].squeeze(), mode='lines', name='True Close', line=dict(color='blue'), connectgaps=True))
         fig.add_trace(go.Scatter(x=yhat['Datetime'], y=yhat['Close'], mode='lines', name='Predicted Close', line=dict(color='red'), connectgaps=True))

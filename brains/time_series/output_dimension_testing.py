@@ -7,6 +7,7 @@ from keras import layers, models, optimizers, callbacks, losses
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -34,6 +35,12 @@ class TimeSeriesPredictor:
         self.age_days = age_days
         self.feature_scaler = QuantileTransformer()
         self.ohlcv_scaler = QuantileTransformer()
+        # Initialize scalers dictionary
+        self.scalers = {
+            'price': MinMaxScaler(feature_range=(0, 1)),
+            'volume': QuantileTransformer(output_distribution='normal'),
+            'technical': StandardScaler()
+        }
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     def _fetch_data(self, ticker, chunks, interval, age_days):
@@ -51,47 +58,126 @@ class TimeSeriesPredictor:
 
     def _compute_rsi(self, series, period=14):
         delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        gain = (delta.where(delta > 0, 0)).ewm(span=period, min_periods=period).mean()
+        loss = (-delta.where(delta < 0, 0)).ewm(span=period, min_periods=period).mean()
         rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        return rsi
+        return 100 - (100 / (1 + rs))
+
+    def _compute_bollinger_bands(self, series, period=20, std=2):
+        middle_band = series.rolling(window=period).mean()
+        std_dev = series.rolling(window=period).std()
+        upper_band = middle_band + (std_dev * std)
+        lower_band = middle_band - (std_dev * std)
+        return upper_band, middle_band, lower_band
+
+    def _compute_macd(self, series, fast=12, slow=26, signal=9):
+        exp1 = series.ewm(span=fast, adjust=False).mean()
+        exp2 = series.ewm(span=slow, adjust=False).mean()
+        macd = exp1 - exp2
+        signal_line = macd.ewm(span=signal, adjust=False).mean()
+        return macd, signal_line
+
+    def _compute_atr(self, high, low, close, period=14):
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        return tr.rolling(window=period).mean()
+
+    def _add_time_features(self, df):
+        df['Hour'] = pd.to_datetime(df['Datetime']).dt.hour
+        df['DayOfWeek'] = pd.to_datetime(df['Datetime']).dt.dayofweek
+        # Convert to sine and cosine for cyclical features
+        df['Hour_sin'] = np.sin(2 * np.pi * df['Hour']/24)
+        df['Hour_cos'] = np.cos(2 * np.pi * df['Hour']/24)
+        df['DayOfWeek_sin'] = np.sin(2 * np.pi * df['DayOfWeek']/7)
+        df['DayOfWeek_cos'] = np.cos(2 * np.pi * df['DayOfWeek']/7)
+        return df.drop(['Hour', 'DayOfWeek'], axis=1)
 
     def _prepare_data(self, data, train_split=True):
         df = data.copy()
+        
+        # Remove existing indicator columns if they exist
+        indicator_columns = ['MA50', 'MA20', 'MA10', 'RSI']
+        df = df.drop(columns=indicator_columns, errors='ignore')
 
-        # Remove indicator columns if they exist
-        df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
-
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Prev_High'] = df['High'].shift(1)
-        df['Prev_Low'] = df['Low'].shift(1)
-        df['Prev_Open'] = df['Open'].shift(1)
-        df['Prev_Volume'] = df['Volume'].shift(1)
-
+        # Price and volume features
+        df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
+        df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+        df['Volume_Change'] = df['Volume'].pct_change()
+        
+        # Technical indicators
+        df['RSI'] = self._compute_rsi(df['Close'], 14)
+        upper_bb, middle_bb, lower_bb = self._compute_bollinger_bands(df['Close'], 20, 2)
+        df['BB_Upper'] = upper_bb
+        df['BB_Middle'] = middle_bb
+        df['BB_Lower'] = lower_bb
+        df['BB_Width'] = (upper_bb - lower_bb) / middle_bb
+        
+        macd, signal_line = self._compute_macd(df['Close'])
+        df['MACD'] = macd
+        df['MACD_Signal'] = signal_line
+        df['MACD_Hist'] = macd - signal_line
+        
+        # Moving averages and crosses
         df['MA10'] = df['Close'].rolling(window=10).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['RSI'] = self._compute_rsi(df['Close'], 14)
-
+        df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
+        
+        # Volatility indicators
+        df['ATR'] = self._compute_atr(df['High'], df['Low'], df['Close'], 14)
+        df['Volatility'] = df['Close'].rolling(window=20).std()
+        
+        # Price momentum and trend features
+        df['ROC'] = df['Close'].pct_change(periods=10) * 100
+        df['Price_Momentum'] = df['Close'] - df['Close'].rolling(window=10).mean()
+        
+        # Add time-based features
+        df = self._add_time_features(df)
+        
+        # Previous period features
+        for period in [1, 2, 3]:
+            df[f'Prev{period}_Close'] = df['Close'].shift(period)
+            df[f'Prev{period}_Volume'] = df['Volume'].shift(period)
+        
         df.dropna(inplace=True)
-
-        ohlcv_features = ['Open', 'High', 'Low', 'Close', 'Volume']
-        other_features = ['MA50', 'MA20', 'MA10', 'RSI', 'Prev_Close', 'Prev_High', 'Prev_Low', 'Prev_Open', 'Prev_Volume']
-        
-        X_ohlcv = df[ohlcv_features]
-        X_other = df[other_features]
-        
-        X_ohlcv_scaled = pd.DataFrame(self.ohlcv_scaler.fit_transform(X_ohlcv), columns=X_ohlcv.columns)
-        X_other_scaled = pd.DataFrame(self.feature_scaler.fit_transform(X_other), columns=X_other.columns)
         
         if train_split:
-            X = pd.concat([X_ohlcv_scaled, X_other_scaled], axis=1)
-            y = X_ohlcv_scaled[['Open']].shift(-1)  # Shift the target variable to predict the next time step
+            # Separate features for different scaling approaches
+            price_features = ['Open', 'High', 'Low', 'Close']
+            volume_features = ['Volume', 'Volume_Change'] + [f'Prev{i}_Volume' for i in [1, 2, 3]]
+            technical_features = [col for col in df.columns if col not in price_features + volume_features + ['Datetime']]
+            
+            # Scale price features
+            price_scaler = MinMaxScaler(feature_range=(0, 1))
+            df[price_features] = price_scaler.fit_transform(df[price_features])
+            
+            # Scale volume features using robust scaler due to outliers
+            volume_scaler = QuantileTransformer(output_distribution='normal')
+            # Handle infinite values before scaling
+            df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
+            df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
+            df[volume_features] = volume_scaler.fit_transform(df[volume_features])
+            
+            # Scale technical features
+            tech_scaler = StandardScaler()
+            df[technical_features] = tech_scaler.fit_transform(df[technical_features])
+            
+            # Store scalers for later use
+            self.scalers = {
+                'price': price_scaler,
+                'volume': volume_scaler,
+                'technical': tech_scaler
+            }
+            
+            X = df.drop(['Datetime'], axis=1)
+            y = df[['Close']].shift(-1)  # Predict next period's close price
             self.output_dimensions = len(y.columns)
             
-            X = X[:-1]
-            y = y[:-1]
+            X = X[:-1]  # Remove last row since we won't have target for it
+            y = y[:-1]  # Remove last row to match X
+            
             return X, y
         
         return df
@@ -130,10 +216,12 @@ class TimeSeriesPredictor:
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
         yhat = model.predict(X)
         
-        yhat_expanded = np.zeros((yhat.shape[0], 5))
-        yhat_expanded[:, 3] = yhat.squeeze()
-        yhat = self.ohlcv_scaler.inverse_transform(yhat_expanded)[:, 1]
-        print(yhat)
+        # Create a dummy array with the same number of columns as price features
+        yhat_expanded = np.zeros((yhat.shape[0], 4))  # 4 columns for OHLC
+        yhat_expanded[:, 3] = yhat.squeeze()  # Put predictions in Close position
+        
+        # Use the price scaler for inverse transform
+        yhat = self.scalers['price'].inverse_transform(yhat_expanded)[:, 3]  # Get Close price back
         return yhat
 
     def create_plot(self, data, yhat, model_data, show_graph=False, save_image=False):
@@ -230,7 +318,7 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
 
-test_client = TimeSeriesPredictor(epochs=1, rnn_width=256, dense_width=256, ticker='BTC-USD', chunks=5, interval='5m', age_days=1)
+test_client = TimeSeriesPredictor(epochs=10, rnn_width=256, dense_width=256, ticker='BTC-USD', chunks=5, interval='5m', age_days=1)
 data, yhat, model_data = test_client.run(save=False)
 test_client.create_plot(data, yhat, model_data, show_graph=True)
 
