@@ -120,34 +120,29 @@ class TimeSeriesPredictor:
         X = X.values.reshape((X.shape[0], 1, X.shape[1]))
         print(f"Training shapes - X: {X.shape}, y: {y.shape}")
         
-        # Hyperparameters for regularization
-        lstm_dropout = 0.05  # Reduced LSTM dropout
-        dense_dropout = 0.05  # Reduced dense layer dropout
-        l2_reg = 1e-5  # L2 regularization factor
-        
+        l2_reg = 1e-3  # L2 regularization factor
+        self.dense_count = 5
+
         inputs = layers.Input(shape=(X.shape[1], X.shape[2]))
         
-        # First LSTM layer
-        x = layers.LSTM(units=self.rnn_width, return_sequences=True, 
-                       kernel_regularizer=regularizers.l2(l2_reg))(inputs)
-        # x = layers.BatchNormalization()(x)
-        # x = layers.Dropout(lstm_dropout)(x)
+        x = layers.MaxPooling1D(pool_size=2, padding='same')(inputs)
         
-        # Second LSTM layer
-        x = layers.LSTM(units=self.rnn_width, 
-                       kernel_regularizer=regularizers.l2(l2_reg))(x)
-        # x = layers.BatchNormalization()(x)
-        # x = layers.Dropout(lstm_dropout)(x)
+        x = layers.Bidirectional(layers.GRU(units=self.rnn_width, return_sequences=True, 
+                       kernel_regularizer=regularizers.l2(l2_reg)))(x)
+        
+        x = layers.Bidirectional(layers.GRU(units=self.rnn_width, return_sequences=True,
+                       kernel_regularizer=regularizers.l2(l2_reg)))(x)
+        
+        # Third GRU layer (final RNN layer)
+        x = layers.Bidirectional(layers.GRU(units=self.rnn_width,
+                       kernel_regularizer=regularizers.l2(l2_reg)))(x)
         
         # Dense layers
-        x = layers.Dense(self.dense_width, activation='relu')(x)
-        # x = layers.BatchNormalization()(x)
-        # x = layers.Dropout(dense_dropout)(x)
+        for _ in range(self.dense_count):
+            x = layers.Dense(self.dense_width)(x)
+            x = layers.LeakyReLU()(x)
         
-        x = layers.Dense(self.dense_width, activation='relu')(x)
-        # x = layers.BatchNormalization()(x)
-        
-        outputs = layers.Dense(5)(x)  # Output OHLCV (5 features)
+        outputs = layers.Dense(5)(x) #5feature output
         
         lossfn = losses.Huber(delta=5.0)
         model = models.Model(inputs=inputs, outputs=outputs)
@@ -186,15 +181,15 @@ class TimeSeriesPredictor:
         yhat = yhat.squeeze()
         
         # Split predictions into price and volume
-        price_predictions = yhat[:, :4]  # OHLC
-        volume_predictions = yhat[:, 4].reshape(-1, 1)
+        price_predictions = yhat[:, :4]  # take columns from index 0 up to (but not including) index 4
+        volume_predictions = yhat[:, 4].reshape(-1, 1)  # Volume
         volume_predictions_extended = np.zeros((volume_predictions.shape[0], 4))
         volume_predictions_extended[:, 0] = volume_predictions.squeeze()
 
         # Inverse transform price and volume separately
         price_pred = self.scalers['price'].inverse_transform(price_predictions)
-        volume_pred = self.scalers['volume'].inverse_transform(volume_predictions_extended)
-        
+        volume_pred = self.scalers['volume'].inverse_transform(volume_predictions_extended)[:, 0]
+
         # Combine predictions
         final_pred = np.column_stack((price_pred, volume_pred))
         
@@ -211,6 +206,25 @@ class TimeSeriesPredictor:
         # Calculate metrics
         mse = mean_squared_error(actual_prices, yhat[:, 3])  # Compare with Close prices
         mape = np.mean(np.abs((actual_prices - yhat[:, 3]) / actual_prices)) * 100
+        
+        # Get layer information from model
+        layer_info = []
+        for layer in model_data.model.layers:
+            layer_name = layer.__class__.__name__
+            if layer_name == 'Dense':
+                layer_info.append(f"{layer_name}({layer.units})")
+            else:
+                layer_info.append(layer_name)
+        
+        # Create architecture text
+        architecture_text = (
+            "Model Architecture:<br>" +
+            " → ".join(layer_info) + "<br><br>" +
+            f"Parameters:<br>"
+            f"RNN Width: {self.rnn_width}<br>"
+            f"Dense Width: {self.dense_width}<br>"
+            f"Total Params: {model_data.model.count_params():,}"
+        )
         
         fig = make_subplots(rows=3, cols=1, 
                           shared_xaxes=True, 
@@ -239,6 +253,22 @@ class TimeSeriesPredictor:
                                y=model_data.history['loss'],
                                mode='lines', name='Training Loss', 
                                line=dict(color='green')), row=3, col=1)
+
+        # Add architecture text box in the loss plot
+        fig.add_annotation(
+            x=len(model_data.history['loss'])/2, #align better with loss plot
+            y=0.98,
+            xref='paper',
+            yref='paper',
+            text=architecture_text,
+            showarrow=False,
+            font=dict(size=10),
+            bgcolor='rgba(0,0,0,0.8)',
+            bordercolor='white',
+            borderwidth=1,
+            align='left',
+            row=3, col=1
+        )
 
         # Update layout
         fig.update_layout(
@@ -325,7 +355,7 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
 
-test_client = TimeSeriesPredictor(epochs=5, rnn_width=1024, dense_width=512, ticker='BTC-USD', chunks=7, interval='5m', age_days=1)
+test_client = TimeSeriesPredictor(epochs=5, rnn_width=256, dense_width=128, ticker='BTC-USD', chunks=7, interval='5m', age_days=1)
 data, yhat, model_data = test_client.run(save=False)
 test_client.create_plot(data, yhat, model_data, show_graph=True)
 
