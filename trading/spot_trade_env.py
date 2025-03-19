@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 from rich import print
-
+from tqdm import tqdm
 import plotly.graph_objects as go
 
 @dataclass
@@ -33,12 +33,14 @@ class Portfolio:
         self.cash = initial_capital
         self.positions: Dict[str, Position] = {}
         self.trade_history: List[float] = []
+        self.pnl_history: List[float] = []
         self.pct_pnl_history: List[float] = []
 
-    def buy(self, symbol: str, quantity: float, price: float, timestamp: datetime) -> bool:
-        cost = quantity * price
+    def buy(self, symbol: str, quantity: float, price: float, timestamp: datetime, verbose: bool = False) -> bool:
+        cost = round(quantity * price, 4) #roundoff buy errors
         if cost > self.cash:
-            print(f"[red]Insufficient funds for buy order. Required: ${cost:.2f}, Available: ${self.cash:.2f}[/red]")
+            if verbose:
+                print(f"[red]Insufficient funds for buy order. Required: ${cost}, Available: ${self.cash}[/red]")
             return False
             
         if symbol in self.positions:
@@ -69,20 +71,23 @@ class Portfolio:
             'cash_remaining': self.cash,
             'timestamp': timestamp
         })
-        print(f"[green]Bought {quantity} shares of {symbol} at {price:.2f} for {cost:.2f}[/green]")
+        if verbose:
+            print(f"[green]Bought {quantity} shares of {symbol} at {price:.2f} for {cost:.2f}[/green]")
         return True
     
-    def sell(self, symbol: str, quantity: float, price: float, timestamp: datetime) -> bool:
+    def sell(self, symbol: str, quantity: float, price: float, timestamp: datetime, verbose: bool = False) -> bool:
         if symbol not in self.positions:
-            print(f"[red]No position found for {symbol}[/red]")
+            if verbose:
+                print(f"[red]No position found for {symbol}[/red]")
             return False
             
         pos = self.positions[symbol]
         if quantity > pos.quantity:
-            print(f"[red]Insufficient shares for sell order. Required: {quantity}, Available: {pos.quantity}[/red]")
+            if verbose:
+                print(f"[red]Insufficient shares for sell order. Required: {quantity}, Available: {pos.quantity}[/red]")
             return False
             
-        proceeds = quantity * price
+        proceeds = round(quantity * price, 4)
         self.cash += proceeds
         
         if quantity == pos.quantity:
@@ -104,7 +109,8 @@ class Portfolio:
             'cash_remaining': self.cash,
             'timestamp': timestamp
         })
-        print(f"[red]Sold {quantity} shares of {symbol} at {price:.2f} for {proceeds:.2f}[/red]")
+        if verbose:
+            print(f"[red]Sold {quantity} shares of {symbol} at {price:.2f} for {proceeds:.2f}[/red]")
         return True
     
     def update_positions(self, current_prices: Dict[str, pd.Series]):
@@ -143,19 +149,19 @@ class Portfolio:
             summary += f"(Current: ${pos.current_price:.2f}, P/L: ${pos.profit_loss:.2f} [{pos.profit_loss_pct:.2f}%])\n"
         return summary
 
-    def buy_max(self, symbol: str, price: float, timestamp: datetime) -> bool:
+    def buy_max(self, symbol: str, price: float, timestamp: datetime, verbose: bool = False) -> bool:
         if self.cash <= 0:
             return False
         
         quantity = self.cash / price
-        return self.buy(symbol, quantity, price, timestamp)
+        return self.buy(symbol, quantity, price, timestamp, verbose)
 
-    def sell_max(self, symbol: str, price: float, timestamp: datetime) -> bool:
+    def sell_max(self, symbol: str, price: float, timestamp: datetime, verbose: bool = False) -> bool:
         if symbol not in self.positions:
             return False
         
         quantity = self.positions[symbol].quantity
-        return self.sell(symbol, quantity, price, timestamp)
+        return self.sell(symbol, quantity, price, timestamp, verbose)
 
 class TradingEnvironment:
     def __init__(self, symbols: List[str], initial_capital: float = 10000.0, chunks: int = 5, interval: str = '5m', age_days: int = 10):
@@ -173,8 +179,9 @@ class TradingEnvironment:
         for symbol in self.symbols:
             data = pd.DataFrame()
             for x in range(self.chunks):
-                start_date = (datetime.now() - timedelta(days=8) - timedelta(days=8*x) - timedelta(days=self.age_days)).strftime('%Y-%m-%d')
-                end_date = (datetime.now() - timedelta(days=8*x) - timedelta(days=self.age_days)).strftime('%Y-%m-%d')
+                chunksize = 1
+                start_date = (datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=self.age_days)).strftime('%Y-%m-%d')
+                end_date = (datetime.now() - timedelta(days=chunksize*x) - timedelta(days=self.age_days)).strftime('%Y-%m-%d')
                 temp_data = yf.download(symbol, start=start_date, end=end_date, interval=self.interval)
                 data = pd.concat([data, temp_data])
             
@@ -224,23 +231,22 @@ class TradingEnvironment:
             
         self.current_index += 1
         
-        # Update context for each symbol
         for symbol in self.symbols:
             current_data = self.data[symbol].iloc[self.current_index]
             self.context[symbol] = pd.concat([
-                self.context[symbol].iloc[1:],  # Remove oldest row
-                pd.DataFrame([current_data])    # Add new row
+                self.context[symbol],
+                pd.DataFrame([current_data])
             ]).reset_index(drop=True)
         
         current_prices = self.get_current_prices()
         self.portfolio.update_positions(current_prices)
+        self.portfolio.pnl_history.append(self.portfolio.total_profit_loss)
         self.portfolio.pct_pnl_history.append(self.portfolio.total_profit_loss_pct)
         return True
     
     def reset(self):
         self.current_index = 0
         self.portfolio = Portfolio(self.portfolio.initial_capital)
-        # Reset context for each symbol
         for symbol in self.symbols:
             self.context[symbol] = self.data[symbol].iloc[:self.context_length].copy()
     
@@ -255,9 +261,20 @@ class TradingEnvironment:
             'trade_history': self.portfolio.trade_history
         }
 
+    def get_summary(self) -> str:
+        max_drawdown = max(self.portfolio.pct_pnl_history) - min(self.portfolio.pct_pnl_history)
+        gains = list(filter(lambda x: x > 0, self.portfolio.pnl_history))
+        losses = list(filter(lambda x: x < 0, self.portfolio.pnl_history))
+        profit_factor = sum(gains) / abs(sum(losses))
+        RR_ratio = (sum(gains) / len(gains)) / abs(sum(losses) / len(losses))
+
+        win_rate = len(gains) / (len(gains) + len(losses))
+        optimal_wr = 1 / (RR_ratio + 1)
+        return f"{self.symbols[0]} {self.interval} | PnL: {self.portfolio.total_profit_loss_pct:.2f}% | Max DD: {max_drawdown:.2f}% | PF: {profit_factor:.2f} | RR Ratio:{RR_ratio:.2f} | WR: {win_rate:.2f} | Optimal WR: {optimal_wr:.2f}"
+
     def create_performance_plot(self, show_graph: bool = False):
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=self.data[self.symbols[0]]['Datetime'], y=self.portfolio.pct_pnl_history, mode='lines', name='Strategy PnL'))
+        fig.add_trace(go.Scatter(x=self.data[self.symbols[0]]['Datetime'], y=self.portfolio.pct_pnl_history, mode='lines', name='Strategy %'))
         
         #price line %
         start_price = self.data[self.symbols[0]].iloc[0]['Close']
@@ -284,8 +301,8 @@ class TradingEnvironment:
                                marker=dict(color='green', size=5, symbol='circle')))
         fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode='markers', name='Sell', 
                                marker=dict(color='red', size=5, symbol='circle')))
-        
-        fig.update_layout(title='Portfolio Performance', xaxis_title='Time', yaxis_title='Profit/Loss (%)')
+
+        fig.update_layout(title=f"Portfolio Performance | {self.get_summary()}", xaxis_title='Time', yaxis_title='Profit/Loss (%)')
         if show_graph:
             fig.show()
         return fig
@@ -293,12 +310,13 @@ class TradingEnvironment:
 def MA_Crossover_Strategy(env: TradingEnvironment, context, prices):
     ma10 = context['Close'].rolling(window=10).mean().iloc[-1]
     ma20 = context['Close'].rolling(window=20).mean().iloc[-1]
+    ma50 = context['Close'].rolling(window=50).mean().iloc[-1]
     current_close = prices['Close']
     
-    if ma10 > ma20:
-        env.portfolio.buy_max('BTC-USD', current_close)
-    else:
-        env.portfolio.sell_max('BTC-USD', current_close)
+    if ma10 > ma20 and ma20 > ma50:
+        env.portfolio.buy_max('BTC-USD', current_close, env.get_current_timestamp(), verbose=False)
+    elif ma10 < ma20 and ma20 < ma50:
+        env.portfolio.sell_max('BTC-USD', current_close, env.get_current_timestamp(), verbose=False)
 
 def RSI_Strategy(env: TradingEnvironment, context, prices):
     current_close = prices['Close']
@@ -322,18 +340,6 @@ def RSI_Strategy(env: TradingEnvironment, context, prices):
 
 def Custom_Strategy(env: TradingEnvironment, context, prices):
     current_close = prices['Close']
-    
-    delta_p = context['Close'].diff()
-    gain = delta_p.where(delta_p > 0, 0)
-    loss = -delta_p.where(delta_p < 0, 0)
-
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
-
-    rs = avg_gain / avg_loss
-    rsi = 100 - 100 / (1 + rs)
-
-    current_rsi = rsi.iloc[-1]
 
     if (current_close > context['Close'].iloc[-2]) and (current_close > context['Close'].iloc[-3]):
         env.portfolio.buy_max('BTC-USD', current_close, env.get_current_timestamp())
@@ -341,27 +347,31 @@ def Custom_Strategy(env: TradingEnvironment, context, prices):
         env.portfolio.sell_max('BTC-USD', current_close, env.get_current_timestamp())
 
 def RNN_Strategy(env: TradingEnvironment, context, prices):
-    from close_only import ModelTesting
+    from time_series.close_predictor.close_only import ModelTesting
     model = ModelTesting(ticker=None, chunks=None, interval=None, age_days=None)
     model.load_model('BTC-USD_5m_11476066.keras')
 
 if __name__ == "__main__":
-
     env = TradingEnvironment(
         symbols=['BTC-USD'],
         initial_capital=100000.0,
-        chunks=365,
-        interval='1d',
-        age_days=1
+        chunks=29,
+        interval='1m',
+        age_days=0
     )
+    env.fetch_data()
 
-    env.fetch_1d_data(days=1000) #init 1d data
-
+    print("Starting Backtest")
+    progress_bar = tqdm(total=len(env.data[env.symbols[0]]))
     while env.step():
         current_state = env.get_state()
         context = current_state['context'][env.symbols[0]] #context includes current price
         prices = current_state['prices'][env.symbols[0]] #current priceA
 
-        Custom_Strategy(env, context, prices)
-        
+        MA_Crossover_Strategy(env, context, prices)
+        progress_bar.update(1)
+    progress_bar.close()
+
+    print(env.get_summary())
+
     env.create_performance_plot(show_graph=True)

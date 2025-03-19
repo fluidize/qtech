@@ -1,21 +1,22 @@
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.data.historical import CryptoHistoricalDataClient
-from alpaca.data.requests import CryptoBarsRequest
-from alpaca.data.timeframe import TimeFrame
-from alpaca.data.live.crypto import CryptoDataStream
 
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import numpy as np
+from alpaca.data.historical import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
+from alpaca.data.timeframe import TimeFrame
+
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+from alpaca.data.live.crypto import CryptoDataStream
+
 import time
 import os
 import traceback
-import json
-from typing import Dict, List, Optional, Tuple, Union
 
 class bcolors:
     HEADER = '\033[95m'
@@ -26,275 +27,282 @@ class bcolors:
     ENDC = '\033[0m'
     DEFAULT = '\033[39m'
 
-def countdown(seconds: int) -> None:
-    interval = 0.1
-    total_steps = round(seconds / interval)
-    for i in range(total_steps, -1, -1):
-        print(f"{round(i*interval, 2)} seconds remaining...", end="\r")
-        time.sleep(interval)
+os.chdir(os.path.dirname(os.path.abspath(__file__))) #set cwd as script folder
 
-class RealTrading:
-    def __init__(self, 
-                 symbol: str, 
-                 api_key_id: str, 
-                 api_secret_key: str,
-                 paper_trading: bool = True):
-        self.symbol = symbol
-        self.api_key_id = api_key_id
-        self.api_secret_key = api_secret_key
-        self.paper_trading = paper_trading
-        
-        # Initialize API clients
-        self.trading_client = TradingClient(api_key_id, api_secret_key, paper=paper_trading)
-        self.data_client = CryptoHistoricalDataClient(api_key_id, api_secret_key)
-        
-        # Initialize data structures
-        self.ohlcv: Optional[pd.DataFrame] = None
-        self.portfolio: Optional[List[Dict]] = None
-        self.fig: Optional[go.Figure] = None
-        
-        self._initialize_trading()
-        self._load_initial_data()
+import json
+data = json.load(open('keys.json'))
 
-    def _initialize_trading(self) -> None:
+API_KEY_ID = data['key']
+API_SECRET_KEY = data['secret']
+
+class TradingEngine:
+    def __init__(self,SYMBOL, API_KEY_ID, API_SECRET_KEY):
+        self.SYMBOL = SYMBOL
+        self.API_KEY_ID = API_KEY_ID
+        self.API_SECRET_KEY = API_SECRET_KEY
+
+        self.trading_client = TradingClient(API_KEY_ID, API_SECRET_KEY, paper=True)
+        self.data_client = CryptoHistoricalDataClient(API_KEY_ID, API_SECRET_KEY)
+        
         try:
             os.system('cls')
             self.portfolio = self.trading_client.get_all_positions()
-            print(bcolors.OKGREEN + "API credentials verified successfully" + bcolors.DEFAULT)
-        except Exception as e:
-            print(bcolors.FAIL + f"Failed to initialize trading: {str(e)}" + bcolors.DEFAULT)
-            raise Exception("Invalid API credentials or connection error")
+            print(bcolors.OKGREEN + "KEYS CLEAR", end=bcolors.DEFAULT + "\n")
+            print()
+        except:
+            print(bcolors.FAIL + "ERROR", end=bcolors.DEFAULT + "\n")
+            raise Exception("BAD KEYS")
 
-    def _load_initial_data(self) -> None:
+### INTIAL DATA LOAD
         self.load_data(verbose=True)
-        print("-" * 55)
+
+        #fun display
+        print("-"*55)
         self.get_account_info(verbose=True)
-        print("-" * 55)
+        print("-"*55)
 
-    def load_data(self, verbose: bool = False) -> None:
-        try:
-            request_params = CryptoBarsRequest(
-                symbol_or_symbols=[self.symbol],
-                timeframe=TimeFrame.Minute,
-                start=datetime.now() - timedelta(days=1),
-                end=datetime.now(),
-                limit=5000
-            )
-            
-            crypto_bars = self.data_client.get_crypto_bars(request_params)
-            bars = []
-            for bar in crypto_bars[self.symbol]:
-                bars.append({
-                    "Datetime": bar.timestamp.replace(tzinfo=None),
-                    "Open": bar.open,
-                    "High": bar.high,
-                    "Low": bar.low,
-                    "Close": bar.close,
-                    "Volume": bar.volume
-                })
-            self.ohlcv = pd.DataFrame(bars)
-            
-            if verbose:
-                print("Market data loaded successfully")
-        except Exception as e:
-            print(bcolors.FAIL + f"Failed to load market data: {str(e)}" + bcolors.DEFAULT)
-            raise
+    def load_data(self, verbose=False):
+        DATE_RANGE = 1
+        request_params = CryptoBarsRequest(
+            #REMEMBER TO CHANGE ALGORITHM TRADING TIMEFRAMES
+            #if bar limit is reached, it will cause a shift in dates causing no trades to be executed.
 
-    def _calculate_std(self, period: int = 5) -> pd.Series:
-        raw_std = self.ohlcv['Close'].rolling(window=period).std()
-        return (raw_std - raw_std.min()) / (raw_std.max() - raw_std.min())
-
-    def get_positions(self, verbose: bool = False) -> List[Dict]:
-        positions = []
-        for position in self.portfolio:
-            pos_dict = {
-                "symbol": position.symbol,
-                "shares": float(position.qty),
-                "value": float(position.market_value),
-                "asset_price": float(position.current_price)
-            }
-            positions.append(pos_dict)
-            if verbose:
-                print(f"{position.symbol} - {position.qty}")
-        return positions
-
-    def get_account_info(self, verbose: bool = False) -> Dict:
-        raw_info = self.trading_client.get_account()
-        info_dict = {
-            "account_number": raw_info.account_number,
-            "account_id": raw_info.id,
-            "currency": raw_info.currency,
-            "currency_amount": raw_info.cash,
-            "portfolio_value": raw_info.portfolio_value,
-            "equity": raw_info.equity
-        }
-        if verbose:
-            print(f"Account Number: {info_dict['account_number']}")
-            print(f"Account ID: {info_dict['account_id']}")
-            print(f"Currency Amount: {info_dict['currency_amount']} {info_dict['currency']}")
-            print(f"Portfolio Value: {info_dict['portfolio_value']}")
-            print(f"Equity: {info_dict['equity']}")
-        return info_dict
-
-    def place_order(self, value: float, order_type: OrderSide, use_shares: bool = False) -> bool:
-        try:
-            # Round the value to appropriate decimal places
-            if use_shares:
-                value = round(value, 9)  # 8 decimal places for BTC
-            else:
-                value = round(value, 3)  # 2 decimal places for USD
-
-            market_order_data = MarketOrderRequest(
-                symbol=self.symbol,
-                qty=value if use_shares else None,
-                notional=value if not use_shares else None,
-                side=order_type,
-                time_in_force=TimeInForce.GTC
-            )
+            symbol_or_symbols=[self.SYMBOL], #pair to get
             
-            # Submit the order and get the order response
-            
-            order = self.trading_client.submit_order(order_data=market_order_data)
-            
-            time.sleep(1)
-            
-            order_status  = self.trading_client.get_order_by_client_id(order.client_order_id)
-            if order_status.status != 'filled':
-                print(bcolors.WARNING + f"Order not filled. Status: {order_status.status}" + bcolors.DEFAULT)
-                return False
-            
-            pcolor = bcolors.OKGREEN if order_type == OrderSide.BUY else bcolors.FAIL
-            pcurrency = f"{self.symbol.split('/')[0]} " if use_shares else "$"
-            print(f"{pcolor}Trade placed at {datetime.now()} - {pcurrency}{value} - {order_type}{bcolors.DEFAULT}")
-            
-            return True
-            
-        except Exception as e:
-            print(bcolors.WARNING + f"Failed to place order: {str(e)}" + bcolors.DEFAULT)
-            return False
-
-    def buy_max(self) -> None:
-        try:
-            # Update portfolio positions before checking available cash
-            self.portfolio = self.trading_client.get_all_positions()
-            account_info = self.get_account_info()
-            available_cash = float(account_info['currency_amount'])
-            
-            if available_cash >= 10:  # Minimum order size
-                # Place the order and check if it was successful
-                if self.place_order(
-                    available_cash,
-                    OrderSide.BUY,
-                    use_shares=False
-                ):
-                    # Only update portfolio if order was successful
-                    self.portfolio = self.trading_client.get_all_positions()
-                else:
-                    print(bcolors.WARNING + "Buy order was not successful" + bcolors.DEFAULT)
-            else:
-                print(bcolors.WARNING + f"Insufficient funds for buy order. Available: ${available_cash}" + bcolors.DEFAULT)
-        except Exception as e:
-            print(bcolors.WARNING + f"Buy order failed: {str(e)}" + bcolors.DEFAULT)
-
-    def sell_max(self) -> None:
-        try:
-            current_position = self.get_positions()[0]
-            print(current_position)
-            try:
-                # Round down to 8 decimal places to ensure we don't exceed available balance
-                shares = round(current_position['shares'], 9)
-                if shares <= 0:
-                    print(bcolors.WARNING + "No shares available to sell" + bcolors.DEFAULT)
-                    return
-                    
-                self.place_order(
-                    shares,
-                    OrderSide.SELL,
-                    use_shares=True
-                )
-            except Exception as e:
-                if current_position['value'] >= 200000:
-                    print(bcolors.WARNING + "Order too large, selling maximum allowed amount" + bcolors.DEFAULT)
-                    # Round down to 8 decimal places for the maximum sell amount
-                    shares_to_sell = round(200000 / current_position['asset_price'], 8)
-                    if shares_to_sell <= 0:
-                        print(bcolors.WARNING + "No shares available to sell" + bcolors.DEFAULT)
-                        return
-                    self.place_order(shares_to_sell, OrderSide.SELL, use_shares=True)
-                    print(bcolors.FAIL + "Sold maximum amount of shares" + bcolors.DEFAULT)
-        except Exception as e:
-            print(bcolors.WARNING + f"Sell order failed: {str(e)}" + bcolors.DEFAULT)
-
-    def create_ohlcv_chart(self) -> None:
-        fig = go.Figure(data=[go.Candlestick(x=self.ohlcv['Datetime'],
-                                            open=self.ohlcv['Open'],
-                                            high=self.ohlcv['High'],
-                                            low=self.ohlcv['Low'],
-                                            close=self.ohlcv['Close'])])
-        
-        fig.update_layout(
-            title=f'{self.symbol} Price Chart',
-            yaxis_title='Price',
-            xaxis_title='Time',
-            template='plotly_dark'
+            timeframe=TimeFrame.Minute, # Timeframe (e.g., Minute, Hour, Day)
+            start=datetime.now() - timedelta(DATE_RANGE), #start date
+            end=datetime.now(), #end date
+            limit=5000 # Max number of bars to retrieve
         )
         
-        fig.show()
+        ### DATA COLLECTION
+        crypto_bars = self.data_client.get_crypto_bars(request_params)
+        bars = []
+        for bar in crypto_bars[self.SYMBOL]:
+            bars.append({
+                "timestamp": bar.timestamp.replace(tzinfo=None),
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume
+            })
+        self.ohlcv = pd.DataFrame(bars)
 
-    def custom_scalper(self) -> None:
+        if verbose:
+            print("DATA LOADED - OHLCV REFRESHED")
+    
+    def compute_indicators(self):
+        ma_window = 20  # Moving average window size
+        num_std = 2  # Number of standard deviations for the bands
+        self.ohlcv['SMA'] = self.ohlcv['close'].rolling(window=ma_window).mean()
+        self.ohlcv['STD'] = self.ohlcv['close'].rolling(window=ma_window).std()
+        self.ohlcv['upper_band'] = self.ohlcv['SMA'] + (num_std * self.ohlcv['STD'])
+        self.ohlcv['lower_band'] = self.ohlcv['SMA'] - (num_std * self.ohlcv['STD'])
+
+        self.ohlcv['delta'] = self.ohlcv['close'].diff() #self.ohlcv['close'][x]-self.ohlcv['close'][x-1]
+        self.ohlcv['gain'] = self.ohlcv['delta'].where(self.ohlcv['delta'] > 0, 0)
+        self.ohlcv['loss'] = -self.ohlcv['delta'].where(self.ohlcv['delta'] < 0, 0)
+        window = 14 # Calculate the rolling averages of gains and losses
+        self.ohlcv['avg_gain'] = self.ohlcv['gain'].rolling(window=window, min_periods=1).mean()
+        self.ohlcv['avg_loss'] = self.ohlcv['loss'].rolling(window=window, min_periods=1).mean()
+        self.ohlcv['rs'] = self.ohlcv['avg_gain'] / self.ohlcv['avg_loss']
+        self.ohlcv['rsi'] = 100 - (100 / (1 + self.ohlcv['rs']))
+
+### TA FUNCTIONS
+    def strategy_BB(self):
+        #BOLLINGER BAND CROSSOVER - OVERBOUGHT
+        results = np.greater(self.ohlcv['high'],self.ohlcv['upper_band'])
+        sell_points = []
+        for x in range(len(results)):
+            if results[x]:
+                sell_points.append(self.ohlcv['timestamp'][x])
+        #BOLLINGER BAND CROSSUNDER - OVERSOLD
+        buy_points = []
+        results = np.less(self.ohlcv['low'],self.ohlcv['lower_band'])
+        for x in range(len(results)):
+            if results[x]:
+                buy_points.append(self.ohlcv['timestamp'][x])
+
+        return {"buy_points":buy_points, "sell_points":sell_points}
+    def strategy_RSI(self):
+        limit = 30
+        low_rsi = np.less(self.ohlcv['rsi'], limit, ) #low rsi - oversold
+        high_rsi = np.greater(self.ohlcv['rsi'], 100-limit, ) #high rsi - overbought
+        buy_points = []
+        sell_points = []
+        #1 - buy 
+        #-1 - sell 
+        #0 - none
+        for count, b, s in zip(range(len(self.ohlcv['rsi'])), low_rsi, high_rsi):
+            if b:
+                buy_points.append(self.ohlcv['timestamp'][count])
+            elif s:
+                sell_points.append(self.ohlcv['timestamp'][count])
+
+        return {"buy_points":buy_points, "sell_points":sell_points}
+
+
+    def update_graph(self):
+        self.compute_indicators() #indicator columns don't exist yet
+
+        ohlcv = self.ohlcv #no more eye sore
+        self.fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+        candlestick = go.Candlestick(
+            x=ohlcv['timestamp'],
+            open=ohlcv['open'],
+            high=ohlcv['high'],
+            low=ohlcv['low'],
+            close=ohlcv['close'],
+            name="Candlesticks"
+        )
+
+        rsi = go.Scatter(
+            x=ohlcv['timestamp'],
+            y=ohlcv['rsi'],
+            line=dict(color='rgba(104, 22, 200, 0.75)', width=1),
+            name="RSI"
+        )
+
+        self.fig.add_trace(candlestick)
+        self.fig.add_trace(rsi, secondary_y=True)
+
+        ### BOLLINGER BANDS
+        self.fig.add_trace(go.Scatter(
+            x=ohlcv['timestamp'],
+            y=ohlcv['upper_band'],
+            line=dict(color='rgba(255, 0, 0, 0.75)', width=1),
+            name="Upper"
+        ))
+        self.fig.add_trace(go.Scatter(
+            x=ohlcv['timestamp'],
+            y=ohlcv['lower_band'],
+            line=dict(color='rgba(0, 255, 0, 0.75)', width=1),
+            name="Lower"
+        ))
+        self.fig.add_trace(go.Scatter(
+            x=ohlcv['timestamp'],
+            y=ohlcv['SMA'],
+            line=dict(color='rgba(0, 191, 255, 0.75)', width=1),
+            name="SMA"
+        ))
+        self.fig.update_layout(
+            title=self.SYMBOL,
+            xaxis_title="Date",
+            yaxis_title="Price",
+            xaxis_rangeslider_visible=False,
+            template="plotly_dark"  # Optional: Dark theme for the chart
+        )
+    def show_graph(self):
         try:
-            current_close = self.ohlcv['Close'].iloc[-1]
-            prev_close = self.ohlcv['Close'].iloc[-2]
-            
-            std = self._calculate_std(5)
-            current_std = std.iloc[-1]
-            
-            price_change_pct = ((current_close - prev_close) / prev_close) * 100
-            
-            buy_conditions = [
-                price_change_pct > 0.05,
-                current_std > 0.01
-            ]
-            
-            sell_conditions = [
-                price_change_pct < -0.05
-            ]
-            
-            if all(buy_conditions):
-                self.place_order(2500, OrderSide.BUY, use_shares=False)
-            elif all(sell_conditions):
-                self.sell_max()
-                
-        except Exception as e:
-            print(bcolors.FAIL + f"Error in custom_scalper: {str(e)}" + bcolors.DEFAULT)
-            traceback.print_exc()
-    
-    def auto_trade(self) -> None:
-        print("Starting automated trading\n")
-        while True:
-            try:
-                print(f"Last Updated: {self.ohlcv['Datetime'].iloc[-1]} | Account Balance: {self.get_account_info()['portfolio_value']}")
-                
-                self.load_data()
-                self.custom_scalper()
-                countdown(5)
-                print('\n')
-                
-            except Exception as e:
-                print(bcolors.FAIL + f"Error in auto_trade: {str(e)}" + bcolors.DEFAULT)
-                traceback.print_exc()
-                countdown(45)
+            self.fig.show()
+        except:
+            print(bcolors.FAIL + "GRAPH NOT CREATED YET" + bcolors.DEFAULT)
 
-if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    
-    with open('keys.json') as f:
-        data = json.load(f)
-    
-    trader = RealTrading(
-        "BTC/USD",
-        data['key'],
-        data['secret'],
-        paper_trading=True
-    )
-    trader.auto_trade()
+
+    def get_positions(self, verbose=False):
+        positions = []
+        for position in self.portfolio:
+            positions.append({
+                "symbol":position.symbol,
+                "shares":float(position.qty),
+                "value":float(position.market_value),
+                "asset_price":float(position.current_price)
+                })
+            if verbose:
+                print(f"{position.symbol} - {position.qty}")
+
+        return positions
+    def get_account_info(self, verbose=False):
+        raw_info = self.trading_client.get_account()
+        info_dict = {
+            "account_number" : raw_info.account_number,
+            "account_id" : raw_info.id,
+            "currency" : raw_info.currency,
+            "currency_amount" : raw_info.cash,
+            "portfolio_value" : raw_info.portfolio_value,
+            "equity" : raw_info.equity
+        }
+        if verbose:
+            print(f"Account Number: {info_dict['account_number']}\nAccount ID: {info_dict['account_id']}\nCurrency Amount: {info_dict['currency_amount']} {info_dict['currency']}\nPortfolio Value: {info_dict['portfolio_value']}\nEquity: {info_dict['equity']}")
+        return info_dict
+
+
+### TRADING FUNCTIONS
+    def place_order(self, value, type, use_shares=False): #trading in usd by default
+        #notional means trading in USD
+        #qty means trading in shares
+        if use_shares:
+            market_order_data = MarketOrderRequest(
+                symbol=self.SYMBOL,
+                qty=value,
+                side=type, #OrderSide.BUY OrderSide.SELL
+                time_in_force=TimeInForce.GTC
+            )
+        else:
+            market_order_data = MarketOrderRequest(
+                symbol=self.SYMBOL,
+                notional=value,
+                side=type, #OrderSide.BUY OrderSide.SELL
+                time_in_force=TimeInForce.GTC
+            )
+        
+
+        self.trading_client.submit_order(order_data=market_order_data)
+
+        pcolor = bcolors.OKGREEN if type == OrderSide.BUY else bcolors.FAIL
+        pcurrency = self.SYMBOL.split('/')[0]+' ' if use_shares else '$'
+        print(pcolor + f"Trade placed at {datetime.now()} - {pcurrency}{value} - {type}" + bcolors.DEFAULT)
+    def buy_max(self):
+        try:
+            self.place_order(self.get_account_info()['currency_amount'],OrderSide.BUY,use_shares=False)
+        except:
+            print(bcolors.WARNING + "WARNING; Out of currency or order is too large." + bcolors.DEFAULT)
+    def sell_max(self):
+        try:
+            current_position = self.get_positions()[0]
+            try:
+                self.place_order(current_position['shares'],OrderSide.SELL,use_shares=True)
+            except:
+                max_sell = 200000
+                if self.get_positions()[0]['value'] >= max_sell:
+                    print(bcolors.WARNING + "WARNING; Out of assets or order is too large." + bcolors.DEFAULT)
+                    shares_to_sell = max_sell/current_position['asset_price']
+                    self.place_order(shares_to_sell,OrderSide.SELL,use_shares=True)
+                    print(bcolors.FAIL + "Sold maximum amount of shares." + bcolors.DEFAULT)
+        except:
+            print(bcolors.WARNING + "ORDER FAILED; Out of assets or order is too large." + bcolors.DEFAULT)
+
+
+    def rsi_auto(self):
+        while True:
+            current_time = datetime.now().replace(microsecond=0, second=0) #trading by minutes
+            # current_time = datetime.now().replace(microsecond=0, second=0, minute=0) #trading by hours
+
+            print(current_time)
+            self.load_data()
+            self.compute_indicators()
+            latest_time = self.ohlcv['timestamp'].iloc[-1]
+            latest_rsi = self.ohlcv['rsi'].iloc[-1]
+            print(f"RSI - {self.ohlcv['timestamp'].iloc[-1]}: {self.ohlcv['rsi'].iloc[-1]}")
+            
+            if (latest_rsi <= 30.0) and (latest_time == current_time):
+                self.buy_max()
+            if (latest_rsi >= 70.0) and (latest_time == current_time):
+                self.sell_max()
+            
+            # ### OVERSOLD
+            # if (self.strategy_RSI()['buy_points'][-1] == current_time) or (self.strategy_BB()['buy_points'][-1] == current_time): #if the last entry point is the same as current datetime, buy
+            #     self.buy_max()
+            # ### OVERBOUGHT
+            # if (self.strategy_RSI()['sell_points'][-1] == current_time) or (self.strategy_BB()['sell_points'][-1] == current_time):
+            #     self.sell_max()
+
+            print()
+            time.sleep(45)
+        
+
+trader = TradingEngine("BTC/USD", API_KEY_ID=API_KEY_ID,API_SECRET_KEY=API_SECRET_KEY)
+
+trader.rsi_auto()

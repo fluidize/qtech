@@ -16,10 +16,8 @@ from datetime import datetime, timedelta
 import os
 from rich import print
 
-print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
-
-tf.config.threading.set_intra_op_parallelism_threads(4)
-tf.config.threading.set_inter_op_parallelism_threads(4)
+tf.config.threading.set_intra_op_parallelism_threads(8)
+tf.config.threading.set_inter_op_parallelism_threads(8)
 
 def check_for_nan(data, stage):
     nan_count = np.sum(np.isnan(data))
@@ -31,7 +29,6 @@ class TimeSeriesPredictor:
         self.epochs = epochs
         self.rnn_width = rnn_width
         self.dense_width = dense_width
-        self.sequence_length = 25 
         self.ticker = ticker
         self.chunks = chunks
         self.interval = interval
@@ -64,9 +61,40 @@ class TimeSeriesPredictor:
         rsi = 100 - (100 / (1 + rs))
         return rsi
 
+    def _compute_adx(self, high, low, close, period=14):
+        # Calculate True Range
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean()
+
+        # Calculate +DM and -DM
+        up_move = high - high.shift(1)
+        down_move = low.shift(1) - low
+        
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        
+        plus_dm = pd.Series(plus_dm, index=high.index)
+        minus_dm = pd.Series(minus_dm, index=high.index)
+        
+        # Calculate +DI and -DI
+        plus_di = 100 * (plus_dm.rolling(window=period).mean() / atr)
+        minus_di = 100 * (minus_dm.rolling(window=period).mean() / atr)
+        
+        # Calculate DX and ADX
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        adx = dx.rolling(window=period).mean()
+        
+        # Calculate ADXR
+        adxr = (adx + adx.shift(period)) / 2
+        
+        return adx, adxr
+
     def _prepare_data(self, data, train_split=True):
         df = data.copy()
-        df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
+        df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI', 'ADX', 'ADXR'], errors='ignore')
 
         # Price-based features
         df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
@@ -74,6 +102,7 @@ class TimeSeriesPredictor:
         
         # Create sequences of previous values
         self.lagged_length = 5
+        print(f"Creating features for sequence length: {self.lagged_length}")
         
         # Create all lagged features at once using pd.concat
         lagged_features = []
@@ -98,20 +127,29 @@ class TimeSeriesPredictor:
         
         # RSI and other technical indicators
         df['RSI'] = self._compute_rsi(df['Close'], 14)
+        
+        # ADX and ADXR
+        df['ADX'], df['ADXR'] = self._compute_adx(df['High'], df['Low'], df['Close'], 14)
 
         df.dropna(inplace=True)
+        print(f"Features after creation: {df.columns.tolist()}")
+        print(f"Total number of features: {len(df.columns)}")
         
         if train_split:
             # Group features by their characteristics
             price_features = ['Open', 'High', 'Low', 'Close']
             volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, self.lagged_length)]
-            bounded_features = ['RSI']  # Features that are already bounded (e.g., 0-100)
+            bounded_features = ['RSI', 'ADX', 'ADXR']  # Features that are already bounded (e.g., 0-100)
             normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross', 'Close_ZScore']
             
             # Remaining features need standardization
             technical_features = [col for col in df.columns 
                                if col not in (price_features + volume_features + bounded_features + 
                                             normalized_features + ['Datetime'])]
+            
+            print(f"Price features: {price_features}")
+            print(f"Volume features: {volume_features}")
+            print(f"Technical features: {technical_features}")
             
             # Scale absolute price values with MinMaxScaler
             df[price_features] = self.scalers['price'].fit_transform(df[price_features])
@@ -126,7 +164,7 @@ class TimeSeriesPredictor:
                 df[technical_features] = self.scalers['technical'].fit_transform(df[technical_features])
             
             X = df.drop(['Datetime'], axis=1)
-            y = df['Close'].shift(-1)
+            y = df[['Open', 'High', 'Low', 'Close', 'Volume']].shift(-1)  # Predict next OHLCV
             
             X = X[:-1]  # Remove last row since we don't have target for it
             y = y[:-1]  # Remove last row since we don't have target for it
@@ -135,7 +173,8 @@ class TimeSeriesPredictor:
         
         return df
 
-    def _train_model(self, X, y): # Sequence length for temporal information
+    def _train_model(self, X, y):
+        self.sequence_length = 25  # Sequence length for temporal information
         # Create sequences by sliding window
         n_samples = X.shape[0] - self.sequence_length + 1
         n_features = X.shape[1]
@@ -157,7 +196,7 @@ class TimeSeriesPredictor:
         embedding_dim = 32  # Size of embedding space
         num_heads = X_sequences.shape[1] #feature count
         ff_dim = 64       # Feed-forward network dimension
-        growth_rate = 32  # Number of features added by each dense layer
+        growth_rate = 16  # Number of features added by each dense layer
 
         inputs = layers.Input(shape=(X_sequences.shape[1], X_sequences.shape[2]), name='input_layer')
     
@@ -234,10 +273,10 @@ class TimeSeriesPredictor:
         
         x = layers.Dense(self.dense_width, activation='relu', name='transition_layer')(x)
         
-        outputs = layers.Dense(1, name='output_layer')(x)
+        outputs = layers.Dense(5, name='output_layer')(x)
         
         lossfn = losses.Huber(delta=5.0)
-        optimizer = optimizers.Adam(learning_rate=1e-3)
+        optimizer = optimizers.Adam(learning_rate=1e-5)
         callbacks_list = [
             callbacks.EarlyStopping(monitor='val_loss', patience=15,
                                   restore_best_weights=True),
@@ -274,18 +313,29 @@ class TimeSeriesPredictor:
         
         yhat = model.predict(X_sequences)
         yhat = yhat.squeeze()
-        yhat_extended = np.zeros((yhat.shape[0], 4))
-        yhat_extended[:, 3] = yhat
-        price_pred = self.scalers['price'].inverse_transform(yhat_extended)[:, 3]
-        return price_pred
+        
+        price_predictions = yhat[:, :4]
+        volume_predictions = yhat[:, 4].reshape(-1, 1)
+        volume_predictions_extended = np.zeros((volume_predictions.shape[0], self.lagged_length))
+        volume_predictions_extended[:, 0] = volume_predictions.squeeze()
+
+        price_pred = self.scalers['price'].inverse_transform(price_predictions)
+        volume_pred = self.scalers['volume'].inverse_transform(volume_predictions_extended)[:, 0]
+
+        final_pred = np.column_stack((price_pred, volume_pred))
+        
+        print(f"Prediction shape: {final_pred.shape}")
+        print(f"Price prediction range: min={np.min(final_pred[:, :4]):.2f}, max={np.max(final_pred[:, :4]):.2f}")
+        print(f"Volume prediction range: min={np.min(final_pred[:, 4]):.2f}, max={np.max(final_pred[:, 4]):.2f}")
+        return final_pred
 
     def create_plot(self, data, yhat, model_data, show_graph=False, save_image=False):
         df = self._prepare_data(data.copy(), train_split=False)
         actual_prices = df['Close'].values[self.sequence_length-1:-1]
         dates = df['Datetime'].values[self.sequence_length-1:-1]
         
-        mse = mean_squared_error(actual_prices, yhat)  # Compare with Close prices
-        mape = np.mean(np.abs((actual_prices - yhat) / actual_prices)) * 100
+        mse = mean_squared_error(actual_prices, yhat[:, 3])  # Compare with Close prices
+        mape = np.mean(np.abs((actual_prices - yhat[:, 3]) / actual_prices)) * 100
         
         layer_info = []
         layers_per_line = 4
@@ -343,12 +393,12 @@ class TimeSeriesPredictor:
         fig.add_trace(go.Scatter(x=dates, y=actual_prices, 
                                mode='lines', name='Actual Close', 
                                line=dict(color='blue')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=dates, y=yhat, 
+        fig.add_trace(go.Scatter(x=dates, y=yhat[:, 3], 
                                mode='lines', name='Predicted Close', 
                                line=dict(color='red')), row=1, col=1)
 
         # Error plot
-        percent_error = (np.abs(actual_prices - yhat) / actual_prices) * 100
+        percent_error = (np.abs(actual_prices - yhat[:, 3]) / actual_prices) * 100
         fig.add_trace(go.Scatter(x=dates, y=percent_error, 
                                mode='lines', name='Prediction Error', 
                                line=dict(color='orange')), row=2, col=1)
@@ -392,18 +442,14 @@ class TimeSeriesPredictor:
             fig.write_image(f"images/{self.ticker}_{self.interval}_{model_data.model.count_params()}.png")
         return fig
 
-    def _prompt_save(self, model):
-        if input("Save? (y/n) ").lower() == 'y':
-            model.save(f'{self.ticker}_{self.interval}_{model.count_params()}.keras', overwrite=True)
-            print(f'Model Saved to {os.getcwd()}')
-
     def run(self, save=False):
         data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
         X, y = self._prepare_data(data)
         model, model_data = self._train_model(X, y)
         yhat = self._predict(model, X)
         if save: 
-            self._prompt_save(model)
+            model.save(f'{self.ticker}_{self.interval}_{model.count_params()}.keras', overwrite=True)
+            print(f'Model Saved to {os.getcwd()}')
         return data, yhat, model_data
 
 class ModelTesting(TimeSeriesPredictor):
@@ -429,27 +475,47 @@ class ModelTesting(TimeSeriesPredictor):
 
         return fig
 
-    def _test_predict(self, model, data, extension=10):
+    def _extended_predict(self, model, data, interval, extension=10):
+        # PARSE INTO A TIMEDELTA
+        number = int(interval[:-1])  # Take all characters except the last one as the number
+        unit = interval[-1]  # Last character will be the unit (e.g., 'm', 'h')
+
+        if unit == 'm':
+            extended_time = timedelta(minutes=number)
+        elif unit == 'h':
+            extended_time = timedelta(hours=number)
+        elif unit == 'd':
+            extended_time = timedelta(days=number)
+        else:
+            raise ValueError("Unsupported unit, please use 'm' for minutes or 'h' for hours.")
+          
         original_data = data.copy()
-        
-        X, _ = self._prepare_data(original_data)
-        yhat = self._predict(model, X)
-        new_close = yhat[-1]
-        
-        return new_close
+        predicted_data = data
 
-    def run(self, input_data=None):
+        for i in range(extension):
+            # Use only the last row for prediction
+            X, _ = self._prepare_data(predicted_data)
+            yhat = self._predict(model, X)
+            
+            new_data = pd.DataFrame(yhat[-1].reshape(1, -1), columns=original_data.columns[1:6]) #only ohlcv
+            new_data['Datetime'] = predicted_data['Datetime'].iloc[-1] + extended_time
+            predicted_data = pd.concat([predicted_data, new_data], axis=0)
+            print(predicted_data)
+
+        return original_data, predicted_data
+
+    def run(self, extension=10):
         model_interval = self.model_filename.split("_")[1]
-        if input_data is None:
-            data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
-        prediction = self._test_predict(self.model, data)
-        return input_data, prediction
+        data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
+        data = self._extended_predict(self.model, data, model_interval, extension)
+        return data
 
-# train = TimeSeriesPredictor(epochs=100, rnn_width=256, dense_width=128, ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-# data, yhat, model_data = train.run(save=True)
-# train.create_plot(data, yhat, model_data, show_graph=True, save_image=True)
+test_client = TimeSeriesPredictor(epochs=15, rnn_width=256, dense_width=128, ticker='BTC-USD', chunks=3, interval='1m', age_days=0)
+data, yhat, model_data = test_client.run(save=True)
+test_client.create_plot(data, yhat, model_data, show_graph=True)
 
+# Extended prediction testing
 # test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-# test_client.load_model(model_name="BTC-USD_1m_11476582.keras")
-# original_data, predicted_data = test_client.run(extension=50)
+# test_client.load_model(model_name="best_model.keras")
+# original_data, predicted_data = test_client.run(extension=100)
 # test_client.create_test_plot(original_data, predicted_data, show_graph=True)
