@@ -338,7 +338,7 @@ class TradingEnvironment:
         fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode='markers', name='Sell', 
                                marker=dict(color='red', size=5, symbol='circle')))
 
-        fig.update_layout(title=f"Portfolio Performance | {self.get_summary()}", xaxis_title='Time', yaxis_title='Profit/Loss (%)')
+        fig.update_layout(title=f"Portfolio Performance {self.instance_name} | {self.get_summary()}", xaxis_title='Time', yaxis_title='Profit/Loss (%)')
         if show_graph:
             fig.show()
         return fig
@@ -353,7 +353,7 @@ class Backtest:
                 "CDF": TradingEnvironment(symbols=['SOL-USD'],instance_name='CDF', initial_capital=1000, chunks=29, interval='1m', age_days=0),
                 "SuperTrend": TradingEnvironment(symbols=['SOL-USD'],instance_name='SuperTrend', initial_capital=1000, chunks=29, interval='1m', age_days=0),
                              }
-        self.current_symbol = self.environments["Custom"].symbols[0]
+        self.current_symbol = list(self.environments.values())[0].symbols[0]
 
     def _calculate_rsi(self, context, period=14):
         delta_p = context['Close'].diff()
@@ -538,23 +538,35 @@ class Backtest:
         print("Starting Backtest")
 
         self.strategies = [self.Custom, self.MA, self.RSI, self.MACD, self.CDF, self.SuperTrend]
-
-        for env, strategy in zip(self.environments.values(), self.strategies):
-            progress_bar = tqdm(total=len(env.data[env.symbols[0]]))
-            while env.step():
+        progress_bar = tqdm(total=len(list(self.environments.values())[0].data[self.current_symbol]))
+        while all(env.step() for env in self.environments.values()):
+            for env, strategy in zip(self.environments.values(), self.strategies):
                 current_state = env.get_state()
                 context = current_state['context'][self.current_symbol]
                 current_ohlcv = current_state['prices'][self.current_symbol]
                 strategy(env, context, current_ohlcv)
-                progress_bar.update(1)
-            progress_bar.close()
-
+            progress_bar.update(1)
+        progress_bar.close()
+        
+        # for env, strategy in zip(self.environments.values(), self.strategies):
+        #     progress_bar = tqdm(total=len(env.data[env.symbols[0]]))
+        #     while env.step():
+        #         current_state = env.get_state()
+        #         context = current_state['context'][self.current_symbol]
+        #         current_ohlcv = current_state['prices'][self.current_symbol]
+        #         strategy(env, context, current_ohlcv)
+        #         progress_bar.update(1)
+        #     progress_bar.close()
+        for env in self.environments.values():
             print("\nFinal Portfolio State:")
             print(f"Cash: {env.portfolio.cash:.2f}")
             print(f"Total Value: {env.portfolio.total_value:.2f}")
             print(env.get_summary())
-
             env.create_performance_plot(show_graph=True)
+
+
+
+
 
 backtest = Backtest()
 backtest.run()
