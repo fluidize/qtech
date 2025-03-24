@@ -39,9 +39,11 @@ class Portfolio:
         self.trade_history: List[float] = []
         self.pnl_history: List[float] = []
         self.pct_pnl_history: List[float] = []
+        self.enable_fee = True
+        self.fee_percentage = 0.001 #maker and taker fee
 
     def buy(self, symbol: str, quantity: float, price: float, timestamp: datetime, verbose: bool = False) -> bool:
-        cost = round(quantity * price, 4) #roundoff buy errors
+        cost = round(quantity * price + (quantity * price * self.fee_percentage), 4) if self.enable_fee else round(quantity * price, 4) #roundoff buy errors
         if cost > self.cash:
             if verbose:
                 print(f"[red]Insufficient funds for buy order. Required: ${cost}, Available: ${self.cash}[/red]")
@@ -91,7 +93,7 @@ class Portfolio:
                 print(f"[red]Insufficient shares for sell order. Required: {quantity}, Available: {pos.quantity}[/red]")
             return False
             
-        proceeds = round(quantity * price, 4)
+        proceeds = round(quantity * price - (quantity * price * self.fee_percentage), 4) if self.enable_fee else round(quantity * price, 4)
         self.cash += proceeds
         
         if quantity == pos.quantity:
@@ -538,16 +540,20 @@ class Backtest:
         print("Starting Backtest")
 
         self.strategies = [self.Custom, self.MA, self.RSI, self.MACD, self.CDF, self.SuperTrend]
-        progress_bar = tqdm(total=len(list(self.environments.values())[0].data[self.current_symbol]))
+        total_steps = 0
+        for env in self.environments.values():
+            total_steps += len(env.data[env.symbols[0]])
+
+        progress_bar = tqdm(total=total_steps)
         while all(env.step() for env in self.environments.values()):
             for env, strategy in zip(self.environments.values(), self.strategies):
                 current_state = env.get_state()
                 context = current_state['context'][self.current_symbol]
                 current_ohlcv = current_state['prices'][self.current_symbol]
                 strategy(env, context, current_ohlcv)
-            progress_bar.update(1)
+                progress_bar.update(1)
         progress_bar.close()
-        
+
         # for env, strategy in zip(self.environments.values(), self.strategies):
         #     progress_bar = tqdm(total=len(env.data[env.symbols[0]]))
         #     while env.step():
