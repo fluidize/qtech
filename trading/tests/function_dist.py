@@ -48,13 +48,15 @@ data = fetch_data('BTC-USD', 29, '5m', 10)
 
 # Calculate returns instead of standard deviation
 raw_std = data['Close'].rolling(window=20).std()
+print(raw_std)
+print(data['Close'].std())
 std = raw_std/raw_std.max()
 
 
 mu, sigma = norm.fit(std.dropna())
 print(f"Mean return: {mu:.4f}, Std of returns: {sigma:.4f}")
 
-x = np.linspace(mu - 3*sigma, mu + 3*sigma, 1000)
+x = np.linspace(mu - 4*sigma, mu + 4*sigma, 1000)
 pdf = norm.pdf(x, mu, sigma)
 cdf = norm.cdf(x, mu, sigma)
 

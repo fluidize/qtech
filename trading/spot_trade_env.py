@@ -39,11 +39,13 @@ class Portfolio:
         self.trade_history: List[float] = []
         self.pnl_history: List[float] = []
         self.pct_pnl_history: List[float] = []
-        self.enable_fee = True
+        self.enable_fee = False
         self.fee_percentage = 0.001 #maker and taker fee
 
     def buy(self, symbol: str, quantity: float, price: float, timestamp: datetime, verbose: bool = False) -> bool:
-        cost = round(quantity * price + (quantity * price * self.fee_percentage), 4) if self.enable_fee else round(quantity * price, 4) #roundoff buy errors
+        cost = round(quantity * price, 4) #roundoff buy errors
+        quantity = quantity * (1-self.fee_percentage) if self.enable_fee else quantity
+
         if cost > self.cash:
             if verbose:
                 print(f"[red]Insufficient funds for buy order. Required: ${cost}, Available: ${self.cash}[/red]")
@@ -93,7 +95,7 @@ class Portfolio:
                 print(f"[red]Insufficient shares for sell order. Required: {quantity}, Available: {pos.quantity}[/red]")
             return False
             
-        proceeds = round(quantity * price - (quantity * price * self.fee_percentage), 4) if self.enable_fee else round(quantity * price, 4)
+        proceeds = round(quantity * price * (1-self.fee_percentage), 4) if self.enable_fee else round(quantity * price, 4)
         self.cash += proceeds
         
         if quantity == pos.quantity:
@@ -347,15 +349,13 @@ class TradingEnvironment:
 
 class Backtest:
     def __init__(self):
-        self.environments = {
-                "Custom": TradingEnvironment(symbols=['SOL-USD'],instance_name='Custom', initial_capital=1000, chunks=29, interval='1m', age_days=0),
-                "MA": TradingEnvironment(symbols=['SOL-USD'],instance_name='MA', initial_capital=1000, chunks=29, interval='1m', age_days=0),
-                "RSI": TradingEnvironment(symbols=['SOL-USD'],instance_name='RSI', initial_capital=1000, chunks=29, interval='1m', age_days=0),
-                "MACD": TradingEnvironment(symbols=['SOL-USD'],instance_name='MACD', initial_capital=1000, chunks=29, interval='1m', age_days=0),
-                "CDF": TradingEnvironment(symbols=['SOL-USD'],instance_name='CDF', initial_capital=1000, chunks=29, interval='1m', age_days=0),
-                "SuperTrend": TradingEnvironment(symbols=['SOL-USD'],instance_name='SuperTrend', initial_capital=1000, chunks=29, interval='1m', age_days=0),
-                             }
-        self.current_symbol = list(self.environments.values())[0].symbols[0]
+        self.environments = {}
+        self.current_symbol = None
+    
+    def add_environments(self, environments: List[TradingEnvironment]):
+        for environment in environments:
+            self.environments[environment.instance_name] = environment
+            self.current_symbol = environment.symbols[0]
 
     def _calculate_rsi(self, context, period=14):
         delta_p = context['Close'].diff()
@@ -495,9 +495,9 @@ class Backtest:
         sell_conditions = [current_close < prev_close, current_std > std_threshold]
 
         if all(buy_conditions):
-            success = env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
+            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
         elif all(sell_conditions):
-            success = env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
+            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
     def SuperTrend(self, env: TradingEnvironment, context, current_ohlcv):
         current_close = current_ohlcv['Close']
@@ -532,14 +532,16 @@ class Backtest:
             print(env.portfolio.total_profit_loss_pct)
         except:
             pass
-    
 
     def run(self, strategy=None):
+        environments = [TradingEnvironment(symbols=['SOL-USD'],instance_name='Custom', initial_capital=1000, chunks=29, interval='1m', age_days=0)]
+        self.add_environments(environments)
         for env in self.environments.values():
             env.fetch_data()
         print("Starting Backtest")
 
-        self.strategies = [self.Custom, self.MA, self.RSI, self.MACD, self.CDF, self.SuperTrend]
+        self.strategies = [self.Custom]
+
         total_steps = 0
         for env in self.environments.values():
             total_steps += len(env.data[env.symbols[0]])
@@ -569,9 +571,6 @@ class Backtest:
             print(f"Total Value: {env.portfolio.total_value:.2f}")
             print(env.get_summary())
             env.create_performance_plot(show_graph=True)
-
-
-
 
 
 backtest = Backtest()
