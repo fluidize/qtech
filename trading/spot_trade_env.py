@@ -289,7 +289,7 @@ class TradingEnvironment:
             'trade_history': self.portfolio.trade_history
         }
 
-    def get_summary(self) -> str:
+    def get_summary(self, verbose: bool = False) -> str:
         max_drawdown = max(self.portfolio.pct_pnl_history) - min(self.portfolio.pct_pnl_history)
         closed_trades = list(filter(lambda x: x['action'] == 'SELL', self.portfolio.trade_history))
         gains = list(filter(lambda x: x > 0, [trade['PnL'] for trade in closed_trades]))
@@ -309,9 +309,22 @@ class TradingEnvironment:
         quantities = np.array([self.portfolio.trade_history[i]['quantity'] for i in range(len(self.portfolio.trade_history))])
         total_volume = sum(prices * quantities)
         total_trades = len(self.portfolio.trade_history)
-        
-        return f"{self.symbols[0]} {self.interval} | PnL: {self.portfolio.total_profit_loss_pct:.2f}% | Max DD: {max_drawdown:.2f}% | PF: {profit_factor:.2f} | RR Ratio:{RR_ratio:.2f} | WR: {win_rate:.2f} | Optimal WR: {optimal_wr:.2f} | Total Volume: {total_volume:.2f} | Total Trades: {total_trades} | Gains: {len(gains)} | Losses: {len(losses)}"
-
+        if verbose:
+            print(f"{self.symbols[0]} {self.interval} | PnL: {self.portfolio.total_profit_loss_pct:.2f}% | Max DD: {max_drawdown:.2f}% | PF: {profit_factor:.2f} | RR Ratio:{RR_ratio:.2f} | WR: {win_rate:.2f} | Optimal WR: {optimal_wr:.2f} | Total Volume: {total_volume:.2f} | Total Trades: {total_trades} | Gains: {len(gains)} | Losses: {len(losses)}")
+        output_dict = {
+            'PnL': self.portfolio.total_profit_loss_pct,
+            'Max DD': max_drawdown,
+            'PF': profit_factor,
+            'RR Ratio': RR_ratio,
+            'WR': win_rate,
+            'Optimal WR': optimal_wr,
+            'Total Volume': total_volume,
+            'Total Trades': total_trades,
+            'Gains': len(gains),
+            'Losses': len(losses)
+        }
+        return output_dict
+    
     def create_performance_plot(self, show_graph: bool = False):
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=self.data[self.symbols[0]]['Datetime'], y=self.portfolio.pct_pnl_history, mode='lines', name='Strategy %'))
@@ -347,7 +360,7 @@ class TradingEnvironment:
             fig.show()
         return fig
 
-class Backtest:
+class BacktestEnvironment:
     def __init__(self):
         self.environments = {}
         self.current_symbol = None
@@ -358,7 +371,7 @@ class Backtest:
     
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
-            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=10, interval='1m', age_days=0) #set env defaults here
+            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=1, interval='1m', age_days=0) #set env defaults here
             self._add_environment(default_env)
 
     def _calculate_rsi(self, context, period=14):
@@ -434,6 +447,8 @@ class Backtest:
         std = (raw_std - raw_std.min())/(raw_std.max() - raw_std.min()) #normalize std or else different symbols will have different thresholds
         return std
 
+    ### BUILTIN STRATEGIES ###
+
     def MA(self, env: TradingEnvironment, context, current_ohlcv):
         ma50 = context['Close'].rolling(window=50).mean().iloc[-1]
         ma200 = context['Close'].rolling(window=200).mean().iloc[-1]
@@ -508,18 +523,18 @@ class Backtest:
         """Basic strategy that buys when current close is higher that prev close. STD is used to stop out in volatile markets. Performs well in 1m."""
         current_close = current_ohlcv['Close']
 
-        std = self._calculate_std(context, 20)
+        std = self._calculate_std(context, 10)
         current_std = std.iloc[-1]
         prev_close = context['Close'].iloc[-2]
         
         # Calculate price change percentage
         price_change_pct = ((current_close - prev_close) / prev_close) * 100
 
-        std_threshold = 0.3
-        pct_threshold = 0.1
+        std_threshold = 0.025
+        pct_threshold = 0.05
         
-        buy_conditions = [price_change_pct > pct_threshold, current_std < std_threshold]
-        sell_conditions = [price_change_pct < -pct_threshold, current_std > std_threshold]
+        buy_conditions = [price_change_pct > pct_threshold, current_std > std_threshold]
+        sell_conditions = [price_change_pct < -pct_threshold]
 
         if all(buy_conditions):
             env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
@@ -538,8 +553,7 @@ class Backtest:
         except:
             pass
 
-    def run(self, strategy=None):
-        strategies = [self.Custom_Scalper]
+    def run(self, strategies: List, verbose: bool = False, show_graph: bool = False):
         self.add_strategy_environments(strategies)
         for env in self.environments.values():
             env.fetch_data()
@@ -569,13 +583,16 @@ class Backtest:
         #         progress_bar.update(1)
         #     progress_bar.close()
 
+        output_dict = {}
         for env in self.environments.values():
-            print("\nFinal Portfolio State:")
-            print(f"Cash: {env.portfolio.cash:.2f}")
-            print(f"Total Value: {env.portfolio.total_value:.2f}")
-            print(env.get_summary())
-            env.create_performance_plot(show_graph=True)
+            if verbose:
+                print("\nFinal Portfolio State:")
+                print(f"Cash: {env.portfolio.cash:.2f}")
+                print(f"Total Value: {env.portfolio.total_value:.2f}")
+                print(env.get_summary(verbose=True))
+            if show_graph:
+                env.create_performance_plot(show_graph=True)
+            output_dict[env.instance_name] = env.get_summary()
 
-
-backtest = Backtest()
-backtest.run()
+# backtest = BacktestEnvironment()
+# backtest.run([backtest.Custom_Scalper])
