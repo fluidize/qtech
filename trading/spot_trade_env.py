@@ -217,7 +217,7 @@ class TradingEnvironment:
             
         print(f"Fetched {min_length} data points for each symbol")
 
-    def fetch_1d_data(self, days: int = 365):
+    def fetch_1d_data(self, days: int = 1095):
         for symbol in self.symbols:
             data = yf.download(symbol, start=datetime.now() - timedelta(days=days), end=datetime.now(), interval='1d')
             data.sort_index(inplace=True)
@@ -352,10 +352,14 @@ class Backtest:
         self.environments = {}
         self.current_symbol = None
     
-    def add_environments(self, environments: List[TradingEnvironment]):
-        for environment in environments:
-            self.environments[environment.instance_name] = environment
-            self.current_symbol = environment.symbols[0]
+    def _add_environment(self, environment: TradingEnvironment):
+        self.environments[environment.instance_name] = environment
+        self.current_symbol = environment.symbols[0]
+    
+    def add_strategy_environments(self, strategies: List):
+        for strategy in strategies:
+            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=10, interval='1m', age_days=0) #set env defaults here
+            self._add_environment(default_env)
 
     def _calculate_rsi(self, context, period=14):
         delta_p = context['Close'].diff()
@@ -427,7 +431,7 @@ class Backtest:
     
     def _calculate_std(self, context, period=20):
         raw_std = context['Close'].rolling(window=period).std()
-        std = raw_std/raw_std.max() #normalize std or else different symbols will have different thresholds
+        std = (raw_std - raw_std.min())/(raw_std.max() - raw_std.min()) #normalize std or else different symbols will have different thresholds
         return std
 
     def MA(self, env: TradingEnvironment, context, current_ohlcv):
@@ -478,27 +482,6 @@ class Backtest:
         elif current_cdf > 0.7:
             env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
-    def Custom(self, env: TradingEnvironment, context, current_ohlcv):
-        current_close = current_ohlcv['Close']
-
-        std = self._calculate_std(context, 20)
-        current_std = std.iloc[-1]
-        prev_close = context['Close'].iloc[-2]
-        
-        # Calculate price change percentage
-        price_change_pct = ((current_close - prev_close) / prev_close) * 100
-        
-        # Adjust std threshold based on symbol
-        std_threshold = 0.3
-        
-        buy_conditions = [current_close > prev_close, current_std < std_threshold]
-        sell_conditions = [current_close < prev_close, current_std > std_threshold]
-
-        if all(buy_conditions):
-            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
-        elif all(sell_conditions):
-            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
-
     def SuperTrend(self, env: TradingEnvironment, context, current_ohlcv):
         current_close = current_ohlcv['Close']
         supertrend = self._calculate_supertrend(context)
@@ -520,7 +503,29 @@ class Backtest:
             env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
         else:
             env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
-    
+
+    def Custom_Scalper(self, env: TradingEnvironment, context, current_ohlcv):
+        """Basic strategy that buys when current close is higher that prev close. STD is used to stop out in volatile markets. Performs well in 1m."""
+        current_close = current_ohlcv['Close']
+
+        std = self._calculate_std(context, 20)
+        current_std = std.iloc[-1]
+        prev_close = context['Close'].iloc[-2]
+        
+        # Calculate price change percentage
+        price_change_pct = ((current_close - prev_close) / prev_close) * 100
+
+        std_threshold = 0.3
+        pct_threshold = 0.1
+        
+        buy_conditions = [price_change_pct > pct_threshold, current_std < std_threshold]
+        sell_conditions = [price_change_pct < -pct_threshold, current_std > std_threshold]
+
+        if all(buy_conditions):
+            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
+        elif all(sell_conditions):
+            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
+            
     def Perfect(self, env, context, current_ohlcv):
         #perfect strategy
         index = env.current_index
@@ -534,13 +539,11 @@ class Backtest:
             pass
 
     def run(self, strategy=None):
-        environments = [TradingEnvironment(symbols=['SOL-USD'],instance_name='Custom', initial_capital=1000, chunks=29, interval='1m', age_days=0)]
-        self.add_environments(environments)
+        strategies = [self.Custom_Scalper]
+        self.add_strategy_environments(strategies)
         for env in self.environments.values():
             env.fetch_data()
         print("Starting Backtest")
-
-        self.strategies = [self.Custom]
 
         total_steps = 0
         for env in self.environments.values():
@@ -548,7 +551,7 @@ class Backtest:
 
         progress_bar = tqdm(total=total_steps)
         while all(env.step() for env in self.environments.values()):
-            for env, strategy in zip(self.environments.values(), self.strategies):
+            for strategy, env in zip(strategies, self.environments.values()):
                 current_state = env.get_state()
                 context = current_state['context'][self.current_symbol]
                 current_ohlcv = current_state['prices'][self.current_symbol]
@@ -565,6 +568,7 @@ class Backtest:
         #         strategy(env, context, current_ohlcv)
         #         progress_bar.update(1)
         #     progress_bar.close()
+
         for env in self.environments.values():
             print("\nFinal Portfolio State:")
             print(f"Cash: {env.portfolio.cash:.2f}")

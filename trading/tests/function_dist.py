@@ -48,17 +48,21 @@ data = fetch_data('BTC-USD', 29, '5m', 10)
 
 # Calculate returns instead of standard deviation
 raw_std = data['Close'].rolling(window=20).std()
-print(raw_std)
-print(data['Close'].std())
-std = raw_std/raw_std.max()
+raw_std.dropna(inplace=True, axis=0)
 
+std = (raw_std - raw_std.min())/(raw_std.max() - raw_std.min())
 
-mu, sigma = norm.fit(std.dropna())
+with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+    print(std)
+
+mu, sigma = norm.fit(std)
 print(f"Mean return: {mu:.4f}, Std of returns: {sigma:.4f}")
 
-x = np.linspace(mu - 4*sigma, mu + 4*sigma, 1000)
+x = np.linspace(mu - 3*sigma, mu + 3*sigma, 1000)
 pdf = norm.pdf(x, mu, sigma)
 cdf = norm.cdf(x, mu, sigma)
+
+print(np.sum(x < 0))
 
 fig = sp.make_subplots(rows=2, cols=1, 
                       subplot_titles=('PDF', 'CDF'))
