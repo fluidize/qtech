@@ -3,7 +3,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 import numpy as np
-from scipy.stats import norm
+import scipy.stats as stats
+from scipy.differentiate import derivative
 import plotly.graph_objects as go
 import plotly.subplots as sp
 
@@ -55,19 +56,19 @@ std = (raw_std - raw_std.min())/(raw_std.max() - raw_std.min())
 with pd.option_context('display.max_rows', None, 'display.max_columns', None):
     print(std)
 
-mu, sigma = norm.fit(std)
-print(f"Mean return: {mu:.4f}, Std of returns: {sigma:.4f}")
-
-x = np.linspace(mu - 3*sigma, mu + 3*sigma, 1000)
-pdf = norm.pdf(x, mu, sigma)
-cdf = norm.cdf(x, mu, sigma)
-
-print(np.sum(x < 0))
+chi_df, chi_loc, chi_scale = stats.chi.fit(std)
+x = np.linspace(np.mean(std) - 4*np.std(std), np.mean(std) + 4*np.std(std), 1000)
+pdf = stats.chi2.pdf(x, chi_df, loc=chi_loc, scale=chi_scale)
+cdf = stats.chi2.cdf(x, chi_df, loc=chi_loc, scale=chi_scale)
+# derivative_cdf = np.gradient(cdf, x)
+print(np.sum(std < 0))
 
 fig = sp.make_subplots(rows=2, cols=1, 
                       subplot_titles=('PDF', 'CDF'))
 fig.add_trace(go.Scatter(x=x, y=pdf, mode='lines', name='PDF'), row=1, col=1)
+# fig.add_trace(go.Histogram(x=std, name='Histogram'), row=1, col=1)
 fig.add_trace(go.Scatter(x=x, y=cdf, mode='lines', name='CDF'), row=2, col=1)
+# fig.add_trace(go.Scatter(x=x, y=derivative_cdf, mode='lines', name="CDF'"), row=1, col=1)
 
 fig.show()
 

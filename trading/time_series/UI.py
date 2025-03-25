@@ -5,7 +5,7 @@ import re
 import numpy as np
 import plotly.graph_objects as go
 
-from ar_rnn import TimeSeriesPredictor, ModelTesting  # Import from ar_rnn.py
+from fintech.trading.time_series.ohlcv import TimeSeriesPredictor, ModelTesting  # Import from ar_rnn.py
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
