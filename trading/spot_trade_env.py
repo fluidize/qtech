@@ -12,6 +12,79 @@ import plotly.graph_objects as go
 import scipy.stats as stats
 from time_series.close_predictor.close_only import ModelTesting
 
+def _calculate_rsi(context, period=14):
+    delta_p = context['Close'].diff()
+    gain = delta_p.where(delta_p > 0, 0)
+    loss = -delta_p.where(delta_p < 0, 0)
+
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - 100 / (1 + rs)
+    return rsi
+
+def _calculate_macd(context, fast_period=12, slow_period=26, signal_period=9):
+    fast_ema = context['Close'].ewm(span=fast_period, adjust=False).mean()
+    slow_ema = context['Close'].ewm(span=slow_period, adjust=False).mean()
+
+    macd_line = fast_ema - slow_ema
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    histogram = macd_line - signal_line
+
+    return macd_line, signal_line, histogram
+
+def _calculate_atr(context, period=14):
+    high = context['High']
+    low = context['Low']
+    close = context['Close']
+
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+
+    tr = pd.Series([max(a, b, c) for a, b, c in zip(tr1, tr2, tr3)])
+
+    atr = tr.rolling(window=period).mean()
+    return atr
+
+def _calculate_supertrend(context, period=14):
+    atr = self._calculate_atr(context, period=period)
+    multiplier = 3.0
+    
+    hl2 = (context['High'] + context['Low']) / 2
+    basic_upperband = hl2 + (multiplier * atr)
+    basic_lowerband = hl2 - (multiplier * atr)
+    
+    final_upperband = basic_upperband.copy()
+    final_lowerband = basic_lowerband.copy()
+    supertrend = pd.Series(index=context.index, dtype=float)
+    
+    supertrend.iloc[0] = final_upperband.iloc[0]
+    
+    close = context['Close']
+    prev_upperband = final_upperband.shift(1)
+    prev_lowerband = final_lowerband.shift(1)
+    prev_supertrend = supertrend.shift(1)
+    
+    mask_upper = (basic_upperband < prev_upperband) | (close.shift(1) > prev_upperband)
+    final_upperband.loc[mask_upper] = basic_upperband.loc[mask_upper]
+    final_upperband.loc[~mask_upper] = prev_upperband.loc[~mask_upper]
+    
+    mask_lower = (basic_lowerband > prev_lowerband) | (close.shift(1) < prev_lowerband)
+    final_lowerband.loc[mask_lower] = basic_lowerband.loc[mask_lower]
+    final_lowerband.loc[~mask_lower] = prev_lowerband.loc[~mask_lower]
+    
+    mask_supertrend = close > final_upperband
+    supertrend.loc[mask_supertrend] = final_lowerband.loc[mask_supertrend]
+    supertrend.loc[~mask_supertrend] = final_upperband.loc[~mask_supertrend]
+    return supertrend
+
+def _calculate_std(context, period=20):
+    raw_std = context['Close'].rolling(window=period).std()
+    std = (raw_std - raw_std.min())/(raw_std.max() - raw_std.min()) #normalize std or else different symbols will have different thresholds
+    return std
+
 @dataclass
 class Position:
     symbol: str
@@ -234,14 +307,17 @@ class TradingEnvironment:
             
         print(f"Fetched {min_length} data points for each symbol")
     
+    def get_current_symbol(self) -> str:
+        return self.symbols[0]
+    
+    def get_current_timestamp(self) -> datetime:
+        return self.data[self.symbols[0]].iloc[self.current_index]['Datetime']
+    
     def get_current_prices(self) -> Dict[str, pd.Series]:
         return {
             symbol: self.data[symbol].iloc[self.current_index]
             for symbol in self.symbols
         }
-    
-    def get_current_timestamp(self) -> datetime:
-        return self.data[self.symbols[0]].iloc[self.current_index]['Datetime']
     
     def step(self) -> bool:
         extended_context = self.extended_context
@@ -374,79 +450,6 @@ class BacktestEnvironment:
             default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=1, interval='1m', age_days=0) #set env defaults here
             self._add_environment(default_env)
 
-    def _calculate_rsi(self, context, period=14):
-        delta_p = context['Close'].diff()
-        gain = delta_p.where(delta_p > 0, 0)
-        loss = -delta_p.where(delta_p < 0, 0)
-
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
-
-        rs = avg_gain / avg_loss
-        rsi = 100 - 100 / (1 + rs)
-        return rsi
-    
-    def _calculate_macd(self, context, fast_period=12, slow_period=26, signal_period=9):
-        fast_ema = context['Close'].ewm(span=fast_period, adjust=False).mean()
-        slow_ema = context['Close'].ewm(span=slow_period, adjust=False).mean()
-
-        macd_line = fast_ema - slow_ema
-        signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
-        histogram = macd_line - signal_line
-
-        return macd_line, signal_line, histogram
-
-    def _calculate_atr(self, context, period=14):
-        high = context['High']
-        low = context['Low']
-        close = context['Close']
-
-        tr1 = high - low
-        tr2 = abs(high - close.shift(1))
-        tr3 = abs(low - close.shift(1))
-
-        tr = pd.Series([max(a, b, c) for a, b, c in zip(tr1, tr2, tr3)])
-
-        atr = tr.rolling(window=period).mean()
-        return atr
-    
-    def _calculate_supertrend(self, context, period=14):
-        atr = self._calculate_atr(context, period=period)
-        multiplier = 3.0
-        
-        hl2 = (context['High'] + context['Low']) / 2
-        basic_upperband = hl2 + (multiplier * atr)
-        basic_lowerband = hl2 - (multiplier * atr)
-        
-        final_upperband = basic_upperband.copy()
-        final_lowerband = basic_lowerband.copy()
-        supertrend = pd.Series(index=context.index, dtype=float)
-        
-        supertrend.iloc[0] = final_upperband.iloc[0]
-        
-        close = context['Close']
-        prev_upperband = final_upperband.shift(1)
-        prev_lowerband = final_lowerband.shift(1)
-        prev_supertrend = supertrend.shift(1)
-        
-        mask_upper = (basic_upperband < prev_upperband) | (close.shift(1) > prev_upperband)
-        final_upperband.loc[mask_upper] = basic_upperband.loc[mask_upper]
-        final_upperband.loc[~mask_upper] = prev_upperband.loc[~mask_upper]
-        
-        mask_lower = (basic_lowerband > prev_lowerband) | (close.shift(1) < prev_lowerband)
-        final_lowerband.loc[mask_lower] = basic_lowerband.loc[mask_lower]
-        final_lowerband.loc[~mask_lower] = prev_lowerband.loc[~mask_lower]
-        
-        mask_supertrend = close > final_upperband
-        supertrend.loc[mask_supertrend] = final_lowerband.loc[mask_supertrend]
-        supertrend.loc[~mask_supertrend] = final_upperband.loc[~mask_supertrend]
-        return supertrend
-    
-    def _calculate_std(self, context, period=20):
-        raw_std = context['Close'].rolling(window=period).std()
-        std = (raw_std - raw_std.min())/(raw_std.max() - raw_std.min()) #normalize std or else different symbols will have different thresholds
-        return std
-
     ### BUILTIN STRATEGIES ###
 
     def MA(self, env: TradingEnvironment, context, current_ohlcv):
@@ -523,7 +526,7 @@ class BacktestEnvironment:
         """Basic strategy that buys when current close is higher that prev close. STD is used to stop out in volatile markets. Performs well in 1m."""
         current_close = current_ohlcv['Close']
 
-        std = self._calculate_std(context, 10)
+        std = _calculate_std(context, 10)
         current_std = std.iloc[-1]
         prev_close = context['Close'].iloc[-2]
         
@@ -593,6 +596,8 @@ class BacktestEnvironment:
             if show_graph:
                 env.create_performance_plot(show_graph=True)
             output_dict[env.instance_name] = env.get_summary()
+
+        return output_dict
 
 # backtest = BacktestEnvironment()
 # backtest.run([backtest.Custom_Scalper])
