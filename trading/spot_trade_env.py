@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 
 
 import scipy.stats as stats
-from time_series.close_predictor.close_only import ModelTesting
+# from time_series.close_predictor.close_only import ModelTesting
 
 def _calculate_rsi(context, period=14):
     delta_p = context['Close'].diff()
@@ -370,6 +370,7 @@ class TradingEnvironment:
         closed_trades = list(filter(lambda x: x['action'] == 'SELL', self.portfolio.trade_history))
         gains = list(filter(lambda x: x > 0, [trade['PnL'] for trade in closed_trades]))
         losses = list(filter(lambda x: x < 0, [trade['PnL'] for trade in closed_trades]))
+        
         if len(gains) == 0 or len(losses) == 0:
             profit_factor = np.nan
             RR_ratio = np.nan
@@ -385,13 +386,16 @@ class TradingEnvironment:
         quantities = np.array([self.portfolio.trade_history[i]['quantity'] for i in range(len(self.portfolio.trade_history))])
         total_volume = sum(prices * quantities)
         total_trades = len(self.portfolio.trade_history)
+        PT_ratio = self.portfolio.total_profit_loss_pct / total_trades #profit% to trade ratio
+
         if verbose:
-            print(f"{self.symbols[0]} {self.interval} | PnL: {self.portfolio.total_profit_loss_pct:.2f}% | Max DD: {max_drawdown:.2f}% | PF: {profit_factor:.2f} | RR Ratio:{RR_ratio:.2f} | WR: {win_rate:.2f} | Optimal WR: {optimal_wr:.2f} | Total Volume: {total_volume:.2f} | Total Trades: {total_trades} | Gains: {len(gains)} | Losses: {len(losses)}")
+            print(f"{self.symbols[0]} {self.interval} | PnL: {self.portfolio.total_profit_loss_pct:.2f}% | Max DD: {max_drawdown:.2f}% | PF: {profit_factor:.2f} | RR Ratio:{RR_ratio:.2f} | P%/T Ratio: {PT_ratio:.2f}% | WR: {win_rate:.2f} | Optimal WR: {optimal_wr:.2f} | Total Volume: {total_volume:.2f} | Total Trades: {total_trades} | Gains: {len(gains)} | Losses: {len(losses)}")
         output_dict = {
             'PnL': self.portfolio.total_profit_loss_pct,
             'Max DD': max_drawdown,
             'PF': profit_factor,
             'RR Ratio': RR_ratio,
+            'PT Ratio': PT_ratio,
             'WR': win_rate,
             'Optimal WR': optimal_wr,
             'Total Volume': total_volume,
@@ -401,6 +405,23 @@ class TradingEnvironment:
         }
         return output_dict
     
+    def execute_dict(self, signals: Dict[str, bool]) -> None:
+        """
+        Execute trades based on a dictionary of buy/sell signals.
+        
+        Args:
+            signals (Dict[str, bool]): Dictionary containing 'buy' and 'sell' boolean signals
+        """
+        current_prices = self.get_current_prices()
+        current_symbol = self.get_current_symbol()
+        current_price = current_prices[current_symbol]['Close']
+        
+        if signals.get('buy', False):
+            self.portfolio.buy_max(current_symbol, current_price, self.get_current_timestamp())
+        elif signals.get('sell', False):
+            self.portfolio.sell_max(current_symbol, current_price, self.get_current_timestamp())
+
+
     def create_performance_plot(self, show_graph: bool = False):
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=self.data[self.symbols[0]]['Datetime'], y=self.portfolio.pct_pnl_history, mode='lines', name='Strategy %'))
@@ -447,7 +468,7 @@ class BacktestEnvironment:
     
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
-            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=1, interval='1m', age_days=0) #set env defaults here
+            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=10, interval='1m', age_days=0) #set env defaults here
             self._add_environment(default_env)
 
     ### BUILTIN STRATEGIES ###
@@ -526,14 +547,13 @@ class BacktestEnvironment:
         """Basic strategy that buys when current close is higher that prev close. STD is used to stop out in volatile markets. Performs well in 1m."""
         current_close = current_ohlcv['Close']
 
-        std = _calculate_std(context, 10)
+        std = _calculate_std(context, 5)
         current_std = std.iloc[-1]
         prev_close = context['Close'].iloc[-2]
         
-        # Calculate price change percentage
         price_change_pct = ((current_close - prev_close) / prev_close) * 100
 
-        std_threshold = 0.025
+        std_threshold = 0.01
         pct_threshold = 0.05
         
         buy_conditions = [price_change_pct > pct_threshold, current_std > std_threshold]
@@ -575,16 +595,6 @@ class BacktestEnvironment:
                 strategy(env, context, current_ohlcv)
                 progress_bar.update(1)
         progress_bar.close()
-
-        # for env, strategy in zip(self.environments.values(), self.strategies):
-        #     progress_bar = tqdm(total=len(env.data[env.symbols[0]]))
-        #     while env.step():
-        #         current_state = env.get_state()
-        #         context = current_state['context'][self.current_symbol]
-        #         current_ohlcv = current_state['prices'][self.current_symbol]
-        #         strategy(env, context, current_ohlcv)
-        #         progress_bar.update(1)
-        #     progress_bar.close()
 
         output_dict = {}
         for env in self.environments.values():
