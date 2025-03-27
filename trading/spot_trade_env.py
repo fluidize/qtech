@@ -289,7 +289,22 @@ class TradingEnvironment:
             self.data[symbol] = self.data[symbol].iloc[-min_length:]
             
         print(f"Fetched {min_length} data points for each symbol")
-
+        
+    def create_ohlcv_chart(self) -> None:
+        fig = go.Figure(data=[go.Candlestick(x=self.data[self.symbols[0]]['Datetime'],
+                                            open=self.data[self.symbols[0]]['Open'],
+                                            high=self.data[self.symbols[0]]['High'],
+                                            low=self.data[self.symbols[0]]['Low'],
+                                            close=self.data[self.symbols[0]]['Close'])])
+        
+        fig.update_layout(
+            title=f'{self.symbol} Price Chart',
+            yaxis_title='Price',
+            xaxis_title='Time',
+            template='plotly_dark'
+        )
+        
+        fig.show()
     def fetch_1d_data(self, days: int = 1095):
         for symbol in self.symbols:
             data = yf.download(symbol, start=datetime.now() - timedelta(days=days), end=datetime.now(), interval='1d')

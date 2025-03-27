@@ -30,7 +30,7 @@ def countdown(seconds: int) -> None:
     interval = 0.1
     total_steps = round(seconds / interval)
     for i in range(total_steps, -1, -1):
-        print(f"{int(i*interval)} seconds remaining...", end="\r")
+        print(f"{round(i*interval, 2)} seconds remaining...", end="\r")
         time.sleep(interval)
 
 class RealTrading:
@@ -164,8 +164,14 @@ class RealTrading:
             print(f"Equity: {info_dict['equity']}")
         return info_dict
 
-    def place_order(self, value: float, order_type: OrderSide, use_shares: bool = False) -> None:
+    def place_order(self, value: float, order_type: OrderSide, use_shares: bool = False) -> bool:
         try:
+            # Round the value to appropriate decimal places
+            if use_shares:
+                value = round(value, 9)  # 8 decimal places for BTC
+            else:
+                value = round(value, 3)  # 2 decimal places for USD
+
             market_order_data = MarketOrderRequest(
                 symbol=self.symbol,
                 qty=value if use_shares else None,
@@ -174,23 +180,47 @@ class RealTrading:
                 time_in_force=TimeInForce.GTC
             )
             
-            self.trading_client.submit_order(order_data=market_order_data)
+            # Submit the order and get the order response
+            
+            order = self.trading_client.submit_order(order_data=market_order_data)
+            
+            time.sleep(1)
+            
+            order_status  = self.trading_client.get_order_by_client_id(order.client_order_id)
+            if order_status.status != 'filled':
+                print(bcolors.WARNING + f"Order not filled. Status: {order_status.status}" + bcolors.DEFAULT)
+                return False
             
             pcolor = bcolors.OKGREEN if order_type == OrderSide.BUY else bcolors.FAIL
             pcurrency = f"{self.symbol.split('/')[0]} " if use_shares else "$"
             print(f"{pcolor}Trade placed at {datetime.now()} - {pcurrency}{value} - {order_type}{bcolors.DEFAULT}")
             
+            return True
+            
         except Exception as e:
             print(bcolors.FAIL + f"Failed to place order: {str(e)}" + bcolors.DEFAULT)
-            raise
+            return False
 
     def buy_max(self) -> None:
         try:
-            self.place_order(
-                self.get_account_info()['currency_amount'],
-                OrderSide.BUY,
-                use_shares=False
-            )
+            # Update portfolio positions before checking available cash
+            self.portfolio = self.trading_client.get_all_positions()
+            account_info = self.get_account_info()
+            available_cash = float(account_info['currency_amount'])
+            
+            if available_cash >= 10:  # Minimum order size
+                # Place the order and check if it was successful
+                if self.place_order(
+                    available_cash,
+                    OrderSide.BUY,
+                    use_shares=False
+                ):
+                    # Only update portfolio if order was successful
+                    self.portfolio = self.trading_client.get_all_positions()
+                else:
+                    print(bcolors.WARNING + "Buy order was not successful" + bcolors.DEFAULT)
+            else:
+                print(bcolors.WARNING + f"Insufficient funds for buy order. Available: ${available_cash}" + bcolors.DEFAULT)
         except Exception as e:
             print(bcolors.WARNING + f"Buy order failed: {str(e)}" + bcolors.DEFAULT)
 
@@ -198,15 +228,25 @@ class RealTrading:
         try:
             current_position = self.get_positions()[0]
             try:
+                # Round down to 8 decimal places to ensure we don't exceed available balance
+                shares = round(current_position['shares'], 9)
+                if shares <= 0:
+                    print(bcolors.WARNING + "No shares available to sell" + bcolors.DEFAULT)
+                    return
+                    
                 self.place_order(
-                    current_position['shares'],
+                    shares,
                     OrderSide.SELL,
                     use_shares=True
                 )
             except Exception as e:
                 if current_position['value'] >= 200000:
                     print(bcolors.WARNING + "Order too large, selling maximum allowed amount" + bcolors.DEFAULT)
-                    shares_to_sell = 200000 / current_position['asset_price']
+                    # Round down to 8 decimal places for the maximum sell amount
+                    shares_to_sell = round(200000 / current_position['asset_price'], 8)
+                    if shares_to_sell <= 0:
+                        print(bcolors.WARNING + "No shares available to sell" + bcolors.DEFAULT)
+                        return
                     self.place_order(shares_to_sell, OrderSide.SELL, use_shares=True)
                     print(bcolors.FAIL + "Sold maximum amount of shares" + bcolors.DEFAULT)
         except Exception as e:
@@ -233,11 +273,12 @@ class RealTrading:
         while True:
             try:
                 current_time = datetime.now()
-                print(f"Current time: {current_time}")
+                print(f"Current time: {current_time} | Last Updated: {self.ohlcv['Datetime'].iloc[-1]}")
                 
                 self.load_data()
                 self.custom_scalper()
-                countdown(45)
+                countdown(5)
+                print('\n')
                 
             except Exception as e:
                 print(bcolors.FAIL + f"Error in auto_trade: {str(e)}" + bcolors.DEFAULT)
