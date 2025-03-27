@@ -451,8 +451,11 @@ class TradingEnvironment:
                                marker=dict(color='green', size=5, symbol='circle')))
         fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode='markers', name='Sell', 
                                marker=dict(color='red', size=5, symbol='circle')))
+        
+        summary = self.get_summary()
+        formatted_summary = f"PnL: {summary['PnL']:.2f}% | Max DD: {summary['Max DD']:.2f}% | PF: {summary['PF']:.2f} | RR Ratio:{summary['RR Ratio']:.2f} | P%/T Ratio: {summary['PT Ratio']:.2f}% | WR: {summary['WR']:.2f} | Optimal WR: {summary['Optimal WR']:.2f} | Total Volume: {summary['Total Volume']:.2f} | Total Trades: {summary['Total Trades']} | Gains: {summary['Gains']} | Losses: {summary['Losses']}"
 
-        fig.update_layout(title=f"Portfolio Performance {self.instance_name} | {self.get_summary()}", xaxis_title='Time', yaxis_title='Profit/Loss (%)')
+        fig.update_layout(title=f"Portfolio Performance {self.instance_name} | {formatted_summary}", xaxis_title='Time', yaxis_title='Profit/Loss (%)')
         if show_graph:
             fig.show()
         return fig
@@ -468,7 +471,7 @@ class BacktestEnvironment:
     
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
-            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=10, interval='1m', age_days=0) #set env defaults here
+            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=29, interval='15m', age_days=0) #set env defaults here
             self._add_environment(default_env)
 
     ### BUILTIN STRATEGIES ###
@@ -487,11 +490,11 @@ class BacktestEnvironment:
     def RSI(self, env: TradingEnvironment, context, current_ohlcv):
         current_close = current_ohlcv['Close']
 
-        rsi = self._calculate_rsi(context, 28)
+        rsi = _calculate_rsi(context, 28)
         current_rsi = rsi.iloc[-1]
 
         if current_rsi < 30:
-            env.portfolio.buy(self.current_symbol, 0.1, current_close, env.get_current_timestamp())
+            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
         elif current_rsi > 70:
             env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
@@ -544,26 +547,37 @@ class BacktestEnvironment:
             env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
     def Custom_Scalper(self, env: TradingEnvironment, context, current_ohlcv):
-        """Basic strategy that buys when current close is higher that prev close. STD is used to stop out in volatile markets. Performs well in 1m."""
-        current_close = current_ohlcv['Close']
+        try:
+            next_open = env.data[self.current_symbol].iloc[env.current_index+1]['Open']
+        except:
+            return
 
+        """Basic strategy that buys when current close is higher that prev close. STD is used to stop out in volatile markets. Performs well in 1m."""
+        current_close = context['Close'].iloc[-1]
+        prev_close = context['Close'].iloc[-2]
+        
         std = _calculate_std(context, 5)
         current_std = std.iloc[-1]
-        prev_close = context['Close'].iloc[-2]
         
         price_change_pct = ((current_close - prev_close) / prev_close) * 100
 
         std_threshold = 0.01
         pct_threshold = 0.05
         
-        buy_conditions = [price_change_pct > pct_threshold, current_std > std_threshold]
-        sell_conditions = [price_change_pct < -pct_threshold]
+        buy_conditions = [
+            price_change_pct > pct_threshold,
+            current_std > std_threshold
+        ]
+        
+        sell_conditions = [
+            price_change_pct < -pct_threshold
+        ]
 
         if all(buy_conditions):
-            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
+            env.portfolio.buy_max(self.current_symbol, next_open, env.get_current_timestamp())
         elif all(sell_conditions):
-            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
-            
+            env.portfolio.sell_max(self.current_symbol, next_open, env.get_current_timestamp())
+
     def Perfect(self, env, context, current_ohlcv):
         #perfect strategy
         index = env.current_index
@@ -609,5 +623,6 @@ class BacktestEnvironment:
 
         return output_dict
 
-# backtest = BacktestEnvironment()
-# backtest.run([backtest.Custom_Scalper])
+backtest = BacktestEnvironment()
+backtest.run([backtest.Custom_Scalper], show_graph=True)
+print(backtest.environments['Custom_Scalper'].portfolio.total_value)
