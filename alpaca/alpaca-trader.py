@@ -104,34 +104,6 @@ class RealTrading:
         raw_std = self.ohlcv['Close'].rolling(window=period).std()
         return (raw_std - raw_std.min()) / (raw_std.max() - raw_std.min())
 
-    def custom_scalper(self) -> None:
-        try:
-            current_close = self.ohlcv['Close'].iloc[-1]
-            prev_close = self.ohlcv['Close'].iloc[-2]
-            
-            std = self._calculate_std(5)
-            current_std = std.iloc[-1]
-            
-            price_change_pct = ((current_close - prev_close) / prev_close) * 100
-            
-            buy_conditions = [
-                price_change_pct > 0.05,
-                current_std > 0.01
-            ]
-            
-            sell_conditions = [
-                price_change_pct < -0.05
-            ]
-            
-            if all(buy_conditions):
-                self.buy_max()
-            elif all(sell_conditions):
-                self.sell_max()
-                
-        except Exception as e:
-            print(bcolors.FAIL + f"Error in custom_scalper: {str(e)}" + bcolors.DEFAULT)
-            traceback.print_exc()
-
     def get_positions(self, verbose: bool = False) -> List[Dict]:
         positions = []
         for position in self.portfolio:
@@ -198,7 +170,7 @@ class RealTrading:
             return True
             
         except Exception as e:
-            print(bcolors.FAIL + f"Failed to place order: {str(e)}" + bcolors.DEFAULT)
+            print(bcolors.WARNING + f"Failed to place order: {str(e)}" + bcolors.DEFAULT)
             return False
 
     def buy_max(self) -> None:
@@ -227,6 +199,7 @@ class RealTrading:
     def sell_max(self) -> None:
         try:
             current_position = self.get_positions()[0]
+            print(current_position)
             try:
                 # Round down to 8 decimal places to ensure we don't exceed available balance
                 shares = round(current_position['shares'], 9)
@@ -268,12 +241,39 @@ class RealTrading:
         
         fig.show()
 
+    def custom_scalper(self) -> None:
+        try:
+            current_close = self.ohlcv['Close'].iloc[-1]
+            prev_close = self.ohlcv['Close'].iloc[-2]
+            
+            std = self._calculate_std(5)
+            current_std = std.iloc[-1]
+            
+            price_change_pct = ((current_close - prev_close) / prev_close) * 100
+            
+            buy_conditions = [
+                price_change_pct > 0.05,
+                current_std > 0.01
+            ]
+            
+            sell_conditions = [
+                price_change_pct < -0.05
+            ]
+            
+            if all(buy_conditions):
+                self.place_order(2500, OrderSide.BUY, use_shares=False)
+            elif all(sell_conditions):
+                self.sell_max()
+                
+        except Exception as e:
+            print(bcolors.FAIL + f"Error in custom_scalper: {str(e)}" + bcolors.DEFAULT)
+            traceback.print_exc()
+    
     def auto_trade(self) -> None:
         print("Starting automated trading\n")
         while True:
             try:
-                current_time = datetime.now()
-                print(f"Current time: {current_time} | Last Updated: {self.ohlcv['Datetime'].iloc[-1]}")
+                print(f"Last Updated: {self.ohlcv['Datetime'].iloc[-1]} | Account Balance: {self.get_account_info()['portfolio_value']}")
                 
                 self.load_data()
                 self.custom_scalper()

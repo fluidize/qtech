@@ -49,7 +49,7 @@ def _calculate_atr(context, period=14):
     return atr
 
 def _calculate_supertrend(context, period=14):
-    atr = self._calculate_atr(context, period=period)
+    atr = _calculate_atr(context, period=period)
     multiplier = 3.0
     
     hl2 = (context['High'] + context['Low']) / 2
@@ -289,7 +289,7 @@ class TradingEnvironment:
             self.data[symbol] = self.data[symbol].iloc[-min_length:]
             
         print(f"Fetched {min_length} data points for each symbol")
-        
+
     def create_ohlcv_chart(self) -> None:
         fig = go.Figure(data=[go.Candlestick(x=self.data[self.symbols[0]]['Datetime'],
                                             open=self.data[self.symbols[0]]['Open'],
@@ -298,7 +298,7 @@ class TradingEnvironment:
                                             close=self.data[self.symbols[0]]['Close'])])
         
         fig.update_layout(
-            title=f'{self.symbol} Price Chart',
+            title=f'{self.symbols[0]} Price Chart',
             yaxis_title='Price',
             xaxis_title='Time',
             template='plotly_dark'
@@ -562,11 +562,6 @@ class BacktestEnvironment:
             env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
     def Custom_Scalper(self, env: TradingEnvironment, context, current_ohlcv):
-        try:
-            next_open = env.data[self.current_symbol].iloc[env.current_index+1]['Open']
-        except:
-            return
-
         """Basic strategy that buys when current close is higher that prev close. STD is used to stop out in volatile markets. Performs well in 1m."""
         current_close = context['Close'].iloc[-1]
         prev_close = context['Close'].iloc[-2]
@@ -589,9 +584,9 @@ class BacktestEnvironment:
         ]
 
         if all(buy_conditions):
-            env.portfolio.buy_max(self.current_symbol, next_open, env.get_current_timestamp())
+            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
         elif all(sell_conditions):
-            env.portfolio.sell_max(self.current_symbol, next_open, env.get_current_timestamp())
+            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
     def Perfect(self, env, context, current_ohlcv):
         #perfect strategy
@@ -609,8 +604,8 @@ class BacktestEnvironment:
         self.add_strategy_environments(strategies)
         for env in self.environments.values():
             env.fetch_data()
+            env.create_ohlcv_chart()
         print("Starting Backtest")
-
         total_steps = 0
         for env in self.environments.values():
             total_steps += len(env.data[env.symbols[0]])
