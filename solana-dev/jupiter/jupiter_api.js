@@ -1,8 +1,22 @@
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
 import { Transaction, Message, PublicKey, Keypair, VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 import fetch from 'node-fetch';
-import promptSync from 'prompt-sync';
 
+const app = express();
+
+const port = process.argv[2] || process.env.PORT || 8080;
+
+if (isNaN(port) || port < 0 || port > 65535) {
+    console.error('Invalid port number. Please provide a number between 0 and 65535');
+    process.exit(1);
+}
+
+// Middleware
+app.use(express.json());
+app.use(cors());
 
 class JupiterSwap {
     constructor(walletPrivateKey, walletAddress) {
@@ -23,14 +37,11 @@ class JupiterSwap {
     }
 
     async getOrder(inputMint, outputMint, amount) {
-        // get decimals here
         const tokenInfoResponse = await (
-            await fetch('https://api.jup.ag/tokens/v1/token/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN')
+            await fetch(`https://api.jup.ag/tokens/v1/token/${inputMint}`)
         ).json();
 
-        const decimals = tokenInfoResponse.decimals
-        console.log(decimals)
-
+        const decimals = tokenInfoResponse.decimals;
         const url = `https://api.jup.ag/ultra/v1/order?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount*Math.pow(10,decimals)}&taker=${this.walletAddress}`;
         const response = await fetch(url);
         return await response.json();
@@ -40,11 +51,7 @@ class JupiterSwap {
         try {
             console.log('Using signer public key:', this.signerKeypair.publicKey.toString());
             
-            console.log('Fetching transaction from Jupiter...');
             const orderResponse = await this.getOrder(inputMint, outputMint, amount);
-            console.log('Order response:', orderResponse);
-
-            console.log('Signing transaction...');
             const signedTransactionBase64 = await this.signTransaction(orderResponse.transaction);
             
             const executeResponse = await (
@@ -60,14 +67,14 @@ class JupiterSwap {
                 })
             ).json();
 
-            console.log('Transaction Sent!');
-
             if (executeResponse.signature) {
-                console.log('Swap successful:', JSON.stringify(executeResponse, null, 2));
-                console.log(`https://solscan.io/tx/${executeResponse.signature}`);
-                return executeResponse;
+                return {
+                    success: true,
+                    signature: executeResponse.signature,
+                    transactionUrl: `https://solscan.io/tx/${executeResponse.signature}`,
+                    ...executeResponse
+                };
             } else {
-                console.error('Swap failed:', JSON.stringify(executeResponse, null, 2));
                 throw new Error('Swap failed');
             }
         } catch (error) {
@@ -77,23 +84,46 @@ class JupiterSwap {
     }
 }
 
-// sol So11111111111111111111111111111111111111112
-// usdc EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-
-const main = async () => {
-    const prompt = promptSync();
-    const WALLET_INFO = prompt("WALLET INFO (private,public): ").split(",")
-
-    const WALLET_PRIVATE_KEY = WALLET_INFO[0];
-    const WALLET_ADDRESS = WALLET_INFO[1];
-
-    const jupiterSwap = new JupiterSwap(WALLET_PRIVATE_KEY, WALLET_ADDRESS);
-    
+app.post('/swap', async (req, res) => {
     try {
-        await jupiterSwap.executeSwap("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "So11111111111111111111111111111111111111112", 5);
-    } catch (error) {
-        console.error('Main execution failed:', error);
-    }
-};
+        const { inputMint, outputMint, amount, walletAddress, walletPrivateKey } = req.body;
 
-main();
+        if (!inputMint || !outputMint || !amount || !walletPrivateKey || !walletAddress) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required parameters'
+            });
+        }
+
+        if (isNaN(amount) || amount <= 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Amount must be a positive number'
+            });
+        }
+
+        const jupiterSwap = new JupiterSwap(walletPrivateKey, walletAddress);
+        const result = await jupiterSwap.executeSwap(inputMint, outputMint, amount);
+        
+        res.json(result);
+    } catch (error) {
+        console.error('Swap API error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Internal server error'
+        });
+    }
+});
+
+app.get('/wallet/:wallet_addr', async (req, res) => {
+    const { wallet_addr } = req.params;
+    res.send(`${wallet_addr}`)
+});
+
+app.get('/', (req, res) => {
+    res.json({ status: 'healthy' });
+});
+
+app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+}); 
