@@ -604,7 +604,7 @@ class BacktestEnvironment:
         self.add_strategy_environments(strategies)
         for env in self.environments.values():
             env.fetch_data()
-            env.create_ohlcv_chart()
+            # env.create_ohlcv_chart()
         print("Starting Backtest")
         total_steps = 0
         for env in self.environments.values():
