@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Launch Current File",
+            "program": "${file}",
+            "console": "integratedTerminal", // Use the JavaScript Debug Terminal
+            "runtimeExecutable": "node", // Ensure it runs as Node.js
+            "internalConsoleOptions": "neverOpen"
+          },
+        {
+            "name": "Streamlit: UI.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "C:\\Users\\fluidize\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\streamlit.exe",
+            "args": ["run", "C:\\Users\\fluidize\\Documents\\GitHub\\fintech\\brains\\time_series\\UI.py"],
+            "console": "integratedTerminal"
+        }
+    ]
+}

@@ -486,7 +486,7 @@ class BacktestEnvironment:
     
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
-            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=29, interval='15m', age_days=0) #set env defaults here
+            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=1, interval='1m', age_days=0) #set env defaults here
             self._add_environment(default_env)
 
     ### BUILTIN STRATEGIES ###
@@ -572,7 +572,7 @@ class BacktestEnvironment:
         price_change_pct = ((current_close - prev_close) / prev_close) * 100
 
         std_threshold = 0.01
-        pct_threshold = 0.05
+        pct_threshold = 0.055
         
         buy_conditions = [
             price_change_pct > pct_threshold,
