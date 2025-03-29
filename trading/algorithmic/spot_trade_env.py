@@ -303,7 +303,7 @@ class TradingEnvironment:
         
         # Context storage
         self.context: Dict[str, pd.DataFrame] = {}  # Current context window for each symbol
-        self.extended_context = False  # Whether to keep growing context or maintain fixed size
+        self.extended_context = True  # Whether to keep growing context or maintain fixed size
 
     def fetch_data(self, yfinance: bool = False):
         if yfinance:
@@ -336,39 +336,50 @@ class TradingEnvironment:
             for symbol in self.symbols:
                 self.data[symbol] = self.data[symbol].iloc[-min_length:]
         else:
-            #KUCOIN API
+            #KUCOIN API | https://www.kucoin.com/docs/rest/spot-trading/market-data/get-klines
+            #MAX 1500 BAR PER REQ 1m GRANULARITY
             for symbol in self.symbols:
-                # Create empty DataFrame with proper columns
                 data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
+                times = []
                 
-                # Set up API parameters for KuCoin
-                params = {
-                    "symbol": "SOL-USDT",
-                    "type": "1min",
-                    "startAt": str(int((datetime.now() - timedelta(days=7)).timestamp())),
-                    "endAt": str(int(datetime.now().timestamp()))
-                }
+                for x in range(self.chunks):
+                    chunksize = 1500  # Fixed chunk size for KuCoin
+                    end_time = datetime.now() - timedelta(minutes=chunksize*x)
+                    start_time = end_time - timedelta(minutes=chunksize)
+                    
+                    params = {
+                        "symbol": "SOL-USDT",
+                        "type": "1min",
+                        "startAt": str(int(start_time.timestamp())),
+                        "endAt": str(int(end_time.timestamp()))
+                    }
+                    
+                    request = requests.get("https://api.kucoin.com/api/v1/market/candles", params=params).json()
+                    request_data = request["data"]  # list of lists
+                    
+                    records = []
+                    for dochltv in request_data:
+                        records.append({
+                            "Datetime": dochltv[0],
+                            "Open": float(dochltv[1]),
+                            "Close": float(dochltv[2]),
+                            "High": float(dochltv[3]),
+                            "Low": float(dochltv[4]),
+                            "Volume": float(dochltv[6])
+                        })
+                    
+                    temp_data = pd.DataFrame(records)
+                    data = pd.concat([data, temp_data])
+                    times.append(start_time)
+                    times.append(end_time)
                 
-                # Fetch data from KuCoin API
-                request = requests.get("https://api.kucoin.com/api/v1/market/candles", params=params).json()
-                request_data = request["data"]  # list of lists
+                earliest = min(times)
+                latest = max(times)
+                difference = latest - earliest
+                print(f"{symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
                 
-                # Create a list of dictionaries for DataFrame construction
-                records = []
-                for dochltv in request_data:
-                    records.append({
-                        "Datetime": dochltv[0],
-                        "Open": float(dochltv[1]),
-                        "Close": float(dochltv[2]),
-                        "High": float(dochltv[3]),
-                        "Low": float(dochltv[4]),
-                        "Volume": float(dochltv[6])
-                    })
-                
-                # Create and process DataFrame
-                data = pd.DataFrame(records)
                 data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
-                data.sort_values('Datetime', inplace=True)  # Ensure chronological order
+                data.sort_values('Datetime', inplace=True)
                 data.reset_index(drop=True, inplace=True)
                 
                 self.data[symbol] = data
@@ -521,7 +532,6 @@ class TradingEnvironment:
         elif signals.get('sell', False):
             self.portfolio.sell_max(current_symbol, current_price, self.get_current_timestamp())
 
-
     def create_performance_plot(self, show_graph: bool = False):
         fig = go.Figure()
         
@@ -595,7 +605,7 @@ class BacktestEnvironment:
     
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
-            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=40, chunks=5, interval='1m', age_days=0) #set env defaults here
+            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=40, chunks=10, interval='1m', age_days=0) #set env defaults here
             self._add_environment(default_env)
 
     def SuperTrend(self, env: TradingEnvironment, context, current_ohlcv):
@@ -667,7 +677,7 @@ class BacktestEnvironment:
     def run(self, strategies: List, verbose: bool = False, show_graph: bool = False):
         self.add_strategy_environments(strategies)
         for env in self.environments.values():
-            env.fetch_data()
+            env.fetch_data(yfinance=False)
             # env.create_ohlcv_chart()
             env.initialize_context()
         print("Starting Backtest")
