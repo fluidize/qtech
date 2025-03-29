@@ -303,9 +303,10 @@ class TradingEnvironment:
         
         # Context storage
         self.context: Dict[str, pd.DataFrame] = {}  # Current context window for each symbol
-        self.extended_context = True  # Whether to keep growing context or maintain fixed size
+        self.extended_context = False  # Whether to keep growing context or maintain fixed size
 
     def fetch_data(self, yfinance: bool = False):
+        print("[green]DOWNLOADING DATA[/green]")
         if yfinance:
             for symbol in self.symbols:
                 data = pd.DataFrame()
@@ -314,7 +315,7 @@ class TradingEnvironment:
                     chunksize = 1
                     start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=self.age_days)
                     end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=self.age_days)
-                    temp_data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=self.interval)
+                    temp_data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=self.interval, progress=False)
                     data = pd.concat([data, temp_data])
                     times.append(start_date)
                     times.append(end_date)
@@ -343,7 +344,7 @@ class TradingEnvironment:
                 times = []
                 
                 for x in range(self.chunks):
-                    chunksize = 1500  # Fixed chunk size for KuCoin
+                    chunksize = 1440  # 1d of 1m data
                     end_time = datetime.now() - timedelta(minutes=chunksize*x)
                     start_time = end_time - timedelta(minutes=chunksize)
                     
@@ -383,7 +384,8 @@ class TradingEnvironment:
                 data.reset_index(drop=True, inplace=True)
                 
                 self.data[symbol] = data
-                print(f"Fetched {len(data)} data points for {symbol}")
+            
+        print(f"Fetched {len(data)} data points for {symbol}")
 
     def initialize_context(self):
         """Initialize the context windows for all symbols."""
@@ -605,12 +607,77 @@ class BacktestEnvironment:
     
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
-            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=40, chunks=10, interval='1m', age_days=0) #set env defaults here
+            default_env = TradingEnvironment(symbols=['SOL-USD'],
+                                             instance_name=strategy.__name__, 
+                                             initial_capital=40, 
+                                             chunks=10, 
+                                             interval='1m', 
+                                             age_days=0
+                                             ) #set env defaults here
             self._add_environment(default_env)
+    
+    def Perfect(self, env, context, current_ohlcv):
+        #perfect strategy
+        index = env.current_index
+        try:
+            if context['Close'].iloc[-1] < env.data[env.symbols[0]]['Close'].iloc[index+1]:
+                env.portfolio.buy_max(self.current_symbol, current_ohlcv['Close'], env.get_current_timestamp())
+            elif context['Close'].iloc[-1] > env.data[env.symbols[0]]['Close'].iloc[index+1]:
+                env.portfolio.sell_max(self.current_symbol, current_ohlcv['Close'], env.get_current_timestamp())
+        except:
+            pass
+
+    def Reversion(self, env: TradingEnvironment, context, current_ohlcv):
+        ma50 = context['Close'].rolling(window=50).mean().iloc[-1]
+        ma100 = context['Close'].rolling(window=100).mean().iloc[-1]
+        
+        current_close = current_ohlcv['Close']
+        macd_line, signal_line, histogram = _calculate_macd(context)
+
+        current_macd_line = macd_line.iloc[-1]
+        current_signal_line = signal_line.iloc[-1]
+        current_histogram = histogram.iloc[-1]
+
+        buy_conditions = [ #entry bearish
+            ma50 < ma100,
+            current_macd_line > current_signal_line
+        ]
+        sell_conditions = [
+            ma50 > ma100,
+            current_macd_line < current_signal_line
+        ]
+
+        if all(buy_conditions):
+            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
+        elif all(sell_conditions):
+            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
+
+    def RSI(self, env: TradingEnvironment, context, current_ohlcv):
+        current_close = current_ohlcv['Close']
+
+        rsi = _calculate_rsi(context, 28)
+        current_rsi = rsi.iloc[-1]
+
+        if current_rsi < 30:
+            env.portfolio.buy(self.current_symbol, 0.1, current_close, env.get_current_timestamp())
+        elif current_rsi > 70:
+            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
+
+    def MACD(self, env: TradingEnvironment, context, current_ohlcv):
+        current_close = current_ohlcv['Close']
+
+        macd_line, signal_line, histogram = _calculate_macd(context)
+        current_macd_line = macd_line.iloc[-1]
+        current_signal_line = signal_line.iloc[-1]
+        current_histogram = histogram.iloc[-1]
+        if current_macd_line > current_signal_line:
+            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
+        elif current_macd_line < current_signal_line:
+            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
     def SuperTrend(self, env: TradingEnvironment, context, current_ohlcv):
         current_close = current_ohlcv['Close']
-        supertrend = self._calculate_supertrend(context)
+        supertrend = _calculate_supertrend(context, 7)
         current_supertrend = supertrend.iloc[-1]
         prev_close = context['Close'].iloc[-2]
         prev_supertrend = supertrend.iloc[-2]
@@ -645,34 +712,27 @@ class BacktestEnvironment:
         sma_long = context['Close'].rolling(window=20).mean().iloc[-1]
         bullish = sma_short > sma_long
 
-        std_threshold = 0.95
-        pct_threshold = 0.00
+        std_threshold = 0.3
+        pct_threshold = 0.05
         
         buy_conditions = [
             price_change_pct > pct_threshold,
-            current_close > sma_long
+            current_close > sma_long,
+            current_std < std_threshold,
+            bullish
         ]
         
         sell_conditions = [
             price_change_pct < -pct_threshold,
-            current_close < sma_short
+            not bullish
         ]
 
         if all(buy_conditions):
             env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
-        elif any(sell_conditions):
+        elif all(sell_conditions):
             env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
-
-    def Perfect(self, env, context, current_ohlcv):
-        #perfect strategy
-        index = env.current_index
-        try:
-            if context['Close'].iloc[-1] < env.data[env.symbols[0]]['Close'].iloc[index+1]:
-                env.portfolio.buy_max(self.current_symbol, current_ohlcv['Close'], env.get_current_timestamp())
-            elif context['Close'].iloc[-1] > env.data[env.symbols[0]]['Close'].iloc[index+1]:
-                env.portfolio.sell_max(self.current_symbol, current_ohlcv['Close'], env.get_current_timestamp())
-        except:
-            pass
+    def NN(self, env: TradingEnvironment, context, current_ohlcv):
+        ...
 
     def run(self, strategies: List, verbose: bool = False, show_graph: bool = False):
         self.add_strategy_environments(strategies)
@@ -709,4 +769,4 @@ class BacktestEnvironment:
         return output_dict
 
 backtest = BacktestEnvironment()
-backtest.run([backtest.Custom_Scalper], show_graph=True)
+backtest.run([backtest.Reversion], show_graph=True)
