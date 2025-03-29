@@ -6,11 +6,51 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 from rich import print
 from tqdm import tqdm
+import requests
 import plotly.graph_objects as go
 
 
 import scipy.stats as stats
 # from time_series.close_predictor.close_only import ModelTesting
+# f2a184bce09576aff1042c190719fa663b5c3e0f06be78608e5097ee70762292
+
+def _calculate_adx(context, period=14):
+    high = context['High']
+    low = context['Low']
+    close = context['Close']
+    
+    # Calculate True Range
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.Series([max(a, b, c) for a, b, c in zip(tr1, tr2, tr3)])
+    
+    # Calculate +DM and -DM
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+    
+    plus_dm = pd.Series(0.0, index=context.index)
+    minus_dm = pd.Series(0.0, index=context.index)
+    
+    plus_dm[up_move > down_move] = up_move[up_move > down_move]
+    minus_dm[down_move > up_move] = down_move[down_move > up_move]
+    
+    # Calculate smoothed TR, +DM, and -DM
+    smoothed_tr = tr.rolling(window=period).mean()
+    smoothed_plus_dm = plus_dm.rolling(window=period).mean()
+    smoothed_minus_dm = minus_dm.rolling(window=period).mean()
+    
+    # Calculate +DI and -DI
+    plus_di = 100 * (smoothed_plus_dm / smoothed_tr)
+    minus_di = 100 * (smoothed_minus_dm / smoothed_tr)
+    
+    # Calculate DX
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    
+    # Calculate ADX (smoothed DX)
+    adx = dx.rolling(window=period).mean()
+    
+    return adx, plus_di, minus_di
 
 def _calculate_rsi(context, period=14):
     delta_p = context['Close'].diff()
@@ -245,135 +285,180 @@ class Portfolio:
         return self.sell(symbol, quantity, price, timestamp, verbose)
 
 class TradingEnvironment:
-    def __init__(self,  symbols: List[str], instance_name: str = 'default', initial_capital: float = 10000.0, chunks: int = 5, interval: str = '5m', age_days: int = 10):
+    def __init__(self, symbols: List[str], instance_name: str = 'default', initial_capital: float = 10000.0, chunks: int = 5, interval: str = '5m', age_days: int = 10):
         self.instance_name = instance_name
         self.symbols = symbols
         self.chunks = chunks
         self.interval = interval
         self.age_days = age_days
         self.portfolio = Portfolio(initial_capital)
-        self.data: Dict[str, pd.DataFrame] = {}
-        self.current_index = 0
-        self.context_length = 200
-        self.context: Dict[str, pd.DataFrame] = {}  # Store context for each symbol
-        self.extended_context = False
+        
+        # Data storage
+        self.data: Dict[str, pd.DataFrame] = {}  # Full historical data for each symbol
+        self.context_length = 200  # Number of historical points needed for indicators
+        
+        # Trading state
+        self.current_index = 0  # Current position in the data
+        self.is_initialized = False  # Flag to track if context is properly initialized
+        
+        # Context storage
+        self.context: Dict[str, pd.DataFrame] = {}  # Current context window for each symbol
+        self.extended_context = False  # Whether to keep growing context or maintain fixed size
 
-    def fetch_data(self):
-        for symbol in self.symbols:
-            data = pd.DataFrame()
-            times = []
-            for x in range(self.chunks):
-                chunksize = 1
-                start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=self.age_days)
-                end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=self.age_days)
-                temp_data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=self.interval)
-                data = pd.concat([data, temp_data])
-                times.append(start_date)
-                times.append(end_date)
+    def fetch_data(self, yfinance: bool = False):
+        if yfinance:
+            for symbol in self.symbols:
+                data = pd.DataFrame()
+                times = []
+                for x in range(self.chunks):
+                    chunksize = 1
+                    start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=self.age_days)
+                    end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=self.age_days)
+                    temp_data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=self.interval)
+                    data = pd.concat([data, temp_data])
+                    times.append(start_date)
+                    times.append(end_date)
+                
+                earliest = min(times)
+                latest = max(times)
+                difference = latest - earliest
+                print(f"{symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
+
+                data.sort_index(inplace=True)
+                data.columns = data.columns.droplevel(1)
+                data.reset_index(inplace=True)
+                data.rename(columns={'index': 'Datetime'}, inplace=True)
+                data.rename(columns={'Date': 'Datetime'}, inplace=True)
+                self.data[symbol] = pd.DataFrame(data)  
+                self.context[symbol] = self.data[symbol].iloc[:self.context_length].copy()
+
+            min_length = min(len(df) for df in self.data.values())
+            for symbol in self.symbols:
+                self.data[symbol] = self.data[symbol].iloc[-min_length:]
+        else:
+            #KUCOIN API
+            for symbol in self.symbols:
+                # Create empty DataFrame with proper columns
+                data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
+                
+                # Set up API parameters for KuCoin
+                params = {
+                    "symbol": "SOL-USDT",
+                    "type": "1min",
+                    "startAt": str(int((datetime.now() - timedelta(days=7)).timestamp())),
+                    "endAt": str(int(datetime.now().timestamp()))
+                }
+                
+                # Fetch data from KuCoin API
+                request = requests.get("https://api.kucoin.com/api/v1/market/candles", params=params).json()
+                request_data = request["data"]  # list of lists
+                
+                # Create a list of dictionaries for DataFrame construction
+                records = []
+                for dochltv in request_data:
+                    records.append({
+                        "Datetime": dochltv[0],
+                        "Open": float(dochltv[1]),
+                        "Close": float(dochltv[2]),
+                        "High": float(dochltv[3]),
+                        "Low": float(dochltv[4]),
+                        "Volume": float(dochltv[6])
+                    })
+                
+                # Create and process DataFrame
+                data = pd.DataFrame(records)
+                data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
+                data.sort_values('Datetime', inplace=True)  # Ensure chronological order
+                data.reset_index(drop=True, inplace=True)
+                
+                self.data[symbol] = data
+                print(f"Fetched {len(data)} data points for {symbol}")
+
+    def initialize_context(self):
+        """Initialize the context windows for all symbols."""
+        if not self.data:
+            raise ValueError("No data available. Call fetch_data() first.")
             
-            earliest = min(times)
-            latest = max(times)
-            difference = latest - earliest
-            print(f"{symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
-
-            data.sort_index(inplace=True)
-            data.columns = data.columns.droplevel(1)
-            data.reset_index(inplace=True)
-            data.rename(columns={'index': 'Datetime'}, inplace=True)
-            data.rename(columns={'Date': 'Datetime'}, inplace=True)
-            self.data[symbol] = pd.DataFrame(data)  
+        for symbol in self.symbols:
+            if len(self.data[symbol]) < self.context_length:
+                raise ValueError(f"Insufficient data for {symbol}. Need at least {self.context_length} points.")
+            
+            # Initialize context with first context_length rows
             self.context[symbol] = self.data[symbol].iloc[:self.context_length].copy()
+        
+        self.current_index = self.context_length
+        self.is_initialized = True
+        print("Context initialized successfully")
 
-        min_length = min(len(df) for df in self.data.values())
-        for symbol in self.symbols:
-            self.data[symbol] = self.data[symbol].iloc[-min_length:]
+    def update_context(self):
+        """Update the context windows with new data."""
+        if not self.is_initialized:
+            raise ValueError("Context not initialized. Call initialize_context() first.")
             
-        print(f"Fetched {min_length} data points for each symbol")
+        for symbol in self.symbols:
+            if self.current_index >= len(self.data[symbol]):
+                continue
+                
+            current_data = self.data[symbol].iloc[self.current_index]
+            
+            if self.extended_context:
+                # Growing context mode - append new data
+                self.context[symbol] = pd.concat([
+                    self.context[symbol],
+                    pd.DataFrame([current_data])
+                ]).reset_index(drop=True)
+            else:
+                # Fixed-size context mode - slide window
+                self.context[symbol] = pd.concat([
+                    self.context[symbol].iloc[1:],
+                    pd.DataFrame([current_data])
+                ]).reset_index(drop=True)
 
-    def create_ohlcv_chart(self) -> None:
-        fig = go.Figure(data=[go.Candlestick(x=self.data[self.symbols[0]]['Datetime'],
-                                            open=self.data[self.symbols[0]]['Open'],
-                                            high=self.data[self.symbols[0]]['High'],
-                                            low=self.data[self.symbols[0]]['Low'],
-                                            close=self.data[self.symbols[0]]['Close'])])
-        
-        fig.update_layout(
-            title=f'{self.symbols[0]} Price Chart',
-            yaxis_title='Price',
-            xaxis_title='Time',
-            template='plotly_dark'
-        )
-        
-        fig.show()
-    def fetch_1d_data(self, days: int = 1095):
-        for symbol in self.symbols:
-            data = yf.download(symbol, start=datetime.now() - timedelta(days=days), end=datetime.now(), interval='1d')
-            data.sort_index(inplace=True)
-            data.columns = data.columns.droplevel(1)
-            data.reset_index(inplace=True)
-            data.rename(columns={'index': 'Datetime'}, inplace=True)
-            data.rename(columns={'Date': 'Datetime'}, inplace=True) #1d data has Date instead of Datetime
-            self.data[symbol] = pd.DataFrame(data)
-            self.context[symbol] = self.data[symbol].iloc[:self.context_length].copy()
-        
-        min_length = min(len(df) for df in self.data.values())
-        for symbol in self.symbols:
-            self.data[symbol] = self.data[symbol].iloc[-min_length:]
+    def step(self) -> bool:
+        """Advance the environment by one step."""
+        if not self.is_initialized:
+            raise ValueError("Context not initialized. Call initialize_context() first.")
             
-        print(f"Fetched {min_length} data points for each symbol")
+        # Check if we've reached the end of the data
+        if self.current_index >= len(self.data[self.symbols[0]]) - 1:
+            return False
+            
+        # Update context with new data
+        self.update_context()
+        
+        # Update portfolio with current prices
+        current_prices = self.get_current_prices()
+        self.portfolio.update_positions(current_prices)
+        self.portfolio.pnl_history.append(self.portfolio.total_profit_loss)
+        self.portfolio.pct_pnl_history.append(self.portfolio.total_profit_loss_pct)
+        
+        # Advance to next index
+        self.current_index += 1
+        return True
     
-    def get_current_symbol(self) -> str:
-        return self.symbols[0]
-    
-    def get_current_timestamp(self) -> datetime:
-        return self.data[self.symbols[0]].iloc[self.current_index]['Datetime']
+    def reset(self):
+        """Reset the environment to its initial state."""
+        self.initialize_context()
+        self.portfolio = Portfolio(self.portfolio.initial_capital)
+        print("Environment reset successfully")
     
     def get_current_prices(self) -> Dict[str, pd.Series]:
+        """Get current prices for all symbols."""
         return {
             symbol: self.data[symbol].iloc[self.current_index]
             for symbol in self.symbols
         }
     
-    def step(self) -> bool:
-        extended_context = self.extended_context
-
-        if self.current_index >= len(self.data[self.symbols[0]]) - 1:
-            return False
-            
-        self.current_index += 1
-        
-        if extended_context:
-            for symbol in self.symbols:
-                current_data = self.data[symbol].iloc[self.current_index]
-                self.context[symbol] = pd.concat([
-                    self.context[symbol],
-                    pd.DataFrame([current_data])
-                ]).reset_index(drop=True)
-        else:
-            for symbol in self.symbols:
-                current_data = self.data[symbol].iloc[self.current_index]
-                self.context[symbol] = pd.concat([
-                    self.context[symbol][-self.context_length+1:],
-                    pd.DataFrame([current_data])
-                ]).reset_index(drop=True)
-        
-        current_prices = self.get_current_prices()
-        self.portfolio.update_positions(current_prices)
-        self.portfolio.pnl_history.append(self.portfolio.total_profit_loss)
-        self.portfolio.pct_pnl_history.append(self.portfolio.total_profit_loss_pct)
-        return True
-    
-    def reset(self):
-        self.current_index = 0
-        self.portfolio = Portfolio(self.portfolio.initial_capital)
-        for symbol in self.symbols:
-            self.context[symbol] = self.data[symbol].iloc[:self.context_length].copy()
+    def get_current_timestamp(self) -> datetime:
+        """Get the current timestamp."""
+        return self.data[self.symbols[0]].iloc[self.current_index]['Datetime']
     
     def get_state(self) -> Dict:
+        """Get the current state of the environment."""
         return {
             'timestamp': self.get_current_timestamp(),
             'prices': self.get_current_prices(),
-            'context': self.context,  # Add context to state
+            'context': self.context,
             'portfolio_value': self.portfolio.total_value,
             'cash': self.portfolio.cash,
             'positions': self.portfolio.positions,
@@ -439,12 +524,23 @@ class TradingEnvironment:
 
     def create_performance_plot(self, show_graph: bool = False):
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=self.data[self.symbols[0]]['Datetime'], y=self.portfolio.pct_pnl_history, mode='lines', name='Strategy %'))
         
-        #price line %
-        start_price = self.data[self.symbols[0]].iloc[0]['Close']
-        start_pct_change = ((self.data[self.symbols[0]]['Close'] - start_price) / start_price) * 100
-        fig.add_trace(go.Scatter(x=self.data[self.symbols[0]]['Datetime'], y=start_pct_change, mode='lines', name='Price %', line=dict(color='orange')))
+        # Calculate strategy performance line
+        # Start from context_length since that's when we begin trading
+        strategy_data = self.data[self.symbols[0]].iloc[self.context_length:]
+        strategy_data = strategy_data.reset_index(drop=True)
+        fig.add_trace(go.Scatter(
+            x=strategy_data['Datetime'], 
+            y=self.portfolio.pct_pnl_history, 
+            mode='lines', 
+            name='Strategy %'
+        ))
+        
+        # Calculate price percentage change line
+        price_data = self.data[self.symbols[0]]
+        start_price = price_data.iloc[0]['Close']
+        start_pct_change = ((price_data['Close'] - start_price) / start_price) * 100
+        fig.add_trace(go.Scatter(x=price_data['Datetime'], y=start_pct_change, mode='lines', name='Price %', line=dict(color='orange')))
         
         # Add buy/sell markers
         buy_x = []
@@ -453,14 +549,19 @@ class TradingEnvironment:
         sell_y = []
         
         for trade in self.portfolio.trade_history:
-            # Find the index in the data that matches the trade timestamp
-            idx = self.data[self.symbols[0]]['Datetime'].searchsorted(trade['timestamp'])
+            trade_time = pd.to_datetime(trade['timestamp'])
+            
+            idx = price_data['Datetime'].searchsorted(trade_time)
+                
+            trade_price = price_data.iloc[idx]['Close']
+            trade_pct_change = ((trade_price - start_price) / start_price) * 100
+                
             if trade['action'] == 'BUY':
-                buy_x.append(trade['timestamp'])
-                buy_y.append(start_pct_change[idx])
+                buy_x.append(trade_time)
+                buy_y.append(trade_pct_change)
             else:  # SELL
-                sell_x.append(trade['timestamp'])
-                sell_y.append(start_pct_change[idx])
+                sell_x.append(trade_time)
+                sell_y.append(trade_pct_change)
         
         fig.add_trace(go.Scatter(x=buy_x, y=buy_y, mode='markers', name='Buy', 
                                marker=dict(color='green', size=5, symbol='circle')))
@@ -470,7 +571,15 @@ class TradingEnvironment:
         summary = self.get_summary()
         formatted_summary = f"PnL: {summary['PnL']:.2f}% | Max DD: {summary['Max DD']:.2f}% | PF: {summary['PF']:.2f} | RR Ratio:{summary['RR Ratio']:.2f} | P%/T Ratio: {summary['PT Ratio']:.2f}% | WR: {summary['WR']:.2f} | Optimal WR: {summary['Optimal WR']:.2f} | Total Volume: {summary['Total Volume']:.2f} | Total Trades: {summary['Total Trades']} | Gains: {summary['Gains']} | Losses: {summary['Losses']}"
 
-        fig.update_layout(title=f"Portfolio Performance {self.instance_name} | {formatted_summary}", xaxis_title='Time', yaxis_title='Profit/Loss (%)')
+        # Update layout with proper margins and height
+        fig.update_layout(
+            title=f"Portfolio Performance {self.instance_name} | {formatted_summary}",
+            xaxis_title='Time',
+            yaxis_title='Profit/Loss (%)',
+            height=800,  # Set a fixed height
+            margin=dict(l=50, r=50, t=100, b=50)  # Add margins
+        )
+        
         if show_graph:
             fig.show()
         return fig
@@ -486,58 +595,8 @@ class BacktestEnvironment:
     
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
-            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=1000, chunks=1, interval='1m', age_days=0) #set env defaults here
+            default_env = TradingEnvironment(symbols=['SOL-USD'],instance_name=strategy.__name__, initial_capital=40, chunks=5, interval='1m', age_days=0) #set env defaults here
             self._add_environment(default_env)
-
-    ### BUILTIN STRATEGIES ###
-
-    def MA(self, env: TradingEnvironment, context, current_ohlcv):
-        ma50 = context['Close'].rolling(window=50).mean().iloc[-1]
-        ma200 = context['Close'].rolling(window=200).mean().iloc[-1]
-
-        current_close = current_ohlcv['Close']
-
-        if ma50 < ma200:
-            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
-        elif ma50 > ma200:
-            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
-
-    def RSI(self, env: TradingEnvironment, context, current_ohlcv):
-        current_close = current_ohlcv['Close']
-
-        rsi = _calculate_rsi(context, 28)
-        current_rsi = rsi.iloc[-1]
-
-        if current_rsi < 30:
-            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
-        elif current_rsi > 70:
-            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
-
-    def MACD(self, env: TradingEnvironment, context, current_ohlcv):
-        current_close = current_ohlcv['Close']
-
-        macd_line, signal_line, histogram = self._calculate_macd(context)
-        current_macd_line = macd_line.iloc[-1]
-        current_signal_line = signal_line.iloc[-1]
-        current_histogram = histogram.iloc[-1]
-        if current_macd_line > current_signal_line and current_histogram > 30:
-            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
-        elif current_macd_line < current_signal_line and current_histogram < -30:
-            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
-
-    def CDF(self, env: TradingEnvironment, context, current_ohlcv):
-        current_close = current_ohlcv['Close']
-        mu, sigma = stats.norm.fit(context['Close'])
-        x = np.linspace(mu - 3*sigma, mu + 3*sigma, 1000)
-        pdf = stats.norm.pdf(x, mu, sigma)
-        cdf = stats.norm.cdf(x, mu, sigma)
-        
-        current_cdf = stats.norm.cdf(current_close, mu, sigma)
-
-        if current_cdf < 0.2:
-            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
-        elif current_cdf > 0.7:
-            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
     def SuperTrend(self, env: TradingEnvironment, context, current_ohlcv):
         current_close = current_ohlcv['Close']
@@ -552,40 +611,46 @@ class BacktestEnvironment:
         elif current_close < current_supertrend and prev_close >= prev_supertrend:
             env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
-    def RNN(self, env: TradingEnvironment, context, current_ohlcv, model):
-        input_data, prediction = model.run(context)
-        current_close = current_ohlcv['Close']
-
-        if prediction > current_close:
-            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
-        else:
-            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
-
-    def Custom_Scalper(self, env: TradingEnvironment, context, current_ohlcv):
-        """Basic strategy that buys when current close is higher that prev close. STD is used to stop out in volatile markets. Performs well in 1m."""
+    def Simple_Scalper(self, env: TradingEnvironment, context, current_ohlcv):
+        """Basic strategy that buys when current close is higher that prev close. Performs well in 1m."""
         current_close = context['Close'].iloc[-1]
         prev_close = context['Close'].iloc[-2]
         
-        std = _calculate_std(context, 5)
-        current_std = std.iloc[-1]
-        
-        price_change_pct = ((current_close - prev_close) / prev_close) * 100
-
-        std_threshold = 0.01
-        pct_threshold = 0.055
-        
-        buy_conditions = [
-            price_change_pct > pct_threshold,
-            current_std > std_threshold
-        ]
-        
-        sell_conditions = [
-            price_change_pct < -pct_threshold
-        ]
+        buy_conditions = [current_close > prev_close]
+        sell_conditions = [current_close < prev_close]
 
         if all(buy_conditions):
             env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
         elif all(sell_conditions):
+            env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
+
+    def Custom_Scalper(self, env: TradingEnvironment, context, current_ohlcv):
+        current_close = context['Close'].iloc[-1]
+        prev_close = context['Close'].iloc[-2]
+        std = _calculate_std(context, 5)
+        current_std = std.iloc[-1]
+        price_change_pct = ((current_close - prev_close) / prev_close) * 100
+
+        sma_short = context['Close'].rolling(window=5).mean().iloc[-1]
+        sma_long = context['Close'].rolling(window=20).mean().iloc[-1]
+        bullish = sma_short > sma_long
+
+        std_threshold = 0.95
+        pct_threshold = 0.00
+        
+        buy_conditions = [
+            price_change_pct > pct_threshold,
+            current_close > sma_long
+        ]
+        
+        sell_conditions = [
+            price_change_pct < -pct_threshold,
+            current_close < sma_short
+        ]
+
+        if all(buy_conditions):
+            env.portfolio.buy_max(self.current_symbol, current_close, env.get_current_timestamp())
+        elif any(sell_conditions):
             env.portfolio.sell_max(self.current_symbol, current_close, env.get_current_timestamp())
 
     def Perfect(self, env, context, current_ohlcv):
@@ -596,7 +661,6 @@ class BacktestEnvironment:
                 env.portfolio.buy_max(self.current_symbol, current_ohlcv['Close'], env.get_current_timestamp())
             elif context['Close'].iloc[-1] > env.data[env.symbols[0]]['Close'].iloc[index+1]:
                 env.portfolio.sell_max(self.current_symbol, current_ohlcv['Close'], env.get_current_timestamp())
-            print(env.portfolio.total_profit_loss_pct)
         except:
             pass
 
@@ -605,10 +669,11 @@ class BacktestEnvironment:
         for env in self.environments.values():
             env.fetch_data()
             # env.create_ohlcv_chart()
+            env.initialize_context()
         print("Starting Backtest")
         total_steps = 0
         for env in self.environments.values():
-            total_steps += len(env.data[env.symbols[0]])
+            total_steps += len(env.data[env.symbols[0]]) - env.context_length
 
         progress_bar = tqdm(total=total_steps)
         while all(env.step() for env in self.environments.values()):
@@ -635,4 +700,3 @@ class BacktestEnvironment:
 
 backtest = BacktestEnvironment()
 backtest.run([backtest.Custom_Scalper], show_graph=True)
-print(backtest.environments['Custom_Scalper'].portfolio.total_value)

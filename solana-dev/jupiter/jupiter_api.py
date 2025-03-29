@@ -9,6 +9,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
     
 class token: #store CAs for easy access
     SOL = 'So11111111111111111111111111111111111111112'
+    WBTC = '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh'
     USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 
 class JupiterAPI:
@@ -44,13 +45,38 @@ class JupiterAPI:
         request = requests.post(self.base_url+path, json=data)
         return request
 
-    def get_wallet(self, wallet_address):
-        wallet_info = requests.get(f"https://api.jup.ag/ultra/v1/balances/{wallet_address}")
-        return wallet_info.json()
+    def get_wallet(self, wallet_address, ):
+        response = requests.get(f"https://api.jup.ag/ultra/v1/balances/{wallet_address}")
+        return response.json()
     
     def get_price(self, contract_address):
-        price_info = requests.get(f"https://api.jup.ag/price/v2?ids={contract_address}") #price for 
-        return price_info.json()
+        if isinstance(contract_address, list):
+            contract_address = ",".join(contract_address)
+
+        response = requests.get(f"https://api.jup.ag/price/v2?ids={contract_address}").json() #price for ca in usdc
+        output_dict = {}
+        for key in response["data"]:
+            if response["data"][key] is None:
+                output_dict[key] = 0
+            else:
+                output_dict[key] = float(response["data"][key]["price"])
+        return output_dict
+    
+    def get_wallet_value(self, wallet_address):
+        wallet_info = self.get_wallet(wallet_address)
+        if 'SOL' in wallet_info:
+            wallet_info[token.SOL] = wallet_info.pop('SOL')
+
+        net_worth = 0
+        
+        for ca in wallet_info:
+            decimal_amount = wallet_info[ca]['uiAmount']
+            token_worth = list(self.get_price(ca).values())[0]
+            net_worth += decimal_amount * token_worth
+        
+        return net_worth
+
+
     
     def buy_max(self, output_mint): # Buy maximum SOL with all USDC
         wallet_info = self.get_wallet(self.wallet_address)
@@ -75,9 +101,8 @@ class JupiterAPI:
         return order.json()
 
 if __name__ == "__main__":
-    pub, priv = input("").split(" ")
-    jupiter = JupiterAPI(pub,priv)
-    print(jupiter.get_wallet("GSpGregkksyFFgWaQ48CkSi4bVKwC1uEj6T6Mp6nvgQh"))
+    jupiter = JupiterAPI("a","b")
+    print(jupiter.get_wallet_value("GSpGregkksyFFgWaQ48CkSi4bVKwC1uEj6T6Mp6nvgQh"))
 
 
 # Example usage:
