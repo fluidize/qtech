@@ -479,7 +479,8 @@ class TradingEnvironment:
         }
 
     def get_summary(self, verbose: bool = False) -> str:
-        max_drawdown = max(self.portfolio.pct_pnl_history) - min(self.portfolio.pct_pnl_history)
+        max_drawdown = (pd.Series(self.portfolio.pct_pnl_history) - pd.Series(self.portfolio.pct_pnl_history).cummax()).min()
+
         closed_trades = list(filter(lambda x: x['action'] == 'SELL', self.portfolio.trade_history))
         gains = list(filter(lambda x: x > 0, [trade['PnL'] for trade in closed_trades]))
         losses = list(filter(lambda x: x < 0, [trade['PnL'] for trade in closed_trades]))
@@ -610,7 +611,7 @@ class BacktestEnvironment:
             default_env = TradingEnvironment(symbols=['SOL-USD'],
                                              instance_name=strategy.__name__, 
                                              initial_capital=40, 
-                                             chunks=10, 
+                                             chunks=29, 
                                              interval='1m', 
                                              age_days=0
                                              ) #set env defaults here
@@ -737,7 +738,7 @@ class BacktestEnvironment:
     def run(self, strategies: List, verbose: bool = False, show_graph: bool = False):
         self.add_strategy_environments(strategies)
         for env in self.environments.values():
-            env.fetch_data(yfinance=False)
+            env.fetch_data(yfinance=True)
             # env.create_ohlcv_chart()
             env.initialize_context()
         print("Starting Backtest")
@@ -769,4 +770,4 @@ class BacktestEnvironment:
         return output_dict
 
 backtest = BacktestEnvironment()
-backtest.run([backtest.Reversion], show_graph=True)
+backtest.run([backtest.Custom_Scalper], show_graph=True)
