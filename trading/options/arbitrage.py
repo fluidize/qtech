@@ -47,6 +47,7 @@ def find_stocks():
 
 @dataclass
 class Option:
+    type: str
     expiry: datetime
     strike: float
     premium: float
@@ -63,54 +64,60 @@ class Arbitrage:
 
         progress_bar = tqdm(total=len(self.symbols))
         for symbol in self.symbols:
-            ticker = yf.Ticker(symbol)
-            expirations = ticker.options
-            expirations = [parser.parse(x).date() for x in expirations]
-            self.option_expiries[ticker] = expirations 
+            try:
+                ticker = yf.Ticker(symbol)
+                expirations = ticker.options
+                expirations = [parser.parse(x).date() for x in expirations]
+                self.option_expiries[ticker] = expirations 
+            except:
+                print(f"\nFAILED TO LOAD {symbol}")
             progress_bar.update(1)
         progress_bar.close()
         return self.option_expiries
     
-    def _find_best_arbitrage(self, ITM=True, save=True):
+    def _find_best_arbitrage(self, ITM=True, collateral_yield=True):
         output = {}
         progress_bar = tqdm(total=len(self.option_expiries))
         for symbol in self.option_expiries:
             best_profit = 0
             best_option = None
 
-            market_price = symbol.history(period="1d").iloc[-1]['Close']
+            try:
+                market_price = symbol.history(period="1d").iloc[-1]['Close']
 
-            for expiry in self.option_expiries[symbol]:
-                options = symbol.option_chain(str(expiry))
-                puts = options.puts #ARBITRAGING PUTS
-                for index, option in puts.iterrows():
-                    strike = option['strike']
-                    premium = option['bid']
+                for expiry in self.option_expiries[symbol]:
+                    options = symbol.option_chain(str(expiry))
+                    puts = options.puts #ARBITRAGING PUTS
+                    for index, option in puts.iterrows():
+                        strike = option['strike']
+                        premium = option['bid']
 
-                    factor = 100
+                        factor = 100
 
-                    option_arbitrage_value = (strike - premium - market_price) * factor
-                    
-                    collateral = strike*factor
+                        option_arbitrage_value = (strike - premium - market_price) * factor
+                        
+                        collateral = strike*factor
 
-                    expiry_time_delta = relativedelta(expiry, datetime.now())
-                    time_delta_months = expiry_time_delta.years * 12 + expiry_time_delta.months
+                        expiry_time_delta = relativedelta(expiry, datetime.now())
+                        time_delta_months = expiry_time_delta.years * 12 + expiry_time_delta.months
 
-                    collateral_yielded_profit = (collateral*0.0033)*time_delta_months #assuming naked option + monthly compounding of 0.33% on collat
+                        collateral_yielded_profit = (collateral*0.0033)*time_delta_months if collateral_yield else 0 #assuming naked option + SIMPLE monthly compounding of 0.33% on collat
 
-                    total_arbitrage_value = -option_arbitrage_value + collateral_yielded_profit #flip option_arbitrage_value as it is an EFFECTIVE COST BASIS
-                    
-                    #OTM options typically have weird numbers leading to large profits
-                    if (total_arbitrage_value > best_profit) and (premium > 0) and ( ((strike-market_price)>0) if ITM else True ): #if market_price-strike > 0, put is ITM
-                        best_profit = total_arbitrage_value
-                        best_option = Option(expiry=expiry, strike=strike, premium=premium)
+                        total_arbitrage_value = -option_arbitrage_value + collateral_yielded_profit #flip option_arbitrage_value as it is an EFFECTIVE COST BASIS
+                        
+                        #OTM options typically have weird numbers leading to large profits
+                        if (total_arbitrage_value > best_profit) and (premium > 0) and ( ((strike-market_price)>0) if ITM else True ): #if market_price-strike > 0, put is ITM
+                            best_profit = total_arbitrage_value
+                            best_option = Option(type='put', expiry=expiry, strike=strike, premium=premium)
 
-            best = {
-                "best_option" : best_option,
-                "best_profit" : best_profit,
-            }
-            output[symbol] = best
-            self.best_options[symbol] = best
+                best = {
+                    "best_option" : best_option,
+                    "best_profit" : best_profit,
+                }
+                output[symbol] = best
+                self.best_options[symbol] = best
+            except:
+                print(f"\nFAILED TO SCAN {symbol}")
 
             progress_bar.update(1)
         progress_bar.close()
@@ -121,10 +128,12 @@ class Arbitrage:
         console = Console()
         table = Table()
         
-        table.add_column("Symbol", justify="center", style="bold")
+        table.add_column("Symbol", justify="center", style="bold"),
+        table.add_column("Market Price", justify="center")
         table.add_column("Expiry", justify="center")
         table.add_column("Strike", justify="center")
         table.add_column("Premium", justify="center")
+        table.add_column("Intrinsic", justify="center")
         table.add_column("Profit", justify="center", style="bold green")
         
         if input_dict:
@@ -137,11 +146,14 @@ class Arbitrage:
         for symbol, data in best_options.items():
             option = data["best_option"]
             if option:
+                last_price = symbol.history(period='1d')['Close'].iloc[-1]
                 table.add_row(
                     symbol.ticker,
+                    f"{last_price:.2f}",
                     str(option.expiry),
                     f"${option.strike:.2f}",
                     f"${option.premium:.2f}",
+                    f"${option.strike - last_price:.2f}",
                     f"${data['best_profit']:.2f}",
                 )
         
@@ -150,19 +162,27 @@ class Arbitrage:
         return True
     
     def save_arbitrage_to_csv(self, filename="arbitrage_opportunities.csv"):
+        print("[green]SAVING...[/green]")
         data = []
         for symbol, data_info in self.best_options.items():
             option = data_info["best_option"]
             if option:
-                data.append([symbol.ticker, str(option.expiry), option.strike, option.premium, data_info['best_profit']])
-        
-        df = pd.DataFrame(data, columns=["Symbol", "Expiry", "Strike", "Premium", "Profit"])
+                last_price = symbol.history(period='1d')['Close'].iloc[-1]
+                
+                if option.type == 'call':
+                    intrinsic_value = max(0, last_price - option.strike) 
+                elif option.type == 'put':
+                    intrinsic_value = max(0, option.strike - last_price)
+
+                data.append([symbol.ticker, last_price, option.type, str(option.expiry), option.strike, option.premium, intrinsic_value, data_info['best_profit']])
+
+        # Create the DataFrame and save to CSV
+        df = pd.DataFrame(data, columns=["Symbol", "Market Price", "Type", "Expiry", "Strike", "Premium", "Intrinsic Value", "Profit"])
         df.to_csv(filename, index=False)
     
     def run(self):
         self.load()
         self._find_best_arbitrage()
-        self.display_arbitrage()
         self.save_arbitrage_to_csv()
 
 
