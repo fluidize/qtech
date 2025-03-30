@@ -744,7 +744,7 @@ class BacktestEnvironment:
         print("Starting Backtest")
         total_steps = 0
         for env in self.environments.values():
-            total_steps += len(env.data[env.symbols[0]]) - env.context_length
+            total_steps += len(env.data[env.symbols[0]]) - env.context_length - 1
 
         progress_bar = tqdm(total=total_steps)
         while all(env.step() for env in self.environments.values()):
