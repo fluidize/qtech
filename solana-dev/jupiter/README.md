@@ -1,74 +1,28 @@
-# Jupiter Swap API
+# Jupiter Trading API
 
-A REST API server for executing token swaps on Jupiter DEX.
+## Overview
+The Jupiter Trading API is designed to facilitate token swaps on the Solana blockchain. It provides a set of functionalities for executing trades, managing wallets, and interacting with the Jupiter API.
 
-## Setup
+## Components
 
-1. Install dependencies:
-```bash
-npm install
-```
+### 1. **`main.py`**
+The main entry point of the application, which initializes the `JupiterTrading` class with the user's public and private keys. This class manages trading operations and interacts with the Jupiter API.
 
-2. Create a `.env` file (optional):
-```
-PORT=3000
-```
+### 2. **`jupiter_api.py`**
+This module contains the `JupiterAPI` class, which provides methods for:
+- **Placing Orders**: Execute token swaps by specifying input and output mints, the amount to trade, and wallet credentials.
+- **Fetching Wallet Information**: Retrieve balances of tokens in a specified wallet.
+- **Getting Token Prices**: Fetch current prices of specified tokens.
+- **Calculating Wallet Value**: Calculate the total value of a wallet based on current token prices.
 
-3. Start the server:
-```bash
-npm start
-```
+### 3. **`jupiter_server.js`**
+This JavaScript file runs a Node.js server that interacts with the Solana blockchain. Key functionalities include:
+- **Signing Transactions**: The `signTransaction` function signs transactions using the wallet's private key.
+- **Executing Swaps**: The `executeSwap` function handles the logic for swapping tokens, including fetching order details and executing the transaction on the blockchain.
+- **API Endpoints**: Exposes endpoints for placing swaps and checking the server's health.
 
-For development with auto-reload:
-```bash
-npm run dev
-```
-
-## API Endpoints
-
-### POST /api/swap
-
-Execute a token swap on Jupiter DEX.
-
-**Request Body:**
-```json
-{
-    "inputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  // USDC
-    "outputMint": "So11111111111111111111111111111111111111112",  // SOL
-    "amount": 5,  // Amount to swap
-    "walletPrivateKey": "your_private_key",
-    "walletAddress": "your_wallet_address"
-}
-```
-
-**Response:**
-```json
-{
-    "success": true,
-    "signature": "transaction_signature",
-    "transactionUrl": "https://solscan.io/tx/...",
-    // Additional Jupiter API response data
-}
-```
-
-### GET /health
-
-Health check endpoint.
-
-**Response:**
-```json
-{
-    "status": "healthy"
-}
-```
-
-## Security Notes
-
-- The API includes rate limiting (100 requests per 15 minutes per IP)
-- Private keys should be handled securely and never stored on the server
-- Consider implementing additional authentication for production use
-
-## Common Token Mints
-
-- SOL: `So11111111111111111111111111111111111111112`
-- USDC: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` 
+### 4. **Token Class (`token`)**
+The `token` class in `jupiter_api.py` stores constant values for commonly used tokens on the Solana blockchain, such as:
+- **SOL**: The native token of the Solana blockchain.
+- **WBTC**: Wrapped Bitcoin.
+- **USDC**: A stablecoin pegged to the US dollar.

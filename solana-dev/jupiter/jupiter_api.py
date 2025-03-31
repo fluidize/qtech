@@ -27,7 +27,7 @@ class JupiterAPI:
         print(f"[green]NODE STARTED[/green]")
 
     def _start_api(self):
-        api_name = 'jup_server.js'
+        api_name = 'jupiter_server.js'
         port = 8080
         self._run_node(api_name, port) #api on localhost:8080
         self.base_url = f'http://localhost:{port}'
