@@ -1,0 +1,22 @@
+{
+  "name": "jupiter-swap-api",
+  "version": "1.0.0",
+  "description": "API server for Jupiter DEX swaps",
+  "main": "jupiter_api.js",
+  "type": "module",
+  "scripts": {
+    "start": "node jupiter_api.js",
+    "dev": "nodemon jupiter_api.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.87.6",
+    "bs58": "^5.0.0",
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+} 
