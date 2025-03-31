@@ -1,6 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import requests
+import asyncio
 
 from datetime import datetime
 from dateutil import parser
@@ -51,6 +52,8 @@ class Option:
     expiry: datetime
     strike: float
     premium: float
+    market_price: float
+    intrinsic_value: float = 0.0
 
 
 class Arbitrage:
@@ -108,7 +111,7 @@ class Arbitrage:
                         #OTM options typically have weird numbers leading to large profits
                         if (total_arbitrage_value > best_profit) and (premium > 0) and ( ((strike-market_price)>0) if ITM else True ): #if market_price-strike > 0, put is ITM
                             best_profit = total_arbitrage_value
-                            best_option = Option(type='put', expiry=expiry, strike=strike, premium=premium)
+                            best_option = Option(type='put', expiry=expiry, strike=strike, premium=premium, market_price=market_price, intrinsic_value=max(0, strike - market_price))
 
                 best = {
                     "best_option" : best_option,
@@ -133,7 +136,7 @@ class Arbitrage:
         table.add_column("Expiry", justify="center")
         table.add_column("Strike", justify="center")
         table.add_column("Premium", justify="center")
-        table.add_column("Intrinsic", justify="center")
+        table.add_column("Intrinsic Value", justify="center")
         table.add_column("Profit", justify="center", style="bold green")
         
         if input_dict:
@@ -153,7 +156,7 @@ class Arbitrage:
                     str(option.expiry),
                     f"${option.strike:.2f}",
                     f"${option.premium:.2f}",
-                    f"${option.strike - last_price:.2f}",
+                    f"${option.intrinsic_value:.2f}",
                     f"${data['best_profit']:.2f}",
                 )
         
