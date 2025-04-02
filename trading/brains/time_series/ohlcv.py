@@ -509,13 +509,13 @@ class ModelTesting(TimeSeriesPredictor):
         data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
         data = self._extended_predict(self.model, data, model_interval, extension)
         return data
+if __name__ == "__main__":
+    test_client = TimeSeriesPredictor(epochs=15, rnn_width=256, dense_width=128, ticker='BTC-USD', chunks=3, interval='1m', age_days=0)
+    data, yhat, model_data = test_client.run(save=True)
+    test_client.create_plot(data, yhat, model_data, show_graph=True)
 
-test_client = TimeSeriesPredictor(epochs=15, rnn_width=256, dense_width=128, ticker='BTC-USD', chunks=3, interval='1m', age_days=0)
-data, yhat, model_data = test_client.run(save=True)
-test_client.create_plot(data, yhat, model_data, show_graph=True)
-
-# Extended prediction testing
-# test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-# test_client.load_model(model_name="best_model.keras")
-# original_data, predicted_data = test_client.run(extension=100)
-# test_client.create_test_plot(original_data, predicted_data, show_graph=True)
+    # Extended prediction testing
+    # test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
+    # test_client.load_model(model_name="best_model.keras")
+    # original_data, predicted_data = test_client.run(extension=100)
+    # test_client.create_test_plot(original_data, predicted_data, show_graph=True)

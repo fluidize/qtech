@@ -19,8 +19,8 @@ from rich import print
 
 print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 
-tf.config.threading.set_intra_op_parallelism_threads(4)
-tf.config.threading.set_inter_op_parallelism_threads(4)
+# tf.config.threading.set_intra_op_parallelism_threads(4)
+# tf.config.threading.set_inter_op_parallelism_threads(4)
 
 def check_for_nan(data, stage):
     nan_count = np.sum(np.isnan(data))
@@ -518,11 +518,12 @@ class ModelTesting(TimeSeriesPredictor):
         prediction = self._test_predict(self.model, input_data)
         return input_data, prediction
 
-train = TimeSeriesPredictor(epochs=10, rnn_width=256, dense_width=128, ticker='BTC-USDT', chunks=10, interval='5m', age_days=0)
-data, yhat, model_data = train.run(save=True)
-train.create_plot(data, yhat, model_data, show_graph=True, save_image=True)
+if __name__ == "__main__":
+    train = TimeSeriesPredictor(epochs=10, rnn_width=256, dense_width=128, ticker='BTC-USDT', chunks=10, interval='5m', age_days=0)
+    data, yhat, model_data = train.run(save=True)
+    train.create_plot(data, yhat, model_data, show_graph=True, save_image=True)
 
-# test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
-# test_client.load_model(model_name="BTC-USD_1m_11476582.keras")
-# original_data, predicted_data = test_client.run(extension=50)
-# test_client.create_test_plot(original_data, predicted_data, show_graph=True)
+    # test_client = ModelTesting(ticker='BTC-USD', chunks=1, interval='5m', age_days=0)
+    # test_client.load_model(model_name="BTC-USD_1m_11476582.keras")
+    # original_data, predicted_data = test_client.run(extension=50)
+    # test_client.create_test_plot(original_data, predicted_data, show_graph=True)
