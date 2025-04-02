@@ -5,6 +5,8 @@ from keras import ops
 import pandas as pd
 import numpy as np
 
+tf.config.threading.set_intra_op_parallelism_threads(8)
+
 (X_train, y_train), (X_test, y_test) = tf.keras.datasets.mnist.load_data()
 
 X_train = X_train.reshape(-1, 28, 28, 1).astype("float32") / 255.0
