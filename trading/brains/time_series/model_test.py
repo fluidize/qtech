@@ -9,7 +9,7 @@ import torch
 import plotly.graph_objects as go
 
 from single_predictors.price_data import fetch_data, prepare_data
-from single_predictors.single_pytorch_model import SimpleNN
+from single_predictors.single_pytorch_model import SingleModel
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -34,7 +34,6 @@ class TimeSeriesPredictor:
         self.model.to(self.DEVICE)
         self.model_type = "pytorch"
 
-
     def fetch_data(self):
         self.data = prepare_data(fetch_data(self.ticker, self.chunks, self.interval, self.age_days, kucoin=True), train_split=True)
 
@@ -42,10 +41,13 @@ class TimeSeriesPredictor:
         if (self.model is None) or (self.model_type is None) or (self.data is None):
             raise ValueError("Model not loaded.")
         
+        print(f"TRAINING MODEL {self.model_type}")
+
         if self.model_type == "pytorch":
             X, y = self.data
             X_tensor = torch.tensor(X.values, dtype=torch.float32).to(self.DEVICE)
-            predictions = self.model.predict(X_tensor)
+            with torch.no_grad():
+                predictions = self.model(X_tensor)
             return predictions
 
     def create_plot(self, actual, predicted):
@@ -59,6 +61,7 @@ class TimeSeriesPredictor:
         self.fetch_data()
         self.load_pytorch_model(r"single_predictors\trained_model.pth")
         predictions = self.predict()
+        print(predictions)
 
 if __name__ == "__main__":
     # Example usage

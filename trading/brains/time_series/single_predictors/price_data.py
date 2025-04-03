@@ -1,11 +1,10 @@
-import pandas as pd
+from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 from datetime import datetime, timedelta
 import requests
 import yfinance as yf
+from tqdm import tqdm
+import pandas as pd
 import numpy as np
-
-from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
-
 from rich import print
 
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
@@ -18,14 +17,17 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
             start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=age_days)
             end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=age_days)
             temp_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False)
-            data = pd.concat([data, temp_data])
+            if data.empty:
+                data = temp_data
+            else:
+                data = pd.concat([data, temp_data])
             times.append(start_date)
             times.append(end_date)
         
         earliest = min(times)
         latest = max(times)
         difference = latest - earliest
-        print(f"{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
+        print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
 
         data.sort_index(inplace=True)
         data.columns = data.columns.droplevel(1)
@@ -37,6 +39,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
         data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         times = []
         
+        progress_bar = tqdm(total=chunks, desc="KUCOIN PROGRESS")
         for x in range(chunks):
             chunksize = 1440  # 1d of 1m data
             end_time = datetime.now() - timedelta(minutes=chunksize*x)
@@ -64,14 +67,19 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
                 })
             
             temp_data = pd.DataFrame(records)
-            data = pd.concat([data, temp_data])
+            if data.empty:
+                data = temp_data
+            else:
+                data = pd.concat([data, temp_data])
             times.append(start_time)
             times.append(end_time)
+
+            progress_bar.update(1)
         
         earliest = min(times)
         latest = max(times)
         difference = latest - earliest
-        print(f"{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
+        print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
         
         data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
         data.sort_values('Datetime', inplace=True)
@@ -149,6 +157,6 @@ def prepare_data(data, train_split=True):
         
         X = X[:-1]  # Remove last row since we don't have target for it
         y = y[:-1]  # Remove last row since we don't have target for it
-        return X, y
+        return X, y, scalers
     
-    return df
+    return df, scalers
