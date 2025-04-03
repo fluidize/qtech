@@ -4,13 +4,18 @@ import os
 
 import tensorflow as tf
 from tensorflow import keras
+import torch
 
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+
+from single_predictors.price_data import fetch_data, prepare_data
+from single_predictors.single_pytorch_model import SimpleNN
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 class TimeSeriesPredictor:
-    def __init__(self, model_type, ticker='BTC-USD', chunks=5, interval='5m', age_days=10):
-        self.model_type = model_type
+    def __init__(self, ticker='SOL-USDT', chunks=5, interval='1min', age_days=0):
+        self.model_type = None
         self.ticker = ticker
         self.chunks = chunks
         self.interval = interval
@@ -18,23 +23,30 @@ class TimeSeriesPredictor:
         self.model = None
         self.data = None
 
-    def load_model(self, model_path):
+        self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def load_keras_model(self, model_path):
         self.model = keras.load_model(model_path)
+        self.model_type = "keras"
+    def load_pytorch_model(self, model_path):
+        self.model = torch.load(model_path, weights_only=False)
+        self.model.eval()
+        self.model.to(self.DEVICE)
+        self.model_type = "pytorch"
+
 
     def fetch_data(self):
-        # Implement data fetching logic based on model type
-        if self.model_type == '1only':
-            # Fetch data for 1only model
-            pass  # Replace with actual data fetching logic
-        elif self.model_type == 'ohlcv':
-            # Fetch data for ohlcv model
-            pass  # Replace with actual data fetching logic
+        self.data = prepare_data(fetch_data(self.ticker, self.chunks, self.interval, self.age_days, kucoin=True), train_split=True)
 
     def predict(self):
-        if self.model is None:
+        if (self.model is None) or (self.model_type is None) or (self.data is None):
             raise ValueError("Model not loaded.")
-        predictions = self.model.predict(self.data)
-        return predictions
+        
+        if self.model_type == "pytorch":
+            X, y = self.data
+            X_tensor = torch.tensor(X.values, dtype=torch.float32).to(self.DEVICE)
+            predictions = self.model.predict(X_tensor)
+            return predictions
 
     def create_plot(self, actual, predicted):
         fig = go.Figure()
@@ -43,10 +55,12 @@ class TimeSeriesPredictor:
         fig.update_layout(title='Price Prediction', xaxis_title='Date', yaxis_title='Price')
         fig.show()
 
+    def run(self):
+        self.fetch_data()
+        self.load_pytorch_model(r"single_predictors\trained_model.pth")
+        predictions = self.predict()
+
 if __name__ == "__main__":
     # Example usage
-    predictor = TimeSeriesPredictor(model_type='1only')
-    predictor.load_model('path_to_1only_model.keras')
-    predictor.fetch_data()
-    predictions = predictor.predict()
-    predictor.create_plot(predictor.data, predictions) 
+    predictor = TimeSeriesPredictor()
+    predictor.run()
