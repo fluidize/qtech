@@ -1,20 +1,20 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import requests
+import os
 
 import tensorflow as tf
-from keras import layers, models, optimizers, callbacks, losses, regularizers
+from keras import layers, models, optimizers, losses, callbacks, regularizers
+
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.preprocessing import StandardScaler
 
-from datetime import datetime, timedelta
-import os
+from trading.brains.time_series.single_predictors.price_data import fetch_data
 
-from rich import print
+tf.config.threading.set_intra_op_parallelism_threads(8)
 
-class SingleModel:
+class TransformerModel:
     def __init__(self, epochs, ticker='BTC-USD', chunks=5, interval='5m', age_days=10):
         self.epochs = epochs
         self.sequence_length = 25 
@@ -28,78 +28,7 @@ class SingleModel:
             'technical': StandardScaler()
         }
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
-        self.data = self._fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
-
-    def _fetch_data(self, ticker, chunks, interval, age_days, yfinance: bool = False):
-        print("[green]DOWNLOADING DATA[/green]")
-        if yfinance:
-            data = pd.DataFrame()
-            times = []
-            for x in range(chunks):
-                chunksize = 1
-                start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=age_days)
-                end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=age_days)
-                temp_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False)
-                data = pd.concat([data, temp_data])
-                times.append(start_date)
-                times.append(end_date)
-            
-            earliest = min(times)
-            latest = max(times)
-            difference = latest - earliest
-            print(f"{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
-
-            data.sort_index(inplace=True)
-            data.columns = data.columns.droplevel(1)
-            data.reset_index(inplace=True)
-            data.rename(columns={'index': 'Datetime'}, inplace=True)
-            data.rename(columns={'Date': 'Datetime'}, inplace=True)
-            data = pd.DataFrame(data)  
-        else:
-            data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
-            times = []
-            
-            for x in range(chunks):
-                chunksize = 1440  # 1d of 1m data
-                end_time = datetime.now() - timedelta(minutes=chunksize*x)
-                start_time = end_time - timedelta(minutes=chunksize)
-                
-                params = {
-                    "symbol": ticker,
-                    "type": "1min",
-                    "startAt": str(int(start_time.timestamp())),
-                    "endAt": str(int(end_time.timestamp()))
-                }
-                
-                request = requests.get("https://api.kucoin.com/api/v1/market/candles", params=params).json()
-                request_data = request["data"]  # list of lists
-                
-                records = []
-                for dochltv in request_data:
-                    records.append({
-                        "Datetime": dochltv[0],
-                        "Open": float(dochltv[1]),
-                        "Close": float(dochltv[2]),
-                        "High": float(dochltv[3]),
-                        "Low": float(dochltv[4]),
-                        "Volume": float(dochltv[6])
-                    })
-                
-                temp_data = pd.DataFrame(records)
-                data = pd.concat([data, temp_data])
-                times.append(start_time)
-                times.append(end_time)
-            
-            earliest = min(times)
-            latest = max(times)
-            difference = latest - earliest
-            print(f"{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
-            
-            data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
-            data.sort_values('Datetime', inplace=True)
-            data.reset_index(drop=True, inplace=True)
-            
-        return data
+        self.data = fetch_data(self.ticker, self.chunks, self.interval, self.age_days)
 
     def _compute_rsi(self, series, period=14):
         delta = series.diff()
@@ -307,7 +236,7 @@ class SingleModel:
         return predictions
     
     def prompt_save(self, model):
-        if input("Save? y/n").lower() == 'y':
+        if input("Save? y/n ").lower() == 'y':
             model.save("1only.keras")
 
     def run(self):
@@ -317,5 +246,5 @@ class SingleModel:
         return model, model_data
 
 if __name__ == "__main__":
-    train = SingleModel(epochs=10, ticker='SOL-USDT', chunks=10, interval='1m', age_days=0)
+    train = TransformerModel(epochs=10, ticker='SOL-USDT', chunks=10, interval='1m', age_days=0)
     model, model_data = train.run()

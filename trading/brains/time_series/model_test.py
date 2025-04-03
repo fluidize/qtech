@@ -1,8 +1,10 @@
 import pandas as pd
 import numpy as np
 import os
+
 import tensorflow as tf
-from keras.models import load_model
+from tensorflow import keras
+
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
@@ -17,7 +19,7 @@ class TimeSeriesPredictor:
         self.data = None
 
     def load_model(self, model_path):
-        self.model = load_model(model_path)
+        self.model = keras.load_model(model_path)
 
     def fetch_data(self):
         # Implement data fetching logic based on model type
