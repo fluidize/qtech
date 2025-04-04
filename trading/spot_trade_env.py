@@ -752,10 +752,10 @@ class BacktestEnvironment:
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
             default_env = TradingEnvironment(
-                symbols=["SOL-USDT"],
+                symbols=["SOL-USD"],
                 instance_name=strategy.__name__,
                 initial_capital=40,
-                chunks=29,
+                chunks=10,
                 interval="1m",
                 age_days=0,
             )  # set env defaults here
@@ -914,7 +914,7 @@ class BacktestEnvironment:
     def run(self, strategies: List, verbose: bool = False, show_graph: bool = False):
         self.add_strategy_environments(strategies)
         for env in self.environments.values():
-            env.fetch_data(yfinance=False)
+            env.fetch_data(yfinance=True)
             # env.create_ohlcv_chart()
             env.initialize_context()
         print("Starting Backtest")
