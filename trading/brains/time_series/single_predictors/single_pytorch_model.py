@@ -29,17 +29,21 @@ class SingleModel(nn.Module):
         # MODEL ARCHITECTURE
         rnn_width = 128
         dense_width = 128
+        self.em1 = nn.Embedding(num_embeddings=33, embedding_dim=32)
         self.rnn1 = nn.LSTM(input_dim, rnn_width, num_layers=2, bidirectional=True)
         self.mha = nn.MultiheadAttention(embed_dim=rnn_width*2, num_heads=8, batch_first=True)
         self.fc1 = nn.Linear(rnn_width*2, dense_width)
+        self.fc2 = nn.Linear(dense_width, dense_width)
         self.output = nn.Linear(dense_width, 1)
 
     def forward(self, x):
         x, _ = self.rnn1(x)  # Unpack the output and hidden state
-        x, _ = self.mha(x, x, x)
+        # x, _ = self.mha(x, x, x)
         x = torch.flatten(x, 1) #go thru dense layers
         x = self.fc1(x)
-        x = nn.GELU()(x)
+        x = nn.LeakyReLU(negative_slope=0.3)(x)
+        x = self.fc2(x)
+        x = nn.LeakyReLU(negative_slope=0.3)(x)
         x = self.output(x)
         return x
 
@@ -53,10 +57,10 @@ class SingleModel(nn.Module):
 
         train_dataset = TensorDataset(X_tensor, y_tensor)
         
-        batch_size = 32
+        batch_size = 64
         criterion = nn.MSELoss()
         lr = 1e-6
-        l2_reg = 1e-6
+        l2_reg = 0
         optimizer = optim.Adam(model.parameters(),
                                lr=lr,
                                weight_decay=l2_reg,
@@ -115,7 +119,7 @@ class SingleModel(nn.Module):
 
 
 if __name__ == "__main__":
-    model = SingleModel()
+    model = SingleModel(epochs=100)
     model.train_model(model, prompt_save=True)
     predictions = model.predict(model, model.data[:10000])
     create_plot(model.data, predictions)
