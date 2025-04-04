@@ -2,14 +2,14 @@ import pandas as pd
 import numpy as np
 import os
 
-import tensorflow as tf
-from tensorflow import keras
+# import tensorflow as tf
+# from tensorflow import keras
 import torch
 
 import plotly.graph_objects as go
 
-from single_predictors.price_data import fetch_data, prepare_data
-from single_predictors.single_pytorch_model import SingleModel
+from price_data import fetch_data, prepare_data
+from single_pytorch_model import SingleModel
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -21,7 +21,7 @@ class TimeSeriesPredictor:
         self.interval = interval
         self.age_days = age_days
         self.model = None
-        self.data = None
+        self.data = fetch_data(ticker, chunks, interval, age_days)
 
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -33,9 +33,6 @@ class TimeSeriesPredictor:
         self.model.eval()
         self.model.to(self.DEVICE)
         self.model_type = "pytorch"
-
-    def fetch_data(self):
-        self.data = prepare_data(fetch_data(self.ticker, self.chunks, self.interval, self.age_days, kucoin=True), train_split=True)
 
     def predict(self):
         if (self.model is None) or (self.model_type is None) or (self.data is None):
@@ -51,6 +48,9 @@ class TimeSeriesPredictor:
             return predictions
 
     def create_plot(self, actual, predicted):
+        difference = len(actual)-len(predicted)
+        actual = actual[difference:]
+
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=actual['Datetime'], y=actual['Close'], mode='lines', name='Actual'))
         fig.add_trace(go.Scatter(x=actual['Datetime'], y=predicted, mode='lines', name='Predicted'))
@@ -58,10 +58,10 @@ class TimeSeriesPredictor:
         fig.show()
 
     def run(self):
-        self.fetch_data()
-        self.load_pytorch_model(r"single_predictors\trained_model.pth")
-        predictions = self.predict()
-        print(predictions)
+        model = SingleModel()
+        model.train_model(model)
+        predictions = model.predict(model, self.data)
+        self.create_plot(self.data, predictions)
 
 if __name__ == "__main__":
     # Example usage

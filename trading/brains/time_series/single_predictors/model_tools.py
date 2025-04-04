@@ -5,6 +5,7 @@ import yfinance as yf
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 from rich import print
 
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
@@ -75,11 +76,12 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
             times.append(end_time)
 
             progress_bar.update(1)
+        progress_bar.close()
         
         earliest = min(times)
         latest = max(times)
         difference = latest - earliest
-        print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
+        print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
         
         data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
         data.sort_values('Datetime', inplace=True)
@@ -160,3 +162,13 @@ def prepare_data(data, train_split=True):
         return X, y, scalers
     
     return df, scalers
+
+def create_plot(actual, predicted):
+    difference = len(actual)-len(predicted) #trimmer
+    actual = actual[difference:]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=actual['Datetime'], y=actual['Close'], mode='lines', name='Actual'))
+    fig.add_trace(go.Scatter(x=actual['Datetime'], y=predicted, mode='lines', name='Predicted'))
+    fig.update_layout(title='Price Prediction', xaxis_title='Date', yaxis_title='Price')
+    fig.show()
