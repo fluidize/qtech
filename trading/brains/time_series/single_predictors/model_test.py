@@ -1,3 +1,4 @@
+import keras
 import pandas as pd
 import numpy as np
 import os
@@ -8,7 +9,7 @@ import torch
 
 import plotly.graph_objects as go
 
-from price_data import fetch_data, prepare_data
+from model_tools import fetch_data, prepare_data
 from single_pytorch_model import SingleModel
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))

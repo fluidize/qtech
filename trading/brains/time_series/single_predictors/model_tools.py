@@ -104,7 +104,6 @@ def prepare_data(data, train_split=True):
         'technical': StandardScaler()
     }
 
-
     df = data.copy()
     df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
 
@@ -133,6 +132,13 @@ def prepare_data(data, train_split=True):
     
     df['RSI'] = compute_rsi(df['Close'], 14)
 
+    # Check for NaN values
+    if df.isnull().any().any():
+        # Fill NaN values with the mean of the column
+        df = df.fillna(df.mean())
+        # Alternatively, drop rows with NaN values
+        # df = df.dropna()
+
     df.dropna(inplace=True)
     
     if train_split:
@@ -155,7 +161,7 @@ def prepare_data(data, train_split=True):
             df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
         
         X = df.drop(['Datetime'], axis=1)
-        y = df['Close'].shift(-1)
+        y = df['Close'].shift(-1)  # Target is the next day's close price
         
         X = X[:-1]  # Remove last row since we don't have target for it
         y = y[:-1]  # Remove last row since we don't have target for it
