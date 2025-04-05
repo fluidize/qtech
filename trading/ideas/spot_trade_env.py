@@ -7,167 +7,297 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 from rich import print
 from tqdm import tqdm
-import requests
 import plotly.graph_objects as go
+import requests
+from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 
-from indicators import *
-from brains.time_series.single_predictors.model_tools import fetch_data, prepare_data
-
-import scipy.stats as stats
-
-# from time_series.close_predictor.close_only import ModelTesting
-# f2a184bce09576aff1042c190719fa663b5c3e0f06be78608e5097ee70762292
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, TensorDataset
-from torch.amp import autocast
-import pandas as pd
-import numpy as np
-
-from rich import print
-from tqdm import tqdm
-import os
-
-class SingleModel(nn.Module):
-    def __init__(self, epochs=10, train: bool = True):
-        super().__init__()
-
-        self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"[green]USING DEVICE: {self.DEVICE}[/green]")
-
-        if train:
-            self.epochs = epochs
-            self.data = fetch_data("BTC-USDT", 29, "1min", 0, kucoin=True) #set train data here
-            X, y, scalers = prepare_data(self.data, train_split=True) #train split to calculate dims
-
-            input_dim = X.shape[1]
-        else:
-            input_dim = 33
-
-        # MODEL ARCHITECTURE
-        rnn_width = 256
-        dense_width = 256
-        self.em1 = nn.Embedding(num_embeddings=33, embedding_dim=32)
-        self.rnn1 = nn.LSTM(input_dim, rnn_width, num_layers=3, bidirectional=True, dropout=0.2)
-        self.mha = nn.MultiheadAttention(embed_dim=rnn_width*2, num_heads=8, batch_first=True)
-        self.fc1 = nn.Linear(rnn_width*2, dense_width)
-        self.fc2 = nn.Linear(dense_width, dense_width)
-        self.output = nn.Linear(dense_width, 1)
-
-    def forward(self, x):
-        x, _ = self.rnn1(x)  # Unpack the output and hidden state
-        # x, _ = self.mha(x, x, x)
-        x = torch.flatten(x, 1) #go thru dense layers
-        x = self.fc1(x)
-        x = nn.LeakyReLU(negative_slope=0.3)(x)
-        x = self.fc2(x)
-        x = nn.LeakyReLU(negative_slope=0.3)(x)
-        x = self.output(x)
-        return x
-
-    def train_model(self, model, prompt_save=False):
-        X, y, scalers = prepare_data(self.data, train_split=True)
-
-        model.to(self.DEVICE)
-
-        X_tensor = torch.tensor(X.values, dtype=torch.float32)
-        y_tensor = torch.tensor(y.values, dtype=torch.float32).unsqueeze(1)  # Reshape y to (batch_size, 1) to remove reduction warning
-
-        train_dataset = TensorDataset(X_tensor, y_tensor)
+# from indicators import *
+def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
+    print("[green]DOWNLOADING DATA[/green]")
+    if not kucoin:
+        data = pd.DataFrame()
+        times = []
+        for x in range(chunks):
+            chunksize = 1
+            start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=age_days)
+            end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=age_days)
+            temp_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False)
+            if data.empty:
+                data = temp_data
+            else:
+                data = pd.concat([data, temp_data])
+            times.append(start_date)
+            times.append(end_date)
         
-        batch_size = 64
-        criterion = nn.MSELoss()
-        lr = 1e-5
-        l2_reg = 1e-5
-        optimizer = optim.Adam(model.parameters(),
-                               lr=lr,
-                               weight_decay=l2_reg,
-                               amsgrad=True,
-                               )
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
+        earliest = min(times)
+        latest = max(times)
+        difference = latest - earliest
+        print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-
-        best_loss = float('inf')
-        for epoch in range(model.epochs):
-            model.train()  # set model to training mode
-            total_loss = 0
-
-            print()
-            progress_bar = tqdm(total=len(train_loader), desc="EPOCH PROGRESS")
-            for X_batch, y_batch in train_loader:
-                X_batch, y_batch = X_batch.to(self.DEVICE), y_batch.to(self.DEVICE)
-
-                optimizer.zero_grad()  # reset the gradients of all parameters before backpropagation
-                outputs = model(X_batch)  # forward pass
-                loss = criterion(outputs, y_batch)  # Calculate loss
-                loss.backward()  # back pass
-                optimizer.step()  # update weights
-
-                total_loss += loss.item() 
-                progress_bar.update(1)
-            progress_bar.close()
-            if total_loss < best_loss:
-                best_loss = total_loss
-                # Save model checkpoint here if needed
-
-            print(f"\nEpoch {epoch + 1}/{model.epochs}, Train Loss: {total_loss:.4f}")
-            scheduler.step(total_loss)
-
-        # Prompt to save the model
-        if ((input("Save? y/n ").lower() == 'y') if prompt_save else False):
-            torch.save(model, input("Enter save path: "))
-    
-    def predict(self, model , data):
-        #input unprepared data
-        X, y, scalers = prepare_data(data)
-        X = torch.tensor(X.values, dtype=torch.float32).to(self.DEVICE)
-
-        model.eval()
-        model.to(self.DEVICE)
-        with torch.no_grad(), autocast('cuda'): #automatically set precision since gpu is giving up
-            yhat = model(X)
-            yhat = yhat.cpu().numpy()
+        data.sort_index(inplace=True)
+        data.columns = data.columns.droplevel(1)
+        data.reset_index(inplace=True)
+        data.rename(columns={'index': 'Datetime'}, inplace=True)
+        data.rename(columns={'Date': 'Datetime'}, inplace=True)
+        data = pd.DataFrame(data)  
+    elif kucoin:
+        data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
+        times = []
         
-        temp_arr = np.zeros((len(yhat),4))
-        temp_arr[:, 3] = yhat.squeeze()
-        
-        predictions = scalers['price'].inverse_transform(temp_arr)[:, 3]
-
-        return predictions
-
-    def load_model(model_path: str) -> 'SingleModel':
-        """
-        Load a trained SingleModel from a saved checkpoint.
-        
-        Args:
-            model_path (str): Path to the saved model file
+        progress_bar = tqdm(total=chunks, desc="KUCOIN PROGRESS")
+        for x in range(chunks):
+            chunksize = 1440  # 1d of 1m data
+            end_time = datetime.now() - timedelta(minutes=chunksize*x)
+            start_time = end_time - timedelta(minutes=chunksize)
             
-        Returns:
-            SingleModel: Loaded model instance
-        """
-        import torch
-        import os
+            params = {
+                "symbol": ticker,
+                "type": interval,
+                "startAt": str(int(start_time.timestamp())),
+                "endAt": str(int(end_time.timestamp()))
+            }
+            
+            request = requests.get("https://api.kucoin.com/api/v1/market/candles", params=params).json()
+            try:
+                request_data = request["data"]  # list of lists
+            except:
+                raise Exception(f"Error fetching Kucoin. Check request parameters.")
+            
+            records = []
+            for dochltv in request_data:
+                records.append({
+                    "Datetime": dochltv[0],
+                    "Open": float(dochltv[1]),
+                    "Close": float(dochltv[2]),
+                    "High": float(dochltv[3]),
+                    "Low": float(dochltv[4]),
+                    "Volume": float(dochltv[6])
+                })
+            
+            temp_data = pd.DataFrame(records)
+            if data.empty:
+                data = temp_data
+            else:
+                data = pd.concat([data, temp_data])
+            times.append(start_time)
+            times.append(end_time)
+
+            progress_bar.update(1)
+        progress_bar.close()
         
-        # Create a new model instance
-        model = SingleModel(train=False)
+        earliest = min(times)
+        latest = max(times)
+        difference = latest - earliest
+        print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
         
-        # Load the model with weights_only=False since we trust our own model file
-        # This is safe because we're loading our own trained model
-        state_dict = torch.load(model_path, 
-                            map_location=torch.device('cuda'),
-                            weights_only=False)  # Explicitly set to False
+        data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
+        data.sort_values('Datetime', inplace=True)
+        data.reset_index(drop=True, inplace=True)
         
-        # Load the state dict into the model
-        model.load_state_dict(state_dict)
+    return data
+
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def prepare_data(data, train_split=True):
+    scalers = {
+        'price': MinMaxScaler(feature_range=(0, 1)),
+        'volume': QuantileTransformer(output_distribution='normal'),
+        'technical': StandardScaler()
+    }
+
+    df = data.copy()
+    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
+
+    df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
+    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+    
+    lagged_length = 5
+    
+    lagged_features = []
+    for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
+        for i in range(1, lagged_length):
+            lagged_features.append(pd.DataFrame({
+                f'Prev{i}_{col}': df[col].shift(i)
+            }))
+    
+    if lagged_features:
+        df = pd.concat([df] + lagged_features, axis=1)
+    
+    std = df['Close'].std()
+    df['Close_ZScore'] = (df['Close'] - df['Close'].mean()) / std 
+    
+    df['MA10'] = df['Close'].rolling(window=10).mean() / df['Close']
+    df['MA20'] = df['Close'].rolling(window=20).mean() / df['Close']
+    df['MA50'] = df['Close'].rolling(window=50).mean() / df['Close']
+    df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
+    
+    df['RSI'] = compute_rsi(df['Close'], 14)
+
+    # Check for NaN values
+    if df.isnull().any().any():
+        # Fill NaN values with the mean of the column
+        df = df.fillna(df.mean())
+        # Alternatively, drop rows with NaN values
+        # df = df.dropna()
+
+    df.dropna(inplace=True)
+    
+    if train_split:
+        price_features = ['Open', 'High', 'Low', 'Close']
+        volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
+        bounded_features = ['RSI']  # Features that are already bounded (e.g., 0-100)
+        normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross', 'Close_ZScore']
         
-        # Set to evaluation mode
-        model.eval()
+        technical_features = [col for col in df.columns 
+                            if col not in (price_features + volume_features + bounded_features + 
+                                        normalized_features + ['Datetime'])]
         
-        return model
+        df[price_features] = scalers['price'].fit_transform(df[price_features])
+        
+        df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
+        df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
+        df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
+        
+        if technical_features:
+            df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
+        
+        X = df.drop(['Datetime'], axis=1)
+        y = df['Close'].shift(-1)  # Target is the next day's close price
+        
+        X = X[:-1]  # Remove last row since we don't have target for it
+        y = y[:-1]  # Remove last row since we don't have target for it
+        return X, y, scalers
+    
+    return df, scalers
+
+def create_plot(actual, predicted):
+    difference = len(actual)-len(predicted) #trimmer
+    actual = actual[difference:]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=actual['Datetime'], y=actual['Close'], mode='lines', name='Actual'))
+    fig.add_trace(go.Scatter(x=actual['Datetime'], y=predicted, mode='lines', name='Predicted'))
+    fig.update_layout(title='Price Prediction', xaxis_title='Date', yaxis_title='Price')
+    fig.show()
+
+def calculate_adx(context, period=14):
+    high = context["High"]
+    low = context["Low"]
+    close = context["Close"]
+
+    # Calculate True Range
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.Series([max(a, b, c) for a, b, c in zip(tr1, tr2, tr3)])
+
+    # Calculate +DM and -DM
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+
+    plus_dm = pd.Series(0.0, index=context.index)
+    minus_dm = pd.Series(0.0, index=context.index)
+
+    plus_dm[up_move > down_move] = up_move[up_move > down_move]
+    minus_dm[down_move > up_move] = down_move[down_move > up_move]
+
+    # Calculate smoothed TR, +DM, and -DM
+    smoothed_tr = tr.rolling(window=period).mean()
+    smoothed_plus_dm = plus_dm.rolling(window=period).mean()
+    smoothed_minus_dm = minus_dm.rolling(window=period).mean()
+
+    # Calculate +DI and -DI
+    plus_di = 100 * (smoothed_plus_dm / smoothed_tr)
+    minus_di = 100 * (smoothed_minus_dm / smoothed_tr)
+
+    # Calculate DX
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+
+    # Calculate ADX (smoothed DX)
+    adx = dx.rolling(window=period).mean()
+
+    return adx, plus_di, minus_di
+
+def calculate_rsi(context, period=14):
+    delta_p = context["Close"].diff()
+    gain = delta_p.where(delta_p > 0, 0)
+    loss = -delta_p.where(delta_p < 0, 0)
+
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - 100 / (1 + rs)
+    return rsi
+
+def calculate_macd(context, fast_period=12, slow_period=26, signal_period=9):
+    fast_ema = context["Close"].ewm(span=fast_period, adjust=False).mean()
+    slow_ema = context["Close"].ewm(span=slow_period, adjust=False).mean()
+
+    macd_line = fast_ema - slow_ema
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    histogram = macd_line - signal_line
+
+    return macd_line, signal_line, histogram
+
+def calculate_atr(context, period=14):
+    high = context["High"]
+    low = context["Low"]
+    close = context["Close"]
+
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+
+    tr = pd.Series([max(a, b, c) for a, b, c in zip(tr1, tr2, tr3)])
+
+    atr = tr.rolling(window=period).mean()
+    return atr
+
+def calculate_supertrend(context, period=14):
+    atr = calculate_atr(context, period=period)
+    multiplier = 3.0
+
+    hl2 = (context["High"] + context["Low"]) / 2
+    basic_upperband = hl2 + (multiplier * atr)
+    basic_lowerband = hl2 - (multiplier * atr)
+
+    final_upperband = basic_upperband.copy()
+    final_lowerband = basic_lowerband.copy()
+    supertrend = pd.Series(index=context.index, dtype=float)
+
+    supertrend.iloc[0] = final_upperband.iloc[0]
+
+    close = context["Close"]
+    prev_upperband = final_upperband.shift(1)
+    prev_lowerband = final_lowerband.shift(1)
+    prev_supertrend = supertrend.shift(1)
+
+    mask_upper = (basic_upperband < prev_upperband) | (close.shift(1) > prev_upperband)
+    final_upperband.loc[mask_upper] = basic_upperband.loc[mask_upper]
+    final_upperband.loc[~mask_upper] = prev_upperband.loc[~mask_upper]
+
+    mask_lower = (basic_lowerband > prev_lowerband) | (close.shift(1) < prev_lowerband)
+    final_lowerband.loc[mask_lower] = basic_lowerband.loc[mask_lower]
+    final_lowerband.loc[~mask_lower] = prev_lowerband.loc[~mask_lower]
+
+    mask_supertrend = close > final_upperband
+    supertrend.loc[mask_supertrend] = final_lowerband.loc[mask_supertrend]
+    supertrend.loc[~mask_supertrend] = final_upperband.loc[~mask_supertrend]
+    return supertrend
+
+def calculate_std(context, period=20):
+    raw_std = context["Close"].rolling(window=period).std()
+    std = (raw_std - raw_std.min()) / (
+        raw_std.max() - raw_std.min()
+    )  # normalize std or else different symbols will have different thresholds
+    return std
 
 @dataclass
 class Position:
@@ -187,7 +317,6 @@ class Position:
     @property
     def profit_loss_pct(self) -> float:
         return ((self.current_price - self.average_price) / self.average_price) * 100
-
 
 class Portfolio:
     def __init__(self, initial_capital: float = 10000.0):
@@ -313,7 +442,6 @@ class Portfolio:
         for symbol, price_data in current_prices.items():
             if symbol in self.positions:
                 pos = self.positions[symbol]
-                # Extract Close price from the OHLCV data
                 current_price = float(price_data["Close"])
                 self.positions[symbol] = Position(
                     symbol=pos.symbol,
@@ -365,11 +493,10 @@ class Portfolio:
         quantity = self.positions[symbol].quantity
         return self.sell(symbol, quantity, price, timestamp, verbose)
 
-
 class TradingEnvironment:
     def __init__(
         self,
-        symbols: List[str],
+        symbol: str,
         instance_name: str = "default",
         initial_capital: float = 10000.0,
         chunks: int = 5,
@@ -377,100 +504,83 @@ class TradingEnvironment:
         age_days: int = 10,
     ):
         self.instance_name = instance_name
-        self.symbols = symbols
+        self.symbol = symbol
         self.chunks = chunks
         self.interval = interval
         self.age_days = age_days
         self.portfolio = Portfolio(initial_capital)
 
-        # Data storage
-        self.data: Dict[str, pd.DataFrame] = {}  # Full historical data for each symbol
-        self.context_length = 1000  # Number of historical points needed for indicators
+        self.data: pd.DataFrame = None
+        self.context_length = 2
 
-        # Trading state
-        self.current_index = 0  # Current position in the data
-        self.is_initialized = False  # Flag to track if context is properly initialized
+        self.current_index = 0
+        self.is_initialized = False
 
-        # Context storage
-        self.context: Dict[str, pd.DataFrame] = (
-            {}
-        )  # Current context window for each symbol
-        self.extended_context = (
-            False  # Whether to keep growing context or maintain fixed size
-        )
+        self.context: pd.DataFrame = None
+        self.extended_context = False
 
     def fetch_data(self, kucoin: bool = True):
         print("[green]DOWNLOADING DATA[/green]")
-        for symbol in self.symbols:
-            if kucoin:
-                data = fetch_data(symbol, self.chunks, self.interval, self.age_days, kucoin=True)
-            else:
-                data = fetch_data(symbol, self.chunks, self.interval, self.age_days, kucoin=False)
-            
-            self.data[symbol] = data
-            self.context[symbol] = self.data[symbol].iloc[:self.context_length].copy()
-
-        print(f"Fetched {len(data)} data points for {symbol}")
+        if kucoin:
+            self.data = fetch_data(self.symbol, self.chunks, self.interval, self.age_days, kucoin=True)
+        else:
+            self.data = fetch_data(self.symbol, self.chunks, self.interval, self.age_days, kucoin=False)
+        
+        self.context = self.data.iloc[:self.context_length].copy()
+        print(f"Fetched {len(self.data)} data points for {self.symbol}")
 
     def initialize_context(self):
-        """Initialize the context windows for all symbols."""
-        if not self.data:
+        if self.data is None:
             raise ValueError("No data available. Call fetch_data() first.")
 
-        for symbol in self.symbols:
-            if len(self.data[symbol]) < self.context_length:
-                raise ValueError(
-                    f"Insufficient data for {symbol}. Need at least {self.context_length} points."
-                )
+        if len(self.data) < self.context_length:
+            raise ValueError(
+                f"Insufficient data for {self.symbol}. Need at least {self.context_length} points."
+            )
 
-            # Initialize context with first context_length rows
-            self.context[symbol] = self.data[symbol].iloc[: self.context_length].copy()
-
+        self.context = self.data.iloc[:self.context_length].copy()
         self.current_index = self.context_length
         self.is_initialized = True
         print("Context initialized successfully")
 
     def update_context(self):
-        """Update the context windows with new data."""
         if not self.is_initialized:
             raise ValueError(
                 "Context not initialized. Call initialize_context() first."
             )
 
-        for symbol in self.symbols:
-            if self.current_index >= len(self.data[symbol]):
-                continue
+        if self.current_index >= len(self.data):
+            return
 
-            current_data = self.data[symbol].iloc[self.current_index]
+        current_data = self.data.iloc[self.current_index]
 
-            if self.extended_context:
-                # Growing context mode - append new data
-                self.context[symbol] = pd.concat(
-                    [self.context[symbol], pd.DataFrame([current_data])]
-                ).reset_index(drop=True)
-            else:
-                # Fixed-size context mode - slide window
-                self.context[symbol] = pd.concat(
-                    [self.context[symbol].iloc[1:], pd.DataFrame([current_data])]
-                ).reset_index(drop=True)
+        if self.extended_context:
+            # Growing context mode - append new data
+            self.context = pd.concat(
+                [self.context, pd.DataFrame([current_data])]
+            ).reset_index(drop=True)
+        else:
+            # Fixed-size context mode - slide window
+            self.context = pd.concat(
+                [self.context.iloc[1:], pd.DataFrame([current_data])]
+            ).reset_index(drop=True)
 
     def step(self) -> bool:
-        """Advance the environment by one step."""
         if not self.is_initialized:
             raise ValueError(
                 "Context not initialized. Call initialize_context() first."
             )
 
         # Check if we've reached the end of the data
-        if self.current_index >= len(self.data[self.symbols[0]]) - 1:
+        if self.current_index >= len(self.data) - 1:
             return False
 
         # Update context with new data
         self.update_context()
 
         # Update portfolio with current prices
-        current_prices = self.get_current_prices()
-        self.portfolio.update_positions(current_prices)
+        current_price = self.get_current_price()
+        self.portfolio.update_positions({self.symbol: current_price})
         self.portfolio.pnl_history.append(self.portfolio.total_profit_loss)
         self.portfolio.pct_pnl_history.append(self.portfolio.total_profit_loss_pct)
 
@@ -479,27 +589,20 @@ class TradingEnvironment:
         return True
 
     def reset(self):
-        """Reset the environment to its initial state."""
         self.initialize_context()
         self.portfolio = Portfolio(self.portfolio.initial_capital)
         print("Environment reset successfully")
 
-    def get_current_prices(self) -> Dict[str, pd.Series]:
-        """Get current prices for all symbols."""
-        return {
-            symbol: self.data[symbol].iloc[self.current_index]
-            for symbol in self.symbols
-        }
+    def get_current_price(self) -> pd.Series:
+        return self.data.iloc[self.current_index]
 
     def get_current_timestamp(self) -> datetime:
-        """Get the current timestamp."""
-        return self.data[self.symbols[0]].iloc[self.current_index]["Datetime"]
+        return self.data.iloc[self.current_index]["Datetime"]
 
     def get_state(self) -> Dict:
-        """Get the current state of the environment."""
         return {
             "timestamp": self.get_current_timestamp(),
-            "prices": self.get_current_prices(),
+            "price": self.get_current_price(),
             "context": self.context,
             "portfolio_value": self.portfolio.total_value,
             "cash": self.portfolio.cash,
@@ -552,7 +655,7 @@ class TradingEnvironment:
 
         if verbose:
             print(
-                f"{self.symbols[0]} {self.interval} | PnL: {self.portfolio.total_profit_loss_pct:.2f}% | Max DD: {max_drawdown:.2f}% | PF: {profit_factor:.2f} | RR Ratio:{RR_ratio:.2f} | P%/T Ratio: {PT_ratio:.2f}% | WR: {win_rate:.2f} | Optimal WR: {optimal_wr:.2f} | Total Volume: {total_volume:.2f} | Total Trades: {total_trades} | Gains: {len(gains)} | Losses: {len(losses)}"
+                f"{self.symbol} {self.interval} | PnL: {self.portfolio.total_profit_loss_pct:.2f}% | Max DD: {max_drawdown:.2f}% | PF: {profit_factor:.2f} | RR Ratio:{RR_ratio:.2f} | P%/T Ratio: {PT_ratio:.2f}% | WR: {win_rate:.2f} | Optimal WR: {optimal_wr:.2f} | Total Volume: {total_volume:.2f} | Total Trades: {total_trades} | Gains: {len(gains)} | Losses: {len(losses)}"
             )
         output_dict = {
             "PnL": self.portfolio.total_profit_loss_pct,
@@ -576,17 +679,15 @@ class TradingEnvironment:
         Args:
             signals (Dict[str, bool]): Dictionary containing 'buy' and 'sell' boolean signals
         """
-        current_prices = self.get_current_prices()
-        current_symbol = self.get_current_symbol()
-        current_price = current_prices[current_symbol]["Close"]
+        current_price = self.get_current_price()
 
         if signals.get("buy", False):
             self.portfolio.buy_max(
-                current_symbol, current_price, self.get_current_timestamp()
+                self.symbol, current_price["Close"], self.get_current_timestamp()
             )
         elif signals.get("sell", False):
             self.portfolio.sell_max(
-                current_symbol, current_price, self.get_current_timestamp()
+                self.symbol, current_price["Close"], self.get_current_timestamp()
             )
 
     def create_performance_plot(self, show_graph: bool = False):
@@ -594,7 +695,7 @@ class TradingEnvironment:
 
         # Calculate strategy performance line
         # Start from context_length since that's when we begin trading
-        strategy_data = self.data[self.symbols[0]].iloc[self.context_length :]
+        strategy_data = self.data.iloc[self.context_length :]
         strategy_data = strategy_data.reset_index(drop=True)
         fig.add_trace(
             go.Scatter(
@@ -606,7 +707,7 @@ class TradingEnvironment:
         )
 
         # Calculate price percentage change line
-        price_data = self.data[self.symbols[0]]
+        price_data = self.data
         start_price = price_data.iloc[0]["Close"]
         start_pct_change = ((price_data["Close"] - start_price) / start_price) * 100
         fig.add_trace(
@@ -667,8 +768,14 @@ class TradingEnvironment:
             title=f"Portfolio Performance {self.instance_name} | {formatted_summary}",
             xaxis_title="Time",
             yaxis_title="Profit/Loss (%)",
-            height=800,  # Set a fixed height
             margin=dict(l=50, r=50, t=100, b=50),  # Add margins
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1,
+                xanchor="right",
+                x=1
+            )
         )
 
         if show_graph:
@@ -682,16 +789,16 @@ class BacktestEnvironment:
 
     def _add_environment(self, environment: TradingEnvironment):
         self.environments[environment.instance_name] = environment
-        self.current_symbol = environment.symbols[0]
+        self.current_symbol = environment.symbol
 
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
             default_env = TradingEnvironment(
-                symbols=["SOL-USDT"],
+                symbol="BTC-USDT",
                 instance_name=strategy.__name__,
                 initial_capital=40,
-                chunks=10,
-                interval="1min",
+                chunks=1,
+                interval="5min",
                 age_days=0,
             )  # set env defaults here
             self._add_environment(default_env)
@@ -702,7 +809,7 @@ class BacktestEnvironment:
         try:
             if (
                 context["Close"].iloc[-1]
-                < env.data[env.symbols[0]]["Close"].iloc[index + 1]
+                < env.data["Close"].iloc[index + 1]
             ):
                 env.portfolio.buy_max(
                     self.current_symbol,
@@ -711,7 +818,7 @@ class BacktestEnvironment:
                 )
             elif (
                 context["Close"].iloc[-1]
-                > env.data[env.symbols[0]]["Close"].iloc[index + 1]
+                > env.data["Close"].iloc[index + 1]
             ):
                 env.portfolio.sell_max(
                     self.current_symbol,
@@ -845,27 +952,20 @@ class BacktestEnvironment:
             )
 
     def NN(self, env: TradingEnvironment, context, current_ohlcv):
-        import sys
-        import os
-        sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        from brains.time_series.single_predictors.single_pytorch_model import load_model
+        from single_pytorch_model import load_model, SingleModel
         
-        # Load the model using the new load_model function
         model = load_model(r"trading\model.pth")
         
-        # Make predictions
         with torch.no_grad():
             predictions = model.predict(model, context)
         
-        # Trading logic based on predictions
         current_close = current_ohlcv['Close']
         
-        # Example trading logic (modify as needed)
-        if predictions[-1] > current_close:  # If prediction is positive
+        if predictions[-1] > predictions[-2]:
             env.portfolio.buy_max(
                 self.current_symbol, current_close, env.get_current_timestamp()
             )
-        elif predictions[-1] < current_close:  # If prediction is negative
+        elif predictions[-1] < predictions[-2]:
             env.portfolio.sell_max(
                 self.current_symbol, current_close, env.get_current_timestamp()
             )
@@ -874,19 +974,18 @@ class BacktestEnvironment:
         self.add_strategy_environments(strategies)
         for env in self.environments.values():
             env.fetch_data(kucoin=True)
-            # env.create_ohlcv_chart()
             env.initialize_context()
         print("Starting Backtest")
         total_steps = 0
         for env in self.environments.values():
-            total_steps += len(env.data[env.symbols[0]]) - env.context_length - 1
+            total_steps += len(env.data) - env.context_length - 1
 
         progress_bar = tqdm(total=total_steps)
         while all(env.step() for env in self.environments.values()):
             for strategy, env in zip(strategies, self.environments.values()):
                 current_state = env.get_state()
-                context = current_state["context"][self.current_symbol]
-                current_ohlcv = current_state["prices"][self.current_symbol]
+                context = current_state["context"]
+                current_ohlcv = current_state["price"]
                 strategy(env, context, current_ohlcv)
                 progress_bar.update(1)
         progress_bar.close()
@@ -904,7 +1003,6 @@ class BacktestEnvironment:
 
         return output_dict
 
-
 if __name__ == "__main__":
     backtest = BacktestEnvironment()
-    backtest.run([backtest.NN], show_graph=True)
+    backtest.run([backtest.Simple_Scalper], show_graph=True)

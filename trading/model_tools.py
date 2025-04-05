@@ -54,7 +54,10 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
             }
             
             request = requests.get("https://api.kucoin.com/api/v1/market/candles", params=params).json()
-            request_data = request["data"]  # list of lists
+            try:
+                request_data = request["data"]  # list of lists
+            except:
+                raise Exception(f"Error fetching Kucoin. Check request parameters.")
             
             records = []
             for dochltv in request_data:

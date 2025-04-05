@@ -181,6 +181,7 @@ class Arbitrage:
 
         # Create the DataFrame and save to CSV
         df = pd.DataFrame(data, columns=["Symbol", "Market Price", "Type", "Expiry", "Strike", "Premium", "Intrinsic Value", "Profit"])
+        df.sort_values(by="Profit", ascending=False, inplace=True)
         df.to_csv(filename, index=False)
     
     def run(self):
@@ -189,5 +190,5 @@ class Arbitrage:
         self.save_arbitrage_to_csv()
 
 
-arbitrage = Arbitrage(pd.read_csv("trading\options\low_mid_cap.csv")["Ticker"].tolist())
+arbitrage = Arbitrage(pd.read_csv(r"trading\options\low_mid_cap.csv")["Ticker"].tolist())
 arbitrage.run()

@@ -76,29 +76,10 @@ y_1 = m2_data["BTC price"][shift:]
 x = x.squeeze()
 y_1 = y_1.squeeze()
 
-# Calculate rolling covariance
-rolling_cov_btc = rolling_covariance(x, y_1, window_size=10)
 
-# Calculate rolling correlation
-rolling_corr_btc = rolling_correlation(x, y_1, window_size=10)
-
-normalized_m2 = (x - x.min()) / (x.max() - x.min())
-normalized_rolling_cov = (rolling_cov_btc - rolling_cov_btc.min()) / (rolling_cov_btc.max() - rolling_cov_btc.min())
-normalized_rolling_corr = (rolling_corr_btc - rolling_corr_btc.min()) / (rolling_corr_btc.max() - rolling_corr_btc.min())
-normalized_btc_price = (y_1 - y_1.min()) / (y_1.max() - y_1.min())
-
-# Plot the rolling covariance and normalized rolling covariance
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=m2_data["DateTime"][shift:], y=normalized_m2, mode='lines', name='Normalized M2 Global Supply'))
 fig.add_trace(go.Scatter(x=m2_data["DateTime"][shift:], y=normalized_rolling_cov, mode='lines', name='Normalized Rolling Covariance'))
 fig.add_trace(go.Scatter(x=m2_data["DateTime"][shift:], y=normalized_btc_price, mode='lines', name='Normalized BTC Price'))
 fig.update_layout(title='Normalized Rolling Covariance of M2 Global Supply', xaxis_title='Date', yaxis_title='Normalized Covariance')
-fig.show()
-
-# Plot the rolling correlation and normalized rolling correlation
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=m2_data["DateTime"][shift:], y=normalized_m2, mode='lines', name='Normalized M2 Global Supply'))
-fig.add_trace(go.Scatter(x=m2_data["DateTime"][shift:], y=normalized_rolling_corr, mode='lines', name='Normalized Rolling Correlation'))
-fig.add_trace(go.Scatter(x=m2_data["DateTime"][shift:], y=normalized_btc_price, mode='lines', name='Normalized BTC Price'))
-fig.update_layout(title='Normalized Rolling Correlation of M2 Global Supply', xaxis_title='Date', yaxis_title='Normalized Correlation')
 fig.show()
