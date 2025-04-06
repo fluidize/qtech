@@ -20,7 +20,7 @@ class SingleModel(nn.Module):
 
         if train:
             self.epochs = epochs
-            self.data = fetch_data("BTC-USDT", 60, "5min", 0, kucoin=True) #set train data here
+            self.data = fetch_data("BTC-USDT", 80, "1min", 10, kucoin=True) #set train data here
             X, y, scalers = prepare_data(self.data, train_split=True) #train split to calculate dims
 
             input_dim = X.shape[1]

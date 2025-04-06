@@ -84,7 +84,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
         earliest = min(times)
         latest = max(times)
         difference = latest - earliest
-        print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
+        print(f"{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
         
         data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
         data.sort_values('Datetime', inplace=True)

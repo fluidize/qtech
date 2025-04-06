@@ -12,6 +12,7 @@ __pycache__/
 
 # Ignore log files
 *.log
+*.csv
 
 # Ignore model files
 *.keras

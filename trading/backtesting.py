@@ -354,7 +354,7 @@ class VectorizedBacktesting:
 
             # 6. Sharpe Ratio Over Time
             rolling_returns = self.data['Strategy_Returns'].rolling(window=30)
-            rolling_sharpe = np.sqrt(252) * rolling_returns.mean() / rolling_returns.std()
+            rolling_sharpe = np.sqrt(365) * rolling_returns.mean() / rolling_returns.std()
             
             fig.add_trace(
                 go.Scatter(
@@ -498,7 +498,7 @@ class VectorizedBacktesting:
         
         return position
 
-    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\model.pth") -> pd.Series:
+    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\btc1m.pth") -> pd.Series:
         from single_pytorch_model import load_model
         
         model = load_model(model_path)
@@ -507,27 +507,27 @@ class VectorizedBacktesting:
         previous_predictions = np.zeros(len(predictions))
         previous_predictions[1:] = predictions[:-1]
         
-        # Initialize the position series with the first value set to 0
+        # Initialize the position series with the same length as data
         position = pd.Series(0, index=data.index)
         
         # Set positions based on predictions, using .loc to avoid chained assignment
         buy_mask = (predictions - previous_predictions) > 0
-        position.loc[1:][buy_mask] = 1  # Buy signal
-        position.loc[1:][~buy_mask] = -1  # Sell signal
+        position.loc[1:] = np.where(buy_mask, 1, 0)  # Buy signal
+        position.loc[0] = 0  # Ensure the first position is 0
 
         return position
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
-        symbol="BTC-USDT",
+        symbol="SOL-USDT",
         initial_capital=40.0,
-        chunks=60,
-        interval="5min",
-        age_days=0
+        chunks=5,
+        interval="1min",
+        age_days=200
     )
     
     backtest.fetch_data(kucoin=True)
     
     backtest.run_strategy(backtest.nn_strategy)
-    # metrics = backtest.get_performance_metrics()
-    backtest.plot_performance(advanced=True)
+    print(backtest.get_performance_metrics())
+    backtest.plot_performance(advanced=False)

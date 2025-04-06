@@ -45,22 +45,31 @@ class JupiterAPI:
         request = requests.post(self.base_url+path, json=data)
         return request
 
-    def get_wallet(self, wallet_address, ):
+    def get_wallet(self, wallet_address):
         response = requests.get(f"https://api.jup.ag/ultra/v1/balances/{wallet_address}")
         return response.json()
     
     def get_price(self, contract_address):
         if isinstance(contract_address, list):
             contract_address = ",".join(contract_address)
-
-        response = requests.get(f"https://api.jup.ag/price/v2?ids={contract_address}").json() #price for ca in usdc
-        output_dict = {}
-        for key in response["data"]:
-            if response["data"][key] is None:
-                output_dict[key] = 0
-            else:
-                output_dict[key] = float(response["data"][key]["price"])
-        return output_dict
+        try:
+            response = requests.get(f"https://api.jup.ag/price/v2?ids={contract_address}").json() #price for ca in usdc
+            output_dict = {}
+            for key in response["data"]:
+                if response["data"][key] is None:
+                    output_dict[key] = 0
+                else:
+                        output_dict[key] = float(response["data"][key]["price"])
+                return output_dict
+        except Exception as e:
+            print(f"[red]Error getting price: {e}[/red]")
+            return {}
+    
+    def get_wallet_token_amount(self, wallet_address, token_address):
+        if token_address == token.SOL:
+            token_address = "SOL"
+        wallet_info = self.get_wallet(wallet_address)
+        return wallet_info[token_address]["uiAmount"]
     
     def get_wallet_value(self, wallet_address):
         wallet_info = self.get_wallet(wallet_address)
@@ -68,7 +77,6 @@ class JupiterAPI:
             wallet_info[token.SOL] = wallet_info.pop('SOL')
 
         net_worth = 0
-        
         for ca in wallet_info:
             decimal_amount = wallet_info[ca]['uiAmount']
             token_worth = list(self.get_price(ca).values())[0]
@@ -78,31 +86,30 @@ class JupiterAPI:
 
 
     
-    def buy_max(self, output_mint): # Buy maximum SOL with all USDC
-        wallet_info = self.get_wallet(self.wallet_address)
-        usdc_token_amount = wallet_info[token.USDC]["uiAmount"]
+    def buy_max(self, output_mint): # Buy maximum X with all USDC
+        usdc_token_amount = self.get_wallet_token_amount(self.wallet_address, token.USDC)
         
         order = self.place_order(self.buy_with, output_mint, usdc_token_amount, self.wallet_address, self.private_key)
         return order.json()
 
-    def sell_max(self, input_mint, output_mint=token.USDC): # Sell all SOL for USDC
+    def sell_max(self, input_mint, output_mint=token.USDC): # Sell all X for USDC
         wallet_info = self.get_wallet(self.wallet_address)
         token_amount = wallet_info[input_mint]["uiAmount"]
         
         order = self.place_order(input_mint, output_mint, token_amount, self.wallet_address, self.private_key)
         return order.json()
 
-    def buy(self, output_mint, amount): # Buy x SOL with USDC
+    def buy(self, output_mint, amount): # Buy # X with USDC
         order = self.place_order(self.buy_with, output_mint, amount, self.wallet_address, self.private_key)
         return order.json()
 
-    def sell(self, input_mint, amount, output_mint=token.USDC): # Sell x SOL for USDC
+    def sell(self, input_mint, amount, output_mint=token.USDC): # Sell # X for USDC
         order = self.place_order(input_mint, output_mint, amount, self.wallet_address, self.private_key)
         return order.json()
 
 if __name__ == "__main__":
     jupiter = JupiterAPI("a","b")
-    print(jupiter.get_wallet_value("GSpGregkksyFFgWaQ48CkSi4bVKwC1uEj6T6Mp6nvgQh"))
+    print(jupiter.get_wallet_token_amount("GSpGregkksyFFgWaQ48CkSi4bVKwC1uEj6T6Mp6nvgQh", token.SOL))
 
 
 # Example usage:
