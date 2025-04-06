@@ -15,7 +15,7 @@ class VectorizedBacktesting:
         instance_name: str = "default",
         initial_capital: float = 10000.0,
         chunks: int = 5,
-        interval: str = "5m",
+        interval: str = "5min",
         age_days: int = 10,
     ):
         self.instance_name = instance_name
@@ -128,86 +128,296 @@ class VectorizedBacktesting:
             'Total Trades': total_trades,
         }
 
-    def plot_performance(self, show_graph: bool = True):
+    def plot_performance(self, show_graph: bool = True, advanced: bool = False):
         if self.data is None or 'Portfolio_Value' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
-        fig = go.Figure()
-        
-        # Add portfolio value
-        fig.add_trace(go.Scatter(
-            x=self.data.index,
-            y=self.data['Portfolio_Value'],
-            mode='lines',
-            name='Strategy Portfolio Value'
-        ))
-        
-        # Add asset value (normalized to initial capital)
-        asset_value = self.initial_capital * (1 + self.data['Returns'].cumsum())
-        fig.add_trace(go.Scatter(
-            x=self.data.index,
-            y=asset_value,
-            mode='lines',
-            name='Asset Value',
-            line=dict(dash='dash')
-        ))
-        
-        # Get actual trade signals (changes in position)
-        position_changes = self.data['Position'].diff()
-        # Buy signals: Any positive change in position
-        buy_signals = self.data[position_changes > 0]
-
-        sell_signals = self.data[position_changes < 0]
-        
-        # Print trade statistics
-        print("\nTrade Statistics:")
-        print(f"Total Buy Signals: {len(buy_signals)}")
-        print(f"Total Sell Signals: {len(sell_signals)}")
-        print(f"Total Trades: {len(buy_signals) + len(sell_signals)}")
-        
-        offset = self.initial_capital * 0.0005
-        buy_asset_values = asset_value[buy_signals.index] - offset
-        fig.add_trace(go.Scatter(
-            x=buy_signals.index,
-            y=buy_asset_values,
-            mode='markers',
-            name='Buy',
-            marker=dict(
-                color='green',
-                size=10,
-                symbol='triangle-up'
-            )
-        ))
-        
-        sell_asset_values = asset_value[sell_signals.index] + offset
-        fig.add_trace(go.Scatter(
-            x=sell_signals.index,
-            y=sell_asset_values,
-            mode='markers',
-            name='Sell',
-            marker=dict(
-                color='red',
-                size=10,
-                symbol='triangle-down'
-            )
-        ))
-        
         summary = self.get_performance_metrics()
-        fig.update_layout(
-            title=f'{self.symbol} {self.interval} | TR: {summary["Total Return"]*100:.3f}% | Max DD: {summary["Max Drawdown"]*100:.3f}% | RR: {summary["RR Ratio"]:.3f} | WR: {summary["Win Rate"]*100:.3f}% | Optimal WR: {summary["Optimal Win Rate"]*100:.3f}% | PT: {summary["PT Ratio"]*100:.3f}% | PF: {summary["Profit Factor"]:.3f} | Sharpe: {summary["Sharpe Ratio"]:.3f} | Sortino: {summary["Sortino Ratio"]:.3f} | Trades: {summary["Total Trades"]}',
-            xaxis_title='Date',
-            yaxis_title='Value',
-            showlegend=True,
-            template="plotly_dark",
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1,
-                xanchor="right",
-                x=1
+
+        if not advanced:
+            fig = go.Figure()
+            
+            fig.add_trace(go.Scatter(
+                x=self.data.index,
+                y=self.data['Portfolio_Value'],
+                mode='lines',
+                name='Strategy Portfolio Value',
+                line=dict(color='green'),
+                fill='tozeroy',
+                fillcolor='rgba(60, 179, 113, 0.3)'
+            ))
+            
+            asset_value = self.initial_capital * (1 + self.data['Returns'].cumsum())
+            fig.add_trace(go.Scatter(
+                x=self.data.index,
+                y=asset_value,
+                mode='lines',
+                name='Asset Value'
+            ))
+            
+            position_changes = self.data['Position'].diff()
+            buy_signals = self.data[position_changes > 0] # Buy signals: Any positive change in position
+            sell_signals = self.data[position_changes < 0]
+            
+            offset = self.initial_capital * 0.0005
+            buy_asset_values = asset_value[buy_signals.index] - offset
+            fig.add_trace(go.Scatter(
+                x=buy_signals.index,
+                y=buy_asset_values,
+                mode='markers',
+                name='Buy',
+                marker=dict(
+                    color='green',
+                    size=10,
+                    symbol='triangle-up'
+                )
+            ))
+            
+            sell_asset_values = asset_value[sell_signals.index] + offset
+            fig.add_trace(go.Scatter(
+                x=sell_signals.index,
+                y=sell_asset_values,
+                mode='markers',
+                name='Sell',
+                marker=dict(
+                    color='red',
+                    size=10,
+                    symbol='triangle-down'
+                )
+            ))
+            
+            summary = self.get_performance_metrics()
+            fig.update_layout(
+                title=f'{self.symbol} {self.interval} {self.age_days}d old | TR: {summary["Total Return"]*100:.3f}% | Max DD: {summary["Max Drawdown"]*100:.3f}% | RR: {summary["RR Ratio"]:.3f} | WR: {summary["Win Rate"]*100:.3f}% | Optimal WR: {summary["Optimal Win Rate"]*100:.3f}% | PT: {summary["PT Ratio"]*100:.3f}% | PF: {summary["Profit Factor"]:.3f} | Sharpe: {summary["Sharpe Ratio"]:.3f} | Sortino: {summary["Sortino Ratio"]:.3f} | Trades: {summary["Total Trades"]}',
+                xaxis_title='Date',
+                yaxis_title='Value',
+                showlegend=True,
+                template="plotly_dark",
+                legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1,
+                        xanchor="right",
+                        x=1
+                        )
+                    )
+        else:
+            fig = go.Figure().set_subplots(
+                rows=4, cols=2,
+                subplot_titles=(
+                    "Equity Curve", "Drawdown Curve",
+                    "Profit and Loss Distribution", "Average Profit per Trade",
+                    f"Win Rate | Optimal: {summary['Optimal Win Rate']*100:.2f}%", "Sharpe Ratio",
+                    "Position Size Distribution", "Risk/Reward Distribution"
+                ),
+                specs=[
+                    [{"type": "scatter"}, {"type": "scatter"}],
+                    [{"type": "histogram"}, {"type": "scatter"}],
+                    [{"type": "scatter"}, {"type": "scatter"}],
+                    [{"type": "histogram"}, {"type": "histogram"}]
+                ],
+                vertical_spacing=0.1,
+                horizontal_spacing=0.1
             )
-        )
-        
+
+            # 1. Equity Curve
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=self.data['Portfolio_Value'],
+                    mode='lines',
+                    name='Strategy Portfolio Value'
+                ),
+                row=1, col=1
+            )
+            
+            # Add asset value (normalized to initial capital)
+            asset_value = self.initial_capital * (1 + self.data['Returns'].cumsum())
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=asset_value,
+                    mode='lines',
+                    name='Asset Value',
+                    line=dict(dash='dash')
+                ),
+                row=1, col=1
+            )
+
+            # 2. Drawdown Curve
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=self.data['Drawdown'] * 100,
+                    mode='lines',
+                    name='Drawdown',
+                    line=dict(color='red')
+                ),
+                row=1, col=2
+            )
+
+            # 3. Profit and Loss Distribution
+            position_changes = self.data['Position'].diff()
+            trade_returns = self.data['Strategy_Returns'][position_changes != 0]
+            fig.add_trace(
+                go.Histogram(
+                    x=trade_returns * 100,
+                    name='Trade Returns',
+                    nbinsx=500
+                ),
+                row=2, col=1
+            )
+
+            # 4. Average Profit per Trade
+            pnl_list = []
+            entry_prices = []
+            average_profit_series = []
+
+            position_changes = self.data['Position'].diff()
+
+            for idx in range(len(self.data)):
+                if position_changes[idx] == 1:  # Entry point
+                    entry_prices.append(self.data['Close'].iloc[idx])
+                elif position_changes[idx] == -1 and entry_prices:  # Exit point
+                    entry_price = entry_prices.pop(0)  # Get the last entry price
+                    exit_price = self.data['Close'].iloc[idx]
+                    pnl = exit_price - entry_price  # Calculate PnL
+                    pnl_list.append(pnl)
+
+                # Calculate average profit per trade up to this point
+                total_trades = len(pnl_list)
+                average_profit_per_trade = np.mean(pnl_list) if total_trades > 0 else 0
+                average_profit_series.append(average_profit_per_trade)
+
+            # Convert to a Series for plotting
+            avg_profit_series = pd.Series(average_profit_series, index=self.data.index)
+
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=avg_profit_series * 100,  # Convert to percentage
+                    mode='lines',
+                    name='Avg Profit per Trade (%)',
+                ),
+                row=2, col=2
+            )
+
+            # Add mean line
+            mean_profit = np.mean(pnl_list) * 100 if total_trades > 0 else 0
+            fig.add_trace(
+                go.Scatter(
+                    x=[self.data.index[0], self.data.index[-1]],
+                    y=[mean_profit, mean_profit],
+                    mode='lines',
+                    name='Mean Profit',
+                    line=dict(dash='dash', color='red')
+                ),
+                row=2, col=2
+            )
+
+            # 5. Win Rate Over Time
+            # Calculate win rate using the same method as get_performance_metrics
+            pnl_list = []
+            entry_prices = []
+            win_rates = []
+            total_trades = 0
+            winning_trades = 0
+            
+            position_changes = self.data['Position'].diff()
+            for idx in range(len(self.data)):
+                if position_changes[idx] == 1:  # Entry point
+                    entry_prices.append(self.data['Close'].iloc[idx])
+                elif position_changes[idx] == -1 and entry_prices:  # Exit point
+                    entry_price = entry_prices.pop(0)  # Get the last entry price
+                    exit_price = self.data['Close'].iloc[idx]
+                    pnl = exit_price - entry_price  # Calculate PnL
+                    pnl_list.append(pnl)
+                    total_trades += 1
+                    if pnl > 0:
+                        winning_trades += 1
+                    win_rates.append(winning_trades / total_trades if total_trades > 0 else 0)
+                else:
+                    win_rates.append(winning_trades / total_trades if total_trades > 0 else 0)
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=[rate * 100 for rate in win_rates],
+                    mode='lines',
+                    name='Win Rate'
+                ),
+                row=3, col=1
+            )
+
+            # 6. Sharpe Ratio Over Time
+            rolling_returns = self.data['Strategy_Returns'].rolling(window=30)
+            rolling_sharpe = np.sqrt(252) * rolling_returns.mean() / rolling_returns.std()
+            
+            # Add rolling Sharpe ratio
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=rolling_sharpe,
+                    mode='lines',
+                    name='Rolling Sharpe'
+                ),
+                row=3, col=2
+            )
+            
+            # Add mean Sharpe ratio line
+            mean_sharpe = rolling_sharpe.mean()
+            fig.add_trace(
+                go.Scatter(
+                    x=[self.data.index[0], self.data.index[-1]],
+                    y=[mean_sharpe, mean_sharpe],
+                    mode='lines',
+                    name='Mean Sharpe',
+                    line=dict(dash='dash', color='red')
+                ),
+                row=3, col=2
+            )
+
+            # 7. Position Size Distribution
+            position_sizes = self.data['Position'].abs()
+            fig.add_trace(
+                go.Histogram(
+                    x=position_sizes,
+                    name='Position Sizes',
+                    nbinsx=10
+                ),
+                row=4, col=1
+            )
+
+            # 8. Risk/Reward Distribution
+            winning_trades = self.data['Strategy_Returns'][self.data['Strategy_Returns'] > 0]
+            losing_trades = self.data['Strategy_Returns'][self.data['Strategy_Returns'] < 0]
+            risk_reward = np.abs(winning_trades.mean() / losing_trades.mean()) if len(losing_trades) > 0 else 0
+            fig.add_trace(
+                go.Histogram(
+                    x=self.data['Strategy_Returns'] * 100,
+                    name='Risk/Reward',
+                    nbinsx=50
+                ),
+                row=4, col=2
+            )
+
+            # Update layout
+            fig.update_layout(
+                title_text=f"{self.symbol} {self.interval} Performance Analysis",
+                showlegend=True,
+                template="plotly_dark"
+            )
+
+            # Update y-axis labels
+            fig.update_yaxes(title_text="Value", row=1, col=1)
+            fig.update_yaxes(title_text="Drawdown (%)", row=1, col=2)
+            fig.update_yaxes(title_text="Frequency", row=2, col=1)
+            fig.update_yaxes(title_text="Number of Trades", row=2, col=2)
+            fig.update_yaxes(title_text="Win Rate (%)", row=3, col=1)
+            fig.update_yaxes(title_text="Sharpe Ratio", row=3, col=2)
+            fig.update_yaxes(title_text="Frequency", row=4, col=1)
+            fig.update_yaxes(title_text="Frequency", row=4, col=2)
+
         if show_graph:
             fig.show()
         
@@ -252,7 +462,7 @@ class VectorizedBacktesting:
         
         return position
 
-    def scalper_strategy(self, data: pd.DataFrame) -> pd.Series:
+    def simple_scalper_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
         
         price_change = data['Close'].pct_change()
@@ -291,15 +501,18 @@ class VectorizedBacktesting:
         from single_pytorch_model import load_model
         
         model = load_model(model_path)
+
         predictions = model.predict(model, data[['Open', 'High', 'Low', 'Close', 'Volume']])
+        previous_predictions = np.zeros(len(predictions))
+        previous_predictions[1:] = predictions[:-1]
         
         # Initialize the position series with the first value set to 0
         position = pd.Series(0, index=data.index)
         
-        # Set positions based on predictions, starting from the second element
-        buy_mask = (predictions-data['Close'][1:]) > 0
-        position[1:][buy_mask] = 1  # Buy signal
-        position[1:][~buy_mask] = -1  # Sell signal
+        # Set positions based on predictions, using .loc to avoid chained assignment
+        buy_mask = (predictions - previous_predictions) > 0
+        position.loc[1:][buy_mask] = 1  # Buy signal
+        position.loc[1:][~buy_mask] = -1  # Sell signal
 
         return position
 
@@ -307,7 +520,7 @@ if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="BTC-USDT",
         initial_capital=40.0,
-        chunks=29,
+        chunks=60,
         interval="5min",
         age_days=0
     )
@@ -316,4 +529,4 @@ if __name__ == "__main__":
     
     backtest.run_strategy(backtest.nn_strategy)
     # metrics = backtest.get_performance_metrics()
-    backtest.plot_performance()
+    backtest.plot_performance(advanced=True)

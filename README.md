@@ -4,5 +4,5 @@ This repository contains a collection of **quantitative trading ideas**, **neura
 
 ## Table of Contents
 - [Trading Ideas and Neural Networks](https://github.com/Fluidize/fintech/tree/main/trading)
-- [Jupiter Aggregator Trading Environment](https://github.com/Fluidize/fintech/tree/main/solana-dev/jupiter)
+- [Jupiter Aggregator Trading Environment](https://github.com/Fluidize/fintech/tree/main/solana/jupiter)
 - [Alpaca Trading Environment](https://github.com/Fluidize/fintech/tree/main/alpaca)
