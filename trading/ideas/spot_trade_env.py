@@ -47,8 +47,8 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
         progress_bar = tqdm(total=chunks, desc="KUCOIN PROGRESS")
         for x in range(chunks):
             chunksize = 1440  # 1d of 1m data
-            end_time = datetime.now() - timedelta(minutes=chunksize*x)
-            start_time = end_time - timedelta(minutes=chunksize)
+            end_time = datetime.now() - timedelta(minutes=chunksize*x) - timedelta(days=age_days)
+            start_time = end_time - timedelta(minutes=chunksize) - timedelta(days=age_days)
             
             params = {
                 "symbol": ticker,
@@ -166,8 +166,12 @@ def prepare_data(data, train_split=True):
         
         if technical_features:
             df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
+
+        if 'Datetime' in df.columns:
+            X = df.drop(['Datetime'], axis=1)
+        else:
+            X = df
         
-        X = df.drop(['Datetime'], axis=1)
         y = df['Close'].shift(-1)  # Target is the next day's close price
         
         X = X[:-1]  # Remove last row since we don't have target for it
