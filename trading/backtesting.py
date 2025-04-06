@@ -291,20 +291,16 @@ class VectorizedBacktesting:
         from single_pytorch_model import load_model
         
         model = load_model(model_path)
+        predictions = model.predict(model, data[['Open', 'High', 'Low', 'Close', 'Volume']])
         
-        X, _, _ = prepare_data(data, train_split=False)
-        X_tensor = torch.tensor(X.values, dtype=torch.float32)
-        
-        with torch.no_grad():
-            predictions = model(X_tensor)
-            predictions = predictions.numpy().flatten()
-        
+        # Initialize the position series with the first value set to 0
         position = pd.Series(0, index=data.index)
-        prediction_changes = np.diff(predictions, prepend=predictions[0])
         
-        position[prediction_changes > 0] = 1
-        position[prediction_changes < 0] = -1
-        
+        # Set positions based on predictions, starting from the second element
+        buy_mask = (predictions-data['Close'][1:]) > 0
+        position[1:][buy_mask] = 1  # Buy signal
+        position[1:][~buy_mask] = -1  # Sell signal
+
         return position
 
 if __name__ == "__main__":
@@ -318,6 +314,6 @@ if __name__ == "__main__":
     
     backtest.fetch_data(kucoin=True)
     
-    backtest.run_strategy(backtest.scalper_strategy)
+    backtest.run_strategy(backtest.nn_strategy)
     # metrics = backtest.get_performance_metrics()
     backtest.plot_performance()
