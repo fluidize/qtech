@@ -8,6 +8,10 @@ from rich import print
 from model_tools import *
 from indicators import *
 
+# Buy signals: Any positive change in position
+# Sell signals: Any negative change in position
+# If .diff() is 0, then no change in position
+
 class VectorizedBacktesting:
     def __init__(
         self,
@@ -78,7 +82,7 @@ class VectorizedBacktesting:
         total_return = self.data['Cumulative_Returns'].iloc[-1] - 1
         max_drawdown = self.data['Drawdown'].min()
         
-        risk_free_rate = 0.02  # 2% annual risk-free rate
+        risk_free_rate = 0.00  #ts too volatile gng :broken_heart:
         daily_rf = (1 + risk_free_rate) ** (1/trading_days) - 1
         excess_returns = self.data['Strategy_Returns'] - daily_rf
         sharpe_ratio = np.sqrt(trading_days) * excess_returns.mean() / excess_returns.std()
@@ -86,22 +90,19 @@ class VectorizedBacktesting:
         downside_returns = self.data['Strategy_Returns'][self.data['Strategy_Returns'] < 0]
         sortino_ratio = np.sqrt(trading_days) * (self.data['Strategy_Returns'].mean() - daily_rf) / downside_returns.std()
 
-        # Initialize lists to track PnL and entry prices
         pnl_list = []
         entry_prices = []
         
-        # Calculate PnL for each position opened
         position_changes = self.data['Position'].diff()
         for idx in range(len(self.data)):
-            if position_changes[idx] == 1:  # Entry point
+            if position_changes[idx] == 1:
                 entry_prices.append(self.data['Close'].iloc[idx])
-            elif position_changes[idx] == -1 and entry_prices:  # Exit point
-                entry_price = entry_prices.pop(0)  # Get the last entry price
+            elif position_changes[idx] == -1 and entry_prices:
+                entry_price = entry_prices.pop(0)
                 exit_price = self.data['Close'].iloc[idx]
-                pnl = exit_price - entry_price  # Calculate PnL
+                pnl = exit_price - entry_price
                 pnl_list.append(pnl)
 
-        # Calculate winning trades and other metrics
         winning_trades = sum(1 for pnl in pnl_list if pnl > 0)
         total_trades = len(pnl_list)
         
@@ -110,7 +111,7 @@ class VectorizedBacktesting:
         RR_ratio = (average_wins / abs(average_losses)) if average_losses < 0 else 0
 
         win_rate = winning_trades / total_trades if total_trades > 0 else 0
-        optimal_win_rate = 1 / (RR_ratio + 1) if RR_ratio > 0 else 0
+        BE_rate = 1 / (RR_ratio + 1) if RR_ratio > 0 else 0
 
         PT_ratio = (self.data['Strategy_Returns'].sum() / total_trades) * 100 if total_trades > 0 else 0
         profit_factor = (self.data['Strategy_Returns'] > 0).sum() / (self.data['Strategy_Returns'] < 0).sum() if (self.data['Strategy_Returns'] < 0).sum() > 0 else 0
@@ -119,7 +120,7 @@ class VectorizedBacktesting:
             'Total Return': total_return,
             'Max Drawdown': max_drawdown,
             'Win Rate': win_rate,
-            'Optimal Win Rate': optimal_win_rate,
+            'Breakeven Rate': BE_rate,
             'RR Ratio': RR_ratio,
             'PT Ratio': PT_ratio,
             'Profit Factor': profit_factor,
@@ -156,7 +157,7 @@ class VectorizedBacktesting:
             ))
             
             position_changes = self.data['Position'].diff()
-            buy_signals = self.data[position_changes > 0] # Buy signals: Any positive change in position
+            buy_signals = self.data[position_changes > 0]
             sell_signals = self.data[position_changes < 0]
             
             offset = self.initial_capital * 0.0005
@@ -188,7 +189,7 @@ class VectorizedBacktesting:
             
             summary = self.get_performance_metrics()
             fig.update_layout(
-                title=f'{self.symbol} {self.interval} {self.age_days}d old | TR: {summary["Total Return"]*100:.3f}% | Max DD: {summary["Max Drawdown"]*100:.3f}% | RR: {summary["RR Ratio"]:.3f} | WR: {summary["Win Rate"]*100:.3f}% | Optimal WR: {summary["Optimal Win Rate"]*100:.3f}% | PT: {summary["PT Ratio"]*100:.3f}% | PF: {summary["Profit Factor"]:.3f} | Sharpe: {summary["Sharpe Ratio"]:.3f} | Sortino: {summary["Sortino Ratio"]:.3f} | Trades: {summary["Total Trades"]}',
+                title=f'{self.symbol} {self.interval} {self.age_days}d old | TR: {summary["Total Return"]*100:.3f}% | Max DD: {summary["Max Drawdown"]*100:.3f}% | RR: {summary["RR Ratio"]:.3f} | WR: {summary["Win Rate"]*100:.3f}% | BE: {summary["Breakeven Rate"]*100:.3f}% | PT: {summary["PT Ratio"]*100:.3f}% | PF: {summary["Profit Factor"]:.3f} | Sharpe: {summary["Sharpe Ratio"]:.3f} | Sortino: {summary["Sortino Ratio"]:.3f} | Trades: {summary["Total Trades"]}',
                 xaxis_title='Date',
                 yaxis_title='Value',
                 showlegend=True,
@@ -201,13 +202,13 @@ class VectorizedBacktesting:
                         x=1
                         )
                     )
-        else:
+        else: # Advanced Plotting
             fig = go.Figure().set_subplots(
                 rows=4, cols=2,
                 subplot_titles=(
                     "Equity Curve", "Drawdown Curve",
-                    "Profit and Loss Distribution", "Average Profit per Trade",
-                    f"Win Rate | Optimal: {summary['Optimal Win Rate']*100:.2f}%", "Sharpe Ratio",
+                    "Profit and Loss Distribution (%)", "Average Profit per Trade (%)",
+                    f"Win Rate | BE: {summary['Breakeven Rate']*100:.2f}%", "Sharpe Ratio",
                     "Position Size Distribution", "Risk/Reward Distribution"
                 ),
                 specs=[
@@ -231,7 +232,6 @@ class VectorizedBacktesting:
                 row=1, col=1
             )
             
-            # Add asset value (normalized to initial capital)
             asset_value = self.initial_capital * (1 + self.data['Returns'].cumsum())
             fig.add_trace(
                 go.Scatter(
@@ -257,53 +257,61 @@ class VectorizedBacktesting:
             )
 
             # 3. Profit and Loss Distribution
+            pnl_list = []
+            entry_prices = []
+            
             position_changes = self.data['Position'].diff()
-            trade_returns = self.data['Strategy_Returns'][position_changes != 0]
+            for idx in range(len(self.data)):
+                if position_changes[idx] == 1:
+                    entry_prices.append(self.data['Close'].iloc[idx])
+                elif position_changes[idx] == -1 and entry_prices:
+                    entry_price = entry_prices.pop(0)
+                    exit_price = self.data['Close'].iloc[idx]
+                    pnl = (exit_price - entry_price) / entry_price * 100  # Convert to percentage
+                    pnl_list.append(pnl)
+
             fig.add_trace(
                 go.Histogram(
-                    x=trade_returns * 100,
+                    x=pnl_list,
                     name='Trade Returns',
-                    nbinsx=500
+                    nbinsx=250
                 ),
                 row=2, col=1
             )
 
             # 4. Average Profit per Trade
-            pnl_list = []
-            entry_prices = []
             average_profit_series = []
-
-            position_changes = self.data['Position'].diff()
+            cumulative_profit = 0
+            total_trades = 0
+            entry_prices = []
 
             for idx in range(len(self.data)):
-                if position_changes[idx] == 1:  # Entry point
+                if position_changes[idx] == 1:
                     entry_prices.append(self.data['Close'].iloc[idx])
-                elif position_changes[idx] == -1 and entry_prices:  # Exit point
-                    entry_price = entry_prices.pop(0)  # Get the last entry price
+                    average_profit_series.append(cumulative_profit / total_trades if total_trades > 0 else 0)
+                elif position_changes[idx] == -1 and entry_prices:
+                    entry_price = entry_prices.pop(0)
                     exit_price = self.data['Close'].iloc[idx]
-                    pnl = exit_price - entry_price  # Calculate PnL
-                    pnl_list.append(pnl)
+                    pnl = (exit_price - entry_price) / entry_price * 100  # Convert to percentage
+                    cumulative_profit += pnl
+                    total_trades += 1
+                    average_profit_series.append(cumulative_profit / total_trades)
+                else:
+                    average_profit_series.append(cumulative_profit / total_trades if total_trades > 0 else 0)
 
-                # Calculate average profit per trade up to this point
-                total_trades = len(pnl_list)
-                average_profit_per_trade = np.mean(pnl_list) if total_trades > 0 else 0
-                average_profit_series.append(average_profit_per_trade)
-
-            # Convert to a Series for plotting
             avg_profit_series = pd.Series(average_profit_series, index=self.data.index)
 
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
-                    y=avg_profit_series * 100,  # Convert to percentage
+                    y=avg_profit_series * 100,
                     mode='lines',
                     name='Avg Profit per Trade (%)',
                 ),
                 row=2, col=2
             )
 
-            # Add mean line
-            mean_profit = np.mean(pnl_list) * 100 if total_trades > 0 else 0
+            mean_profit = np.mean(pnl_list) * 100 if pnl_list else 0
             fig.add_trace(
                 go.Scatter(
                     x=[self.data.index[0], self.data.index[-1]],
@@ -316,22 +324,17 @@ class VectorizedBacktesting:
             )
 
             # 5. Win Rate Over Time
-            # Calculate win rate using the same method as get_performance_metrics
-            pnl_list = []
-            entry_prices = []
             win_rates = []
             total_trades = 0
             winning_trades = 0
             
-            position_changes = self.data['Position'].diff()
             for idx in range(len(self.data)):
-                if position_changes[idx] == 1:  # Entry point
+                if position_changes[idx] == 1:
                     entry_prices.append(self.data['Close'].iloc[idx])
-                elif position_changes[idx] == -1 and entry_prices:  # Exit point
-                    entry_price = entry_prices.pop(0)  # Get the last entry price
+                elif position_changes[idx] == -1 and entry_prices:
+                    entry_price = entry_prices.pop(0)
                     exit_price = self.data['Close'].iloc[idx]
-                    pnl = exit_price - entry_price  # Calculate PnL
-                    pnl_list.append(pnl)
+                    pnl = (exit_price - entry_price) / entry_price * 100  # Convert to percentage
                     total_trades += 1
                     if pnl > 0:
                         winning_trades += 1
@@ -353,7 +356,6 @@ class VectorizedBacktesting:
             rolling_returns = self.data['Strategy_Returns'].rolling(window=30)
             rolling_sharpe = np.sqrt(252) * rolling_returns.mean() / rolling_returns.std()
             
-            # Add rolling Sharpe ratio
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
@@ -364,7 +366,6 @@ class VectorizedBacktesting:
                 row=3, col=2
             )
             
-            # Add mean Sharpe ratio line
             mean_sharpe = rolling_sharpe.mean()
             fig.add_trace(
                 go.Scatter(
@@ -389,14 +390,14 @@ class VectorizedBacktesting:
             )
 
             # 8. Risk/Reward Distribution
-            winning_trades = self.data['Strategy_Returns'][self.data['Strategy_Returns'] > 0]
-            losing_trades = self.data['Strategy_Returns'][self.data['Strategy_Returns'] < 0]
-            risk_reward = np.abs(winning_trades.mean() / losing_trades.mean()) if len(losing_trades) > 0 else 0
+            winning_trades = [pnl for pnl in pnl_list if pnl > 0]
+            losing_trades = [pnl for pnl in pnl_list if pnl < 0]
+            risk_reward = np.abs(np.mean(winning_trades) / np.mean(losing_trades)) if losing_trades else 0
             fig.add_trace(
                 go.Histogram(
-                    x=self.data['Strategy_Returns'] * 100,
+                    x=pnl_list,
                     name='Risk/Reward',
-                    nbinsx=50
+                    nbinsx=250
                 ),
                 row=4, col=2
             )
