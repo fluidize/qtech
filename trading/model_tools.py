@@ -5,7 +5,10 @@ import yfinance as yf
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
+
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 from rich import print
 
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
@@ -100,7 +103,7 @@ def compute_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def prepare_data(data, train_split=True):
+def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     scalers = {
         'price': MinMaxScaler(feature_range=(0, 1)),
         'volume': QuantileTransformer(output_distribution='normal'),
@@ -112,8 +115,6 @@ def prepare_data(data, train_split=True):
 
     df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
-    
-    lagged_length = 5
     
     lagged_features = []
     for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
@@ -153,8 +154,10 @@ def prepare_data(data, train_split=True):
         technical_features = [col for col in df.columns 
                             if col not in (price_features + volume_features + bounded_features + 
                                         normalized_features + ['Datetime'])]
-        
-        df[price_features] = scalers['price'].fit_transform(df[price_features])
+        if scale_y:
+            df[price_features] = scalers['price'].fit_transform(df[price_features])
+        else:
+            df[price_features] = df[price_features]
         
         df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
         df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
@@ -168,15 +171,96 @@ def prepare_data(data, train_split=True):
         else:
             X = df
         
-        y = df['Close'].shift(-1)  # Target is the next day's close price
+        y = df['Close'].shift(-1)
         
-        X = X[:-1]  # Remove last row since we don't have target for it
-        y = y[:-1]  # Remove last row since we don't have target for it
+        X = X[:-1]
+        y = y[:-1]
         return X, y, scalers
     
     return df, scalers
 
-def create_plot(actual, predicted):
+def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.05):
+    scalers = {
+        'price': StandardScaler(),  # Changed to StandardScaler for all features
+        'volume': StandardScaler(),
+        'technical': StandardScaler()
+    }
+
+    df = data.copy()
+    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
+
+    # Calculate returns and features
+    df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
+    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+    
+    # Create lagged features
+    lagged_features = []
+    for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
+        for i in range(1, lagged_length):
+            lagged_features.append(pd.DataFrame({
+                f'Prev{i}_{col}': df[col].shift(i)
+            }))
+    
+    if lagged_features:
+        df = pd.concat([df] + lagged_features, axis=1)
+    
+    # Technical indicators
+    df['Close_ZScore'] = (df['Close'] - df['Close'].rolling(window=100).mean()) / df['Close'].rolling(window=100).std()
+    df['MA10'] = df['Close'].rolling(window=10).mean() / df['Close']
+    df['MA20'] = df['Close'].rolling(window=20).mean() / df['Close']
+    df['MA50'] = df['Close'].rolling(window=50).mean() / df['Close']
+    df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
+    df['RSI'] = compute_rsi(df['Close'], 14)
+
+    # Handle NaN values
+    df = df.fillna(method='ffill').fillna(method='bfill')
+    df.dropna(inplace=True)
+    
+    if train_split:
+        # Prepare features
+        price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
+        volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
+        technical_features = ['RSI', 'MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross', 'Close_ZScore']
+        
+        # Scale features
+        df[price_features] = scalers['price'].fit_transform(df[price_features])
+        df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
+        df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
+
+        # Prepare X
+        if 'Datetime' in df.columns:
+            X = df.drop(['Datetime'], axis=1)
+        else:
+            X = df
+        
+        # Create target variable with dynamic threshold
+        pct_change = df['Close'].pct_change()
+        volatility = pct_change.rolling(window=100).std()
+        dynamic_threshold = volatility * 2  # Adjust threshold based on volatility
+        
+        y = pd.Series(0, index=df.index)
+        y[pct_change > dynamic_threshold] = 1
+        y[pct_change < -dynamic_threshold] = -1
+        
+        # Balance classes by undersampling majority class
+        class_counts = y.value_counts()
+        min_count = class_counts.min()
+        balanced_indices = []
+        for class_val in [-1, 0, 1]:
+            class_indices = y[y == class_val].index
+            if len(class_indices) > min_count:
+                balanced_indices.extend(np.random.choice(class_indices, min_count, replace=False))
+            else:
+                balanced_indices.extend(class_indices)
+        
+        X = X.loc[balanced_indices]
+        y = y.loc[balanced_indices]
+        
+        return X, y, scalers
+    
+    return df, scalers
+
+def prediction_plot(actual, predicted):
     difference = len(actual)-len(predicted) #trimmer
     actual = actual[difference:]
 
@@ -184,4 +268,14 @@ def create_plot(actual, predicted):
     fig.add_trace(go.Scatter(x=actual['Datetime'], y=actual['Close'], mode='lines', name='Actual'))
     fig.add_trace(go.Scatter(x=actual['Datetime'], y=predicted, mode='lines', name='Predicted'))
     fig.update_layout(title='Price Prediction', xaxis_title='Date', yaxis_title='Price')
-    fig.show()
+    
+    return fig
+
+def loss_plot(loss_history):
+    fig = make_subplots(rows=2, cols=1)
+    fig.add_trace(go.Scatter(x=list(range(len(loss_history))), y=loss_history, mode='lines', name='Loss'), row=1, col=1)
+    delta_loss = np.diff(loss_history)
+    fig.add_trace(go.Scatter(x=list(range(len(delta_loss))), y=delta_loss, mode='lines', name='Delta Loss'), row=2, col=1)
+    fig.update_layout(title='Loss', xaxis_title='Epoch', yaxis_title='Loss')
+
+    return fig
