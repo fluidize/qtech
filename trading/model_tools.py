@@ -181,8 +181,8 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
 
 def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.05):
     scalers = {
-        'price': StandardScaler(),  # Changed to StandardScaler for all features
-        'volume': StandardScaler(),
+        'price': MinMaxScaler(feature_range=(0, 1)),
+        'volume': QuantileTransformer(output_distribution='normal'),
         'technical': StandardScaler()
     }
 
@@ -213,7 +213,7 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     df['RSI'] = compute_rsi(df['Close'], 14)
 
     # Handle NaN values
-    df = df.fillna(method='ffill').fillna(method='bfill')
+    df = df.bfill().ffill()
     df.dropna(inplace=True)
     
     if train_split:
@@ -233,32 +233,21 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
         else:
             X = df
         
-        # Create target variable with dynamic threshold
-        pct_change = df['Close'].pct_change()
-        volatility = pct_change.rolling(window=100).std()
-        dynamic_threshold = volatility * 2  # Adjust threshold based on volatility
+        pct_change = df['Close'].pct_change().shift(-1)  # Y IS 1 AHEAD PRIOR
+        dynamic_threshold = 0.05 / 100
+
+        dynamic_threshold = 0.05/100
+        # 0 = below threshold | 1 = within threshold | 2 = above threshold
+        y = pd.Series(1, index=df.index)
+        y[pct_change < -dynamic_threshold] = 0
+        y[pct_change > dynamic_threshold] = 2
         
-        y = pd.Series(0, index=df.index)
-        y[pct_change > dynamic_threshold] = 1
-        y[pct_change < -dynamic_threshold] = -1
-        
-        # Balance classes by undersampling majority class
-        class_counts = y.value_counts()
-        min_count = class_counts.min()
-        balanced_indices = []
-        for class_val in [-1, 0, 1]:
-            class_indices = y[y == class_val].index
-            if len(class_indices) > min_count:
-                balanced_indices.extend(np.random.choice(class_indices, min_count, replace=False))
-            else:
-                balanced_indices.extend(class_indices)
-        
-        X = X.loc[balanced_indices]
-        y = y.loc[balanced_indices]
-        
-        return X, y, scalers
+        X = X[:-1]
+        y = y[:-1]
+
+        return X, y
     
-    return df, scalers
+    return df
 
 def prediction_plot(actual, predicted):
     difference = len(actual)-len(predicted) #trimmer
