@@ -11,6 +11,11 @@ import plotly.graph_objects as go
 import requests
 from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 
+import sys
+sys.path.append("trading")
+import trading.brains.time_series.single_pytorch_model as single_pytorch_model
+from trading.brains.time_series.single_pytorch_model import load_model, SingleModel
+
 # from indicators import *
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
     print("[green]DOWNLOADING DATA[/green]")
@@ -515,7 +520,7 @@ class TradingEnvironment:
         self.portfolio = Portfolio(initial_capital)
 
         self.data: pd.DataFrame = None
-        self.context_length = 2
+        self.context_length = 500
 
         self.current_index = 0
         self.is_initialized = False
@@ -790,6 +795,8 @@ class BacktestEnvironment:
     def __init__(self):
         self.environments = {}
         self.current_symbol = None
+        self.model = None  # Store model instance to avoid reloading
+        self.context_length = 100  # Match live trading context length
 
     def _add_environment(self, environment: TradingEnvironment):
         self.environments[environment.instance_name] = environment
@@ -798,13 +805,13 @@ class BacktestEnvironment:
     def add_strategy_environments(self, strategies: List):
         for strategy in strategies:
             default_env = TradingEnvironment(
-                symbol="BTC-USDT",
+                symbol="SOL-USDT",  # Match live trading symbol
                 instance_name=strategy.__name__,
                 initial_capital=40,
-                chunks=1,
-                interval="5min",
+                chunks=20,  # Match live trading chunks
+                interval="5min",  # Match live trading interval
                 age_days=0,
-            )  # set env defaults here
+            )
             self._add_environment(default_env)
 
     def Perfect(self, env, context, current_ohlcv):
@@ -956,23 +963,33 @@ class BacktestEnvironment:
             )
 
     def NN(self, env: TradingEnvironment, context, current_ohlcv):
-        from single_pytorch_model import load_model, SingleModel
-        
-        model = load_model(r"trading\model.pth")
-        
-        with torch.no_grad():
-            predictions = model.predict(model, context)
-        
-        current_close = current_ohlcv['Close']
-        
-        if predictions[-1] > predictions[-2]:
-            env.portfolio.buy_max(
-                self.current_symbol, current_close, env.get_current_timestamp()
-            )
-        elif predictions[-1] < predictions[-2]:
-            env.portfolio.sell_max(
-                self.current_symbol, current_close, env.get_current_timestamp()
-            )
+        try:
+            # Load model if not already loaded
+            if self.model is None:
+                self.model = load_model(r"trading\btc5m.pth")
+            
+            # Get predictions
+            with torch.no_grad():
+                predictions = self.model.predict(self.model, context)
+            
+            current_close = current_ohlcv['Close']
+            
+            # Trading logic based on prediction changes
+            if predictions[-1] > predictions[-2]:  # Prediction increased
+                env.portfolio.buy_max(
+                    self.current_symbol, 
+                    current_close, 
+                    env.get_current_timestamp()
+                )
+            elif predictions[-1] < predictions[-2]:  # Prediction decreased
+                env.portfolio.sell_max(
+                    self.current_symbol, 
+                    current_close, 
+                    env.get_current_timestamp()
+                )
+                
+        except Exception as e:
+            print(f"[red]Error in NN strategy: {e}[/red]")
 
     def run(self, strategies: List, verbose: bool = False, show_graph: bool = False):
         self.add_strategy_environments(strategies)
@@ -1009,4 +1026,5 @@ class BacktestEnvironment:
 
 if __name__ == "__main__":
     backtest = BacktestEnvironment()
-    backtest.run([backtest.Simple_Scalper], show_graph=True)
+    # Match live trading parameters
+    backtest.run([backtest.NN], show_graph=True)

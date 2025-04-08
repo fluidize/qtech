@@ -4,6 +4,7 @@ import pandas as pd
 import torch
 import plotly.graph_objects as go
 from rich import print
+import sys
 
 from model_tools import *
 from indicators import *
@@ -144,7 +145,6 @@ class VectorizedBacktesting:
                 mode='lines',
                 name='Strategy Portfolio Value',
                 line=dict(color='green'),
-                fill='tozeroy',
                 fillcolor='rgba(60, 179, 113, 0.3)'
             ))
             
@@ -498,32 +498,46 @@ class VectorizedBacktesting:
         
         return position
 
-    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\btc1m.pth") -> pd.Series:
-        from single_pytorch_model import load_model
+    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\btc5m.pth", min_context: int = 100) -> pd.Series:
+        sys.path.append(r"trading\brains\time_series\single_predictors")
+        from close_model import load_model
         
-        model = load_model(model_path)
-
-        predictions = model.predict(model, data[['Open', 'High', 'Low', 'Close', 'Volume']])
-        previous_predictions = np.zeros(len(predictions))
-        previous_predictions[1:] = predictions[:-1]
-        
-        # Initialize the position series with the same length as data
         position = pd.Series(0, index=data.index)
         
-        # Set positions based on predictions, using .loc to avoid chained assignment
-        buy_mask = (predictions - previous_predictions) > 0
-        position.loc[1:] = np.where(buy_mask, 1, 0)  # Buy signal
-        position.loc[0] = 0  # Ensure the first position is 0
-
+        model = load_model(model_path)
+        
+        for i in range(min_context, len(data)):
+            historical_data = data.iloc[i-min_context:i+1].copy()
+            
+            features = historical_data[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+            
+            try:
+                with torch.no_grad():
+                    predictions = model.predict(model, features)
+                
+                if len(predictions) >= 2:
+                    current_pred = predictions[-1]
+                    prev_pred = predictions[-2]
+                    
+                    if current_pred > prev_pred:
+                        position.iloc[i] = 1
+                    elif current_pred < prev_pred:
+                        position.iloc[i] = 0
+                    else:
+                        position.iloc[i] = position.iloc[i-1]
+            except Exception as e:
+                print(f"[red]Error making prediction at index {i}: {e}[/red]")
+                position.iloc[i] = position.iloc[i-1]
+        
         return position
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="SOL-USDT",
         initial_capital=40.0,
-        chunks=5,
+        chunks=1,
         interval="1min",
-        age_days=200
+        age_days=0
     )
     
     backtest.fetch_data(kucoin=True)
