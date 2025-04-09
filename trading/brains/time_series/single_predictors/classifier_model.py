@@ -2,11 +2,14 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, TensorDataset
-from torch.amp import autocast
+from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.amp import autocast, GradScaler
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import PowerTransformer
+from sklearn.ensemble import RandomForestClassifier
 
 from rich import print
 from tqdm import tqdm
@@ -15,233 +18,657 @@ import sys
 sys.path.append(r"trading")
 import model_tools as mt
 
-class Attention(nn.Module):
-    def __init__(self, hidden_dim):
+class FeatureSelectionCallback:
+    """Callback for feature importance-based selection during training"""
+    def __init__(self, X_train, y_train, feature_names, top_n=20):
+        self.X_train = X_train
+        self.y_train = y_train
+        self.feature_names = feature_names
+        self.top_n = top_n
+        self.important_features = None
+        
+    def get_important_features(self):
+        # Use Random Forest for feature selection - fast and effective
+        rf = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+        rf.fit(self.X_train, self.y_train)
+        
+        # Get feature importances
+        importances = rf.feature_importances_
+        indices = np.argsort(importances)[::-1]
+        
+        # Select top N features
+        self.important_features = [self.feature_names[i] for i in indices[:self.top_n]]
+        importance_values = [importances[i] for i in indices[:self.top_n]]
+        
+        print("Top features selected by importance:")
+        for i, (feature, importance) in enumerate(zip(self.important_features, importance_values)):
+            print(f"{i+1}. {feature}: {importance:.4f}")
+            
+        return self.important_features
+
+class SelfAttention(nn.Module):
+    """Improved attention mechanism with multi-head attention"""
+    def __init__(self, hidden_dim, num_heads=4):
         super().__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, 1)
-        )
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        assert hidden_dim % num_heads == 0, "Hidden dimension must be divisible by number of heads"
+        
+        self.query = nn.Linear(hidden_dim, hidden_dim)
+        self.key = nn.Linear(hidden_dim, hidden_dim)
+        self.value = nn.Linear(hidden_dim, hidden_dim)
+        
+        self.fc_out = nn.Linear(hidden_dim, hidden_dim)
+        self.scale = torch.sqrt(torch.FloatTensor([self.head_dim])).cuda()
         
     def forward(self, x):
-        attention_weights = self.attention(x)
-        attention_weights = torch.softmax(attention_weights, dim=1)
-        return attention_weights
+        batch_size = x.size(0)
+        seq_length = x.size(1)
+        
+        # (batch_size, seq_length, hidden_dim) -> (batch_size, seq_length, hidden_dim)
+        q = self.query(x)
+        k = self.key(x)
+        v = self.value(x)
+        
+        # Split into num_heads
+        q = q.view(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        k = k.view(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 3, 1)
+        v = v.view(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        
+        # (batch_size, num_heads, seq_length, seq_length)
+        attention = torch.matmul(q, k) / self.scale.to(x.device)
+        
+        # (batch_size, num_heads, seq_length, seq_length)
+        attention = torch.softmax(attention, dim=-1)
+        
+        # (batch_size, num_heads, seq_length, head_dim)
+        x = torch.matmul(attention, v)
+        
+        # (batch_size, seq_length, num_heads, head_dim) -> (batch_size, seq_length, hidden_dim)
+        x = x.permute(0, 2, 1, 3).contiguous().view(batch_size, seq_length, -1)
+        
+        # (batch_size, seq_length, hidden_dim)
+        x = self.fc_out(x)
+        
+        return x
 
 class ClassifierModel(nn.Module):
-    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True):
+    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, pct_threshold=0.01):
         super().__init__()
 
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.epochs = epochs
-
+        self.pct_threshold = pct_threshold
+        self.feature_selector = None
+        
+        # Dynamically determine input dimension from data
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
-            X, y = mt.prepare_data_classifier(self.data, train_split=True)
+            X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
+            
+            # Feature selection for better signal-to-noise ratio
+            feature_names = X.columns.tolist()
+            self.feature_selector = FeatureSelectionCallback(X.values, y.values, feature_names, top_n=30)
+            important_feature_names = self.feature_selector.get_important_features()
+            
+            # Filtering to important features only
+            X = X[important_feature_names]
             input_dim = X.shape[1]
+            print(f"Model initialized with input dimension: {input_dim} (after feature selection)")
         else:
-            input_dim = 33
-
-        # Enhanced MODEL ARCHITECTURE
-        rnn_width = 256
-        dense_width = 256
+            # More robust default - this will be updated when loading weights
+            input_dim = 30
         
-        # Feature processing
-        self.batch_norm = nn.BatchNorm1d(input_dim)
+        # Save for reference
+        self.input_dim = input_dim
         
-        # LSTM layers
-        self.lstm1 = nn.LSTM(input_dim, rnn_width, num_layers=2, bidirectional=True, dropout=0.2)
-        self.lstm2 = nn.LSTM(rnn_width*2, rnn_width, num_layers=2, bidirectional=True, dropout=0.2)
+        # Enhanced architecture - deeper and with skip connections
+        self.hidden_dim = 256
         
-        # Attention mechanism
-        self.attention = Attention(rnn_width*2)
+        # Enhanced feature extraction with 2 layers
+        self.feature_extractor = nn.Sequential(
+            nn.BatchNorm1d(input_dim),
+            nn.Linear(input_dim, self.hidden_dim),
+            nn.SiLU(),  # SiLU (Swish) activation often works better than ReLU variants
+            nn.Dropout(0.3),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+            nn.SiLU(),
+            nn.Dropout(0.3)
+        )
         
-        # Dense layers with residual connections
-        self.fc1 = nn.Linear(rnn_width*2, dense_width)
-        self.fc2 = nn.Linear(dense_width, dense_width)
-        self.fc3 = nn.Linear(dense_width, dense_width)
+        # Combine GRU and LSTM for better feature extraction
+        self.lstm = nn.LSTM(
+            input_size=self.hidden_dim,
+            hidden_size=self.hidden_dim,
+            num_layers=2,
+            bidirectional=True,
+            dropout=0.3,
+            batch_first=True
+        )
         
-        # Output layer
-        self.output = nn.Linear(dense_width, 3)
+        # Add multi-head self-attention
+        self.attention = SelfAttention(self.hidden_dim * 2, num_heads=4)
+        self.layer_norm1 = nn.LayerNorm(self.hidden_dim * 2)
+        self.layer_norm2 = nn.LayerNorm(self.hidden_dim * 2)
         
-        # Dropout
-        self.dropout = nn.Dropout(0.2)
+        # Enhanced prediction layers with deeper networks
+        self.fc_block1 = nn.Sequential(
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+            nn.SiLU(),
+            nn.Dropout(0.3),
+            nn.LayerNorm(self.hidden_dim)
+        )
         
-        # Activation functions
-        self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
+        self.fc_block2 = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim // 2),
+            nn.SiLU(),
+            nn.Dropout(0.3),
+            nn.LayerNorm(self.hidden_dim // 2)
+        )
+        
+        # Output layer with additional class for better distinction
+        self.output = nn.Linear(self.hidden_dim // 2, 3)
+        
+        # Add early stopping tracking
+        self.best_val_loss = float('inf')
+        self.patience_counter = 0
+        self.best_val_accuracy = 0.0
 
     def forward(self, x):
-        # Feature processing
-        x = self.batch_norm(x)
+        batch_size = x.size(0)
         
-        # LSTM layers
-        lstm_out1, _ = self.lstm1(x)  # Add sequence length dimension
-        lstm_out2, _ = self.lstm2(lstm_out1)
+        # For single samples, add batch dimension
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+            
+        # Extract features
+        x = self.feature_extractor(x)
         
-        # Attention mechanism
-        # attention_weights = self.attention(lstm_out2)
-        # attended = torch.sum(attention_weights * lstm_out2, dim=1)
+        # Reshape for sequence models: [batch_size, seq_len=1, features]
+        x = x.unsqueeze(1)
         
-        # Dense layers with residual connections
-        x = self.fc1(lstm_out2)  # Use attended instead of lstm_out2
-        x = self.leaky_relu(x)
-        x = self.dropout(x)
+        # Pass through LSTM
+        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len=1, hidden_dim*2]
         
+        # Apply layer normalization
+        lstm_out = self.layer_norm1(lstm_out)
+        
+        # Apply self-attention with residual connection
+        attn_out = self.attention(lstm_out)
+        lstm_out = lstm_out + attn_out  # Residual connection
+        lstm_out = self.layer_norm2(lstm_out)
+        
+        # Extract features from sequence
+        x = lstm_out.squeeze(1)  # [batch_size, hidden_dim*2]
+        
+        # First FC block with residual
         residual = x
-        x = self.fc2(x)
-        x = self.leaky_relu(x)
-        x = self.dropout(x)
+        x = self.fc_block1(x)
         
-        x = self.fc3(x)
-        x = self.leaky_relu(x)
-        x = self.dropout(x)
-        
-        # Add residual connection
-        x = x + residual
+        # Second FC block
+        x = self.fc_block2(x)
         
         # Output layer
         x = self.output(x)
         return x
 
-    def train_model(self, model, prompt_save=False, show_loss=False):
-        X, y = mt.prepare_data_classifier(self.data, train_split=True)
+    def train_model(self, model, prompt_save=False, show_loss=False, val_split=0.2):
+        X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
+        
+        # Use only important features if feature selection was performed
+        if self.feature_selector and self.feature_selector.important_features:
+            X = X[self.feature_selector.important_features]
+        
         print("Class distribution:", y.value_counts())
-
+        print(f"Feature count: {X.shape[1]}")
+        
+        # Split data into train and validation sets
+        X_train, X_val, y_train, y_val = train_test_split(
+            X.values, y.values, 
+            test_size=val_split, 
+            random_state=42, 
+            stratify=y
+        )
+        
+        # Data augmentation for minority classes - implement SMOTE-like augmentation
+        class_counts = np.bincount(y_train)
+        max_class_count = max(class_counts)
+        augmented_X = [X_train]
+        augmented_y = [y_train]
+        
+        for class_idx in range(len(class_counts)):
+            if class_counts[class_idx] < max_class_count * 0.5:  # If class is significantly underrepresented
+                class_samples = X_train[y_train == class_idx]
+                if len(class_samples) > 5:  # Need enough samples to augment meaningfully
+                    # Generate synthetic samples by adding small noise to existing samples
+                    n_samples = int(max_class_count * 0.7) - len(class_samples)
+                    indices = np.random.randint(0, len(class_samples), size=n_samples)
+                    new_samples = class_samples[indices].copy()
+                    
+                    # Add controlled noise to prevent data leakage
+                    noise = np.random.normal(0, 0.1, new_samples.shape)
+                    new_samples = new_samples + noise
+                    
+                    augmented_X.append(new_samples)
+                    augmented_y.append(np.full(n_samples, class_idx))
+        
+        if len(augmented_X) > 1:
+            X_train = np.vstack(augmented_X)
+            y_train = np.hstack(augmented_y)
+            print(f"After augmentation, training set size: {len(X_train)}")
+            print(f"New class distribution: {np.bincount(y_train)}")
+        
+        # Convert to tensors
+        X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
+        y_train_tensor = torch.tensor(y_train, dtype=torch.long)
+        X_val_tensor = torch.tensor(X_val, dtype=torch.float32)
+        y_val_tensor = torch.tensor(y_val, dtype=torch.long)
+        
+        # Create datasets
+        train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+        val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
+        
+        # Move model to device
         model.to(self.DEVICE)
-
-        X_tensor = torch.tensor(X.values, dtype=torch.float32)
-        y_tensor = torch.tensor(y.values, dtype=torch.long)
-
+        
         # Calculate class weights for imbalanced data
-        class_counts = torch.bincount(y_tensor)
-        class_weights = 1. / class_counts.float()
+        class_counts = np.bincount(y_train)
+        class_weights = 1. / class_counts.astype(np.float32)
         class_weights = class_weights / class_weights.sum()
-        class_weights = class_weights.to(self.DEVICE)
-
-        train_dataset = TensorDataset(X_tensor, y_tensor)
+        class_weights = torch.tensor(class_weights, device=self.DEVICE)
         
-        batch_size = 32  # Reduced batch size for better generalization
+        # Training parameters
+        batch_size = 128  # Larger batch size for better gradient estimates
         criterion = nn.CrossEntropyLoss(weight=class_weights)
-        lr = 1e-4  # Reduced learning rate
-        l2_reg = 1e-5
-        optimizer = optim.AdamW(model.parameters(),
-                              lr=lr,
-                              weight_decay=l2_reg,
-                              amsgrad=True)
         
-        scheduler = optim.lr_scheduler.OneCycleLR(optimizer,
-                                                max_lr=lr,
-                                                epochs=model.epochs,
-                                                steps_per_epoch=(len(train_dataset)//batch_size)+1)
-
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-
-        loss_history = []
-        best_loss = float('inf')
-
-        print(y)
-
+        # Cosine annealing with warm restarts often works better
+        base_lr = 3e-4
+        
+        # AdamW optimizer with weight decay - better generalization
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=base_lr,
+            weight_decay=1e-4,
+            amsgrad=True
+        )
+        
+        # Cosine annealing scheduler with warm restarts
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=10,  # First restart after 10 epochs
+            T_mult=2,  # Double the interval after each restart
+            eta_min=1e-6  # Minimum learning rate
+        )
+        
+        # Mixed precision for faster training
+        scaler = GradScaler()
+        
+        # DataLoaders with shuffle=True for training
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True
+        )
+        
+        val_loader = DataLoader(
+            val_dataset, 
+            batch_size=batch_size, 
+            shuffle=False
+        )
+        
+        # Training tracking
+        train_loss_history = []
+        val_loss_history = []
+        train_acc_history = []
+        val_acc_history = []
+        patience = 15  # More reasonable early stopping patience
+        
         for epoch in range(model.epochs):
+            # Training phase
             model.train()
-            total_loss = 0
-            correct = 0
-            total = 0
-
+            total_train_loss = 0
+            train_correct = 0
+            train_total = 0
+            
             print()
-            progress_bar = tqdm(total=len(train_loader), desc="EPOCH PROGRESS")
+            progress_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch+1}/{model.epochs}")
+            
             for X_batch, y_batch in train_loader:
                 X_batch, y_batch = X_batch.to(self.DEVICE), y_batch.to(self.DEVICE)
-
-                optimizer.zero_grad()
-                outputs = model(X_batch)
-                loss = criterion(outputs, y_batch)
-                loss.backward()
                 
-                # Gradient clipping
+                optimizer.zero_grad()
+                
+                # Use mixed precision for faster training
+                with autocast('cuda'):
+                    outputs = model(X_batch)
+                    loss = criterion(outputs, y_batch)
+                
+                # Scale gradients and perform backward pass
+                scaler.scale(loss).backward()
+                
+                # Gradient clipping to prevent exploding gradients
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 
-                optimizer.step()
-                scheduler.step()
-
-                total_loss += loss.item()
+                # Update weights with scaled gradients
+                scaler.step(optimizer)
+                scaler.update()
+                
+                total_train_loss += loss.item()
                 
                 # Calculate accuracy
-                _, predicted = torch.max(outputs.data, 1)
-                total += y_batch.size(0)
-                correct += (predicted == y_batch).sum().item()
+                with torch.no_grad():
+                    _, predicted = torch.max(outputs.data, 1)
+                    train_total += y_batch.size(0)
+                    train_correct += (predicted == y_batch).sum().item()
                 
                 progress_bar.update(1)
-            progress_bar.close()
-
-            epoch_loss = total_loss / len(train_loader)
-            epoch_acc = 100 * correct / total
             
-            print(f"\nEpoch {epoch + 1}/{model.epochs}, Train Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.2f}%")
-            loss_history.append(epoch_loss)
-
-            # Save best model
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                torch.save(model.state_dict(), 'best_model.pth')
-
+            progress_bar.close()
+            
+            # Validation phase
+            model.eval()
+            total_val_loss = 0
+            val_correct = 0
+            val_total = 0
+            
+            # Track per-class metrics for more detailed evaluation
+            val_class_correct = [0, 0, 0]  # for classes 0, 1, 2
+            val_class_total = [0, 0, 0]
+            
+            with torch.no_grad():
+                for X_batch, y_batch in val_loader:
+                    X_batch, y_batch = X_batch.to(self.DEVICE), y_batch.to(self.DEVICE)
+                    
+                    outputs = model(X_batch)
+                    loss = criterion(outputs, y_batch)
+                    
+                    total_val_loss += loss.item()
+                    
+                    # Calculate accuracy
+                    _, predicted = torch.max(outputs.data, 1)
+                    val_total += y_batch.size(0)
+                    val_correct += (predicted == y_batch).sum().item()
+                    
+                    # Per-class accuracy
+                    for i in range(3):  # For each class
+                        mask = (y_batch == i)
+                        val_class_total[i] += mask.sum().item()
+                        if mask.sum() > 0:
+                            val_class_correct[i] += (predicted[mask] == i).sum().item()
+            
+            # Calculate epoch metrics
+            train_loss = total_train_loss / len(train_loader)
+            train_acc = 100 * train_correct / train_total
+            val_loss = total_val_loss / len(val_loader)
+            val_acc = 100 * val_correct / val_total
+            
+            # Store history
+            train_loss_history.append(train_loss)
+            val_loss_history.append(val_loss)
+            train_acc_history.append(train_acc)
+            val_acc_history.append(val_acc)
+            
+            # Update learning rate with scheduler
+            scheduler.step()
+            current_lr = optimizer.param_groups[0]['lr']
+            
+            # Calculate per-class accuracy
+            class_accuracies = [100 * correct / total if total > 0 else 0 for correct, total in zip(val_class_correct, val_class_total)]
+            
+            print(f"\nEpoch {epoch+1}/{model.epochs} (LR: {current_lr:.6f})")
+            print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+            print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+            print(f"Class Accuracies: Sell: {class_accuracies[0]:.2f}%, Hold: {class_accuracies[1]:.2f}%, Buy: {class_accuracies[2]:.2f}%")
+            
+            # Save best model based on either validation loss or accuracy
+            if val_acc > model.best_val_accuracy:
+                model.best_val_accuracy = val_acc
+                model.patience_counter = 0
+                torch.save(model.state_dict(), 'best_acc_model.pth')
+                print("✓ Saved new best accuracy model")
+            elif val_loss < model.best_val_loss:
+                model.best_val_loss = val_loss
+                model.patience_counter = 0
+                torch.save(model.state_dict(), 'best_loss_model.pth')
+                print("✓ Saved new best loss model")
+            else:
+                model.patience_counter += 1
+            
+            # Early stopping
+            if model.patience_counter >= patience:
+                print(f"Early stopping triggered after {epoch+1} epochs")
+                break
+        
         if show_loss:
-            fig = mt.loss_plot(loss_history)
+            fig = make_loss_plot(train_loss_history, val_loss_history, train_acc_history, val_acc_history)
             fig.show()
-
+        
         if ((input("Save? y/n ").lower() == 'y') if prompt_save else False):
-            torch.save(model.state_dict(), input("Enter save path: "))
+            save_path = input("Enter save path: ")
+            torch.save(model.state_dict(), save_path)
+        
+        # Load the best model for evaluation
+        try:
+            model.load_state_dict(torch.load('best_acc_model.pth'))
+            print("Loaded best accuracy model for evaluation")
+        except:
+            try:
+                model.load_state_dict(torch.load('best_loss_model.pth'))
+                print("Loaded best loss model for evaluation")
+            except:
+                print("No saved model found, using current model state")
+        
+        return model
     
     def predict(self, model, data):
-        X, y = mt.prepare_data_classifier(data, train_split=True)
+        X, y = mt.prepare_data_classifier(data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
+        
+        # Use the same features as during training if feature selection was performed
+        if self.feature_selector and self.feature_selector.important_features:
+            # Check if all important features exist in X
+            available_features = set(X.columns)
+            required_features = set(self.feature_selector.important_features)
+            missing_features = required_features - available_features
+            
+            if missing_features:
+                print(f"Warning: Missing {len(missing_features)} features that were used during training.")
+                available_important_features = [f for f in self.feature_selector.important_features if f in available_features]
+                X = X[available_important_features]
+            else:
+                X = X[self.feature_selector.important_features]
         
         X = torch.tensor(X.values, dtype=torch.float32).contiguous().to(self.DEVICE)
-
+        
         model.eval()
         model.to(self.DEVICE)
+        
+        # Process in batches to avoid memory issues with large datasets
+        batch_size = 256
+        dataset = TensorDataset(X)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        
+        all_predictions = []
+        all_probabilities = []
+        
         with torch.no_grad(), autocast('cuda'):
-            logits = model(X)
-            logits = logits.cpu()
-        probabilities = torch.softmax(logits, dim=1)
-        predictions = np.argmax(probabilities, axis=1)
-
-        return predictions
+            for batch in dataloader:
+                batch_X = batch[0]
+                outputs = model(batch_X)
+                probabilities = torch.softmax(outputs, dim=1)
+                predictions = torch.argmax(probabilities, dim=1).cpu().numpy()
+                all_predictions.extend(predictions)
+                all_probabilities.append(probabilities.cpu().numpy())
+        
+        # Store probabilities for potential confidence-based filtering
+        self.prediction_probabilities = np.vstack(all_probabilities)
+        
+        return np.array(all_predictions)
     
     def prediction_plot(self, data, predictions):
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Actual'))
+        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Price'))
         
-        up_x = []
-        up_y = []
-        down_x = []
-        down_y = []
+        # Filter predictions by confidence if available
+        confidence_threshold = 0.6
+        high_confidence_mask = np.zeros(len(predictions), dtype=bool)
+        
+        if hasattr(self, 'prediction_probabilities'):
+            # Find predictions with high confidence
+            max_probs = np.max(self.prediction_probabilities, axis=1)
+            high_confidence_mask = max_probs > confidence_threshold
+        
+        # Separate by prediction type and confidence
+        up_x, up_y = [], []
+        down_x, down_y = [], []
+        hold_x, hold_y = [], []
+        
+        # High confidence predictions
+        hc_up_x, hc_up_y = [], []
+        hc_down_x, hc_down_y = [], []
+        
         for i in range(len(predictions)):
-            if predictions[i] == 2:  # Up prediction
-                up_x.append(data.index[i])
-                up_y.append(data['Close'][i])
-            elif predictions[i] == 0:  # Down prediction
-                down_x.append(data.index[i])
-                down_y.append(data['Close'][i])
-
-        fig.add_trace(go.Scatter(x=up_x, y=up_y, mode='markers', name='Up Predictions', 
-                                marker=dict(color='green', size=8, symbol='triangle-up')))
-        fig.add_trace(go.Scatter(x=down_x, y=down_y, mode='markers', name='Down Predictions', 
-                                marker=dict(color='red', size=8, symbol='triangle-down')))
+            if predictions[i] == 2:  # Buy signal
+                if high_confidence_mask[i]:
+                    hc_up_x.append(data.index[i])
+                    hc_up_y.append(data['Close'][i])
+                else:
+                    up_x.append(data.index[i])
+                    up_y.append(data['Close'][i])
+            elif predictions[i] == 0:  # Sell signal
+                if high_confidence_mask[i]:
+                    hc_down_x.append(data.index[i])
+                    hc_down_y.append(data['Close'][i])
+                else:
+                    down_x.append(data.index[i])
+                    down_y.append(data['Close'][i])
+            else:  # Hold signal
+                hold_x.append(data.index[i])
+                hold_y.append(data['Close'][i])
+        
+        # Regular signals
+        fig.add_trace(go.Scatter(x=up_x, y=up_y, mode='markers', name='Buy', 
+                                marker=dict(color='green', size=8, symbol='triangle-up', opacity=0.6)))
+        
+        fig.add_trace(go.Scatter(x=down_x, y=down_y, mode='markers', name='Sell', 
+                                marker=dict(color='red', size=8, symbol='triangle-down', opacity=0.6)))
+        
+        # High confidence signals (if available)
+        if hasattr(self, 'prediction_probabilities'):
+            fig.add_trace(go.Scatter(x=hc_up_x, y=hc_up_y, mode='markers', name='High Conf Buy', 
+                                    marker=dict(color='green', size=10, symbol='triangle-up', line=dict(width=2, color='white'))))
+            
+            fig.add_trace(go.Scatter(x=hc_down_x, y=hc_down_y, mode='markers', name='High Conf Sell', 
+                                    marker=dict(color='red', size=10, symbol='triangle-down', line=dict(width=2, color='white'))))
+        
+        fig.update_layout(
+            title='Price Action with Model Predictions',
+            xaxis_title='Time',
+            yaxis_title='Price',
+            template="plotly_dark"
+        )
+        
         fig.show()
+        return fig
 
-def load_model(model_path: str):
-    import torch
-    import os
+def make_loss_plot(train_loss, val_loss=None, train_acc=None, val_acc=None):
+    from plotly.subplots import make_subplots
     
-    model = ClassifierModel(train=False)
-    model.load_state_dict(torch.load(model_path, map_location=torch.device('cuda'),weights_only=True))
+    fig = make_subplots(rows=2, cols=1, subplot_titles=("Loss During Training", "Accuracy During Training"))
+    
+    # Plot training loss
+    fig.add_trace(
+        go.Scatter(
+            x=list(range(1, len(train_loss) + 1)),
+            y=train_loss,
+            mode='lines',
+            name='Training Loss'
+        ),
+        row=1, col=1
+    )
+    
+    # Plot validation loss if provided
+    if val_loss is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(1, len(val_loss) + 1)),
+                y=val_loss,
+                mode='lines',
+                name='Validation Loss'
+            ),
+            row=1, col=1
+        )
+    
+    # Plot accuracy
+    if train_acc is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(1, len(train_acc) + 1)),
+                y=train_acc,
+                mode='lines',
+                name='Training Accuracy'
+            ),
+            row=2, col=1
+        )
+    
+    if val_acc is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(1, len(val_acc) + 1)),
+                y=val_acc,
+                mode='lines',
+                name='Validation Accuracy'
+            ),
+            row=2, col=1
+        )
+    
+    fig.update_layout(
+        height=800,
+        template="plotly_dark"
+    )
+    
+    fig.update_yaxes(title_text="Loss", row=1, col=1)
+    fig.update_yaxes(title_text="Accuracy (%)", row=2, col=1)
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    
+    return fig
+
+def load_model(model_path: str, pct_threshold=0.01):
+    model = ClassifierModel(train=False, pct_threshold=pct_threshold)
+    
+    # Load state dict
+    state_dict = torch.load(model_path, map_location=torch.device('cuda'), weights_only=True)
+    
+    # Get input dimension from first layer weights
+    if 'feature_extractor.1.weight' in state_dict:
+        input_dim = state_dict['feature_extractor.1.weight'].shape[1]
+        model.input_dim = input_dim
+        print(f"Model loaded with input dimension: {input_dim}")
+        
+        # Reinitialize model with correct input dim
+        model = ClassifierModel(train=False, pct_threshold=pct_threshold)
+        model.input_dim = input_dim
+        
+        # Update feature extraction layer
+        model.feature_extractor = nn.Sequential(
+            nn.BatchNorm1d(input_dim),
+            nn.Linear(input_dim, model.hidden_dim),
+            nn.SiLU(),
+            nn.Dropout(0.3),
+            nn.Linear(model.hidden_dim, model.hidden_dim),
+            nn.SiLU(),
+            nn.Dropout(0.3)
+        )
+    
+    # Now load state dict
+    model.load_state_dict(state_dict)
     model.eval()
     
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=3, interval="1min", age_days=10, epochs=50)
-    model.train_model(model, prompt_save=False, show_loss=True)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=10, interval="1min", age_days=0, epochs=100, pct_threshold=0.01)
+    model = model.train_model(model, prompt_save=False, show_loss=True)
     predictions = model.predict(model, model.data)
     print(predictions)
     model.prediction_plot(model.data, predictions)
