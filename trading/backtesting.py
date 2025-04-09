@@ -5,9 +5,14 @@ import torch
 import plotly.graph_objects as go
 from rich import print
 import sys
+from torch.utils.data import TensorDataset, DataLoader
+from tqdm import tqdm
 
-from model_tools import *
+import model_tools as mt
 from indicators import *
+
+import warnings
+# warnings.filterwarnings("ignore")
 
 # Buy signals: Any positive change in position
 # Sell signals: Any negative change in position
@@ -34,7 +39,7 @@ class VectorizedBacktesting:
         self.data: pd.DataFrame = None
 
     def fetch_data(self, kucoin: bool = True):
-        self.data = fetch_data(self.symbol, self.chunks, self.interval, self.age_days, kucoin=kucoin)
+        self.data = mt.fetch_data(self.symbol, self.chunks, self.interval, self.age_days, kucoin=kucoin)
 
     def run_strategy(self, strategy_func, **kwargs):
         start_time = time.time()
@@ -62,6 +67,7 @@ class VectorizedBacktesting:
         self.data['Position'] = self.data['Position'].replace(-1, 0)  # Set sell signals to 0 (close position)
         
         self.data['Strategy_Returns'] = self.data['Position'].shift(1) * self.data['Returns']
+
         
         self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
@@ -498,43 +504,66 @@ class VectorizedBacktesting:
         
         return position
 
-    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\btc5m.pth", min_context: int = 100) -> pd.Series:
+    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\best_model.pth", batch_size: int = 64) -> pd.Series:
         sys.path.append(r"trading\brains\time_series\single_predictors")
-        from close_model import load_model
+        from classifier_model import load_model
         
         position = pd.Series(0, index=data.index)
         
         model = load_model(model_path)
-        
-        for i in range(min_context, len(data)):
-            historical_data = data.iloc[i-min_context:i+1].copy()
-            
-            features = historical_data[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-            
-            try:
-                with torch.no_grad():
-                    predictions = model.predict(model, features)
-                
-                if len(predictions) >= 2:
-                    current_pred = predictions[-1]
-                    prev_pred = predictions[-2]
-                    
-                    if current_pred > prev_pred:
-                        position.iloc[i] = 1
-                    elif current_pred < prev_pred:
-                        position.iloc[i] = 0
-                    else:
-                        position.iloc[i] = position.iloc[i-1]
-            except Exception as e:
-                print(f"[red]Error making prediction at index {i}: {e}[/red]")
-                position.iloc[i] = position.iloc[i-1]
-        
+        model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        model.eval()
+
+        # Precompute static features
+        features = data[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+        print("a")
+        features, _ = mt.prepare_data_classifier(features, train_split=True)
+        print("b")
+        # Convert features to tensor
+        features_tensor = torch.tensor(features.values, dtype=torch.float32)
+        features_tensor = features_tensor.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+
+        # Use DataLoader for batching
+        dataset = TensorDataset(features_tensor)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+        progress_bar = tqdm(total=len(dataloader), desc="Backtesting")
+        all_predictions = []
+        with torch.no_grad():
+            for batch in dataloader:
+                batch_features = batch[0]
+                logits = model(batch_features)
+                probabilities = torch.softmax(logits, dim=1)
+                predictions = np.argmax(probabilities.cpu(), axis=1)
+                all_predictions.extend(predictions)
+                progress_bar.update(1)
+        progress_bar.close()
+
+        # Assign positions based on predictions with proper position management
+        current_position = 0
+        for i, prediction in enumerate(all_predictions):
+            if prediction == 2:  # Buy signal
+                if current_position <= 0:  # Only buy if not already long
+                    position.iloc[i] = 1
+                    current_position = 1
+                else:
+                    position.iloc[i] = 0  # Hold existing position
+            elif prediction == 0:  # Sell signal
+                if current_position >= 0:  # Only sell if not already short
+                    position.iloc[i] = -1
+                    current_position = -1
+                else:
+                    position.iloc[i] = 0  # Hold existing position
+            else:  # Hold signal
+                position.iloc[i] = 0  # Close any open position
+                current_position = 0
+
         return position
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="SOL-USDT",
-        initial_capital=40.0,
+        initial_capital=39.5,
         chunks=1,
         interval="1min",
         age_days=0

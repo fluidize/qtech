@@ -179,69 +179,40 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     
     return df, scalers
 
-def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.05):
-    scalers = {
-        'price': MinMaxScaler(feature_range=(0, 1)),
-        'volume': QuantileTransformer(output_distribution='normal'),
-        'technical': StandardScaler()
-    }
-
+def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.000):
     df = data.copy()
-    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
+    df = df[['Open', 'High', 'Low', 'Close', 'Volume']]  # Keep only OHLCV columns
 
-    # Calculate returns and features
-    df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
-    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
-    
-    # Create lagged features
-    lagged_features = []
-    for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
-        for i in range(1, lagged_length):
-            lagged_features.append(pd.DataFrame({
-                f'Prev{i}_{col}': df[col].shift(i)
-            }))
-    
-    if lagged_features:
-        df = pd.concat([df] + lagged_features, axis=1)
-    
-    # Technical indicators
-    df['Close_ZScore'] = (df['Close'] - df['Close'].rolling(window=100).mean()) / df['Close'].rolling(window=100).std()
-    df['MA10'] = df['Close'].rolling(window=10).mean() / df['Close']
-    df['MA20'] = df['Close'].rolling(window=20).mean() / df['Close']
-    df['MA50'] = df['Close'].rolling(window=50).mean() / df['Close']
-    df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
-    df['RSI'] = compute_rsi(df['Close'], 14)
+    # Create lagged features efficiently using shift
+    for i in range(1, lagged_length):
+        df[f'Prev{i}_Close'] = df['Close'].shift(i)
+        df[f'Prev{i}_Open'] = df['Open'].shift(i)
+        df[f'Prev{i}_High'] = df['High'].shift(i)
+        df[f'Prev{i}_Low'] = df['Low'].shift(i)
+        df[f'Prev{i}_Volume'] = df['Volume'].shift(i)
+
 
     # Handle NaN values
-    df = df.bfill().ffill()
-    df.dropna(inplace=True)
-    
+    df.ffill(inplace=True)  # Forward fill
+    df.bfill(inplace=True)  # Backward fill
+    df.dropna(inplace=True)  # Drop any remaining NaNs
+
     if train_split:
-        # Prepare features
-        price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
-        volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
-        technical_features = ['RSI', 'MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross', 'Close_ZScore']
+        # Prepare feature groups
+        feature_columns = ['Open', 'High', 'Low', 'Close', 'Volume'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Close', 'Open', 'High', 'Low', 'Volume']]
         
-        # Scale features
-        df[price_features] = scalers['price'].fit_transform(df[price_features])
-        df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
-        df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
-
         # Prepare X
-        if 'Datetime' in df.columns:
-            X = df.drop(['Datetime'], axis=1)
-        else:
-            X = df
+        X = df[feature_columns]
         
-        pct_change = df['Close'].pct_change().shift(-1)  # Y IS 1 AHEAD PRIOR
-        dynamic_threshold = 0.05 / 100
+        # Calculate future returns for labels
+        future_returns = df['Close'].pct_change().shift(-1)
 
-        dynamic_threshold = 0.05/100
-        # 0 = below threshold | 1 = within threshold | 2 = above threshold
-        y = pd.Series(1, index=df.index)
-        y[pct_change < -dynamic_threshold] = 0
-        y[pct_change > dynamic_threshold] = 2
-        
+        # Create labels: 0 = sell, 1 = hold, 2 = buy
+        y = pd.Series(1, index=df.index)  # Default to hold
+        y[future_returns < -pct_threshold] = 0  # Sell signal
+        y[future_returns > pct_threshold] = 2  # Buy signal
+
+        # Remove the last row since we don't have future returns for it
         X = X[:-1]
         y = y[:-1]
 

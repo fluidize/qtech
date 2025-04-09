@@ -30,16 +30,18 @@ class Attention(nn.Module):
         return attention_weights
 
 class ClassifierModel(nn.Module):
-    def __init__(self, epochs=10, train: bool = True):
+    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True):
         super().__init__()
 
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.epochs = epochs
 
         if train:
-            self.epochs = epochs
-            self.data = mt.fetch_data("BTC-USDT", 1, "1min", 10, kucoin=True)
+            self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
             X, y = mt.prepare_data_classifier(self.data, train_split=True)
             input_dim = X.shape[1]
+        else:
+            input_dim = 33
 
         # Enhanced MODEL ARCHITECTURE
         rnn_width = 256
@@ -70,10 +72,6 @@ class ClassifierModel(nn.Module):
         self.leaky_relu = nn.LeakyReLU(negative_slope=0.2)
 
     def forward(self, x):
-        # Ensure x has the shape (batch_size, num_features)
-        # if len(x.shape) == 3:  # If input is (batch_size, seq_length, num_features)
-        #     x = x.view(x.size(0), -1)  # Flatten to (batch_size, num_features)
-
         # Feature processing
         x = self.batch_norm(x)
         
@@ -82,11 +80,11 @@ class ClassifierModel(nn.Module):
         lstm_out2, _ = self.lstm2(lstm_out1)
         
         # Attention mechanism
-        attention_weights = self.attention(lstm_out2)
-        attended = torch.sum(attention_weights * lstm_out2, dim=1)
+        # attention_weights = self.attention(lstm_out2)
+        # attended = torch.sum(attention_weights * lstm_out2, dim=1)
         
         # Dense layers with residual connections
-        x = self.fc1(lstm_out2)  # Ensure attended shape matches input size of fc1
+        x = self.fc1(lstm_out2)  # Use attended instead of lstm_out2
         x = self.leaky_relu(x)
         x = self.dropout(x)
         
@@ -142,6 +140,8 @@ class ClassifierModel(nn.Module):
         loss_history = []
         best_loss = float('inf')
 
+        print(y)
+
         for epoch in range(model.epochs):
             model.train()
             total_loss = 0
@@ -193,7 +193,7 @@ class ClassifierModel(nn.Module):
             torch.save(model.state_dict(), input("Enter save path: "))
     
     def predict(self, model, data):
-        X, y, scalers = mt.prepare_data(data)
+        X, y = mt.prepare_data_classifier(data, train_split=True)
         
         X = torch.tensor(X.values, dtype=torch.float32).contiguous().to(self.DEVICE)
 
@@ -240,7 +240,7 @@ def load_model(model_path: str):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(train=True, epochs=100)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=3, interval="1min", age_days=10, epochs=50)
     model.train_model(model, prompt_save=False, show_loss=True)
     predictions = model.predict(model, model.data)
     print(predictions)
