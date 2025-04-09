@@ -28,15 +28,13 @@ class FeatureSelectionCallback:
         self.important_features = None
         
     def get_important_features(self):
-        # Use Random Forest for feature selection - fast and effective
+        # Use Random Forest for feature selection
         rf = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
         rf.fit(self.X_train, self.y_train)
         
-        # Get feature importances
         importances = rf.feature_importances_
         indices = np.argsort(importances)[::-1]
-        
-        # Select top N features
+
         self.important_features = [self.feature_names[i] for i in indices[:self.top_n]]
         importance_values = [importances[i] for i in indices[:self.top_n]]
         
@@ -45,52 +43,6 @@ class FeatureSelectionCallback:
             print(f"{i+1}. {feature}: {importance:.4f}")
             
         return self.important_features
-
-class SelfAttention(nn.Module):
-    """Improved attention mechanism with multi-head attention"""
-    def __init__(self, hidden_dim, num_heads=4):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = hidden_dim // num_heads
-        assert hidden_dim % num_heads == 0, "Hidden dimension must be divisible by number of heads"
-        
-        self.query = nn.Linear(hidden_dim, hidden_dim)
-        self.key = nn.Linear(hidden_dim, hidden_dim)
-        self.value = nn.Linear(hidden_dim, hidden_dim)
-        
-        self.fc_out = nn.Linear(hidden_dim, hidden_dim)
-        self.scale = torch.sqrt(torch.FloatTensor([self.head_dim])).cuda()
-        
-    def forward(self, x):
-        batch_size = x.size(0)
-        seq_length = x.size(1)
-        
-        # (batch_size, seq_length, hidden_dim) -> (batch_size, seq_length, hidden_dim)
-        q = self.query(x)
-        k = self.key(x)
-        v = self.value(x)
-        
-        # Split into num_heads
-        q = q.view(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-        k = k.view(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 3, 1)
-        v = v.view(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-        
-        # (batch_size, num_heads, seq_length, seq_length)
-        attention = torch.matmul(q, k) / self.scale.to(x.device)
-        
-        # (batch_size, num_heads, seq_length, seq_length)
-        attention = torch.softmax(attention, dim=-1)
-        
-        # (batch_size, num_heads, seq_length, head_dim)
-        x = torch.matmul(attention, v)
-        
-        # (batch_size, seq_length, num_heads, head_dim) -> (batch_size, seq_length, hidden_dim)
-        x = x.permute(0, 2, 1, 3).contiguous().view(batch_size, seq_length, -1)
-        
-        # (batch_size, seq_length, hidden_dim)
-        x = self.fc_out(x)
-        
-        return x
 
 class ClassifierModel(nn.Module):
     def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, pct_threshold=0.01):
@@ -106,37 +58,30 @@ class ClassifierModel(nn.Module):
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
             X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
             
-            # Feature selection for better signal-to-noise ratio
             feature_names = X.columns.tolist()
             self.feature_selector = FeatureSelectionCallback(X.values, y.values, feature_names, top_n=30)
             important_feature_names = self.feature_selector.get_important_features()
             
-            # Filtering to important features only
             X = X[important_feature_names]
             input_dim = X.shape[1]
             print(f"Model initialized with input dimension: {input_dim} (after feature selection)")
         else:
-            # More robust default - this will be updated when loading weights
             input_dim = 30
         
-        # Save for reference
         self.input_dim = input_dim
-        
-        # Enhanced architecture - deeper and with skip connections
+
         self.hidden_dim = 256
         
-        # Enhanced feature extraction with 2 layers
         self.feature_extractor = nn.Sequential(
             nn.BatchNorm1d(input_dim),
             nn.Linear(input_dim, self.hidden_dim),
-            nn.SiLU(),  # SiLU (Swish) activation often works better than ReLU variants
+            nn.SiLU(),
             nn.Dropout(0.3),
             nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.SiLU(),
             nn.Dropout(0.3)
         )
         
-        # Combine GRU and LSTM for better feature extraction
         self.lstm = nn.LSTM(
             input_size=self.hidden_dim,
             hidden_size=self.hidden_dim,
@@ -145,13 +90,16 @@ class ClassifierModel(nn.Module):
             dropout=0.3,
             batch_first=True
         )
+
+        nn.init.xavier_uniform_(self.lstm.weight_ih_l0) #inp -> hidden
+        nn.init.xavier_uniform_(self.lstm.weight_ih_l1)
+        nn.init.xavier_uniform_(self.lstm.weight_hh_l0) #hidden -> hidden
+        nn.init.xavier_uniform_(self.lstm.weight_hh_l1)
         
-        # Add multi-head self-attention
-        self.attention = SelfAttention(self.hidden_dim * 2, num_heads=4)
+        self.attention = nn.MultiheadAttention(self.hidden_dim * 2, num_heads=4)
         self.layer_norm1 = nn.LayerNorm(self.hidden_dim * 2)
         self.layer_norm2 = nn.LayerNorm(self.hidden_dim * 2)
         
-        # Enhanced prediction layers with deeper networks
         self.fc_block1 = nn.Sequential(
             nn.Linear(self.hidden_dim * 2, self.hidden_dim),
             nn.SiLU(),
@@ -166,10 +114,8 @@ class ClassifierModel(nn.Module):
             nn.LayerNorm(self.hidden_dim // 2)
         )
         
-        # Output layer with additional class for better distinction
         self.output = nn.Linear(self.hidden_dim // 2, 3)
         
-        # Add early stopping tracking
         self.best_val_loss = float('inf')
         self.patience_counter = 0
         self.best_val_accuracy = 0.0
@@ -177,114 +123,69 @@ class ClassifierModel(nn.Module):
     def forward(self, x):
         batch_size = x.size(0)
         
-        # For single samples, add batch dimension
         if len(x.shape) == 1:
             x = x.unsqueeze(0)
             
-        # Extract features
         x = self.feature_extractor(x)
         
         # Reshape for sequence models: [batch_size, seq_len=1, features]
         x = x.unsqueeze(1)
-        
-        # Pass through LSTM
+
         lstm_out, _ = self.lstm(x)  # [batch_size, seq_len=1, hidden_dim*2]
-        
-        # Apply layer normalization
         lstm_out = self.layer_norm1(lstm_out)
         
-        # Apply self-attention with residual connection
-        attn_out = self.attention(lstm_out)
-        lstm_out = lstm_out + attn_out  # Residual connection
+        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
+        lstm_out = lstm_out + attn_out
         lstm_out = self.layer_norm2(lstm_out)
         
-        # Extract features from sequence
         x = lstm_out.squeeze(1)  # [batch_size, hidden_dim*2]
         
-        # First FC block with residual
         residual = x
         x = self.fc_block1(x)
-        
-        # Second FC block
+        x = x + residual
         x = self.fc_block2(x)
         
-        # Output layer
         x = self.output(x)
         return x
 
     def train_model(self, model, prompt_save=False, show_loss=False, val_split=0.2):
         X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
         
-        # Use only important features if feature selection was performed
         if self.feature_selector and self.feature_selector.important_features:
             X = X[self.feature_selector.important_features]
         
-        print("Class distribution:", y.value_counts())
+        print("Class distribution: \n", y.value_counts())
         print(f"Feature count: {X.shape[1]}")
         
-        # Split data into train and validation sets
         X_train, X_val, y_train, y_val = train_test_split(
             X.values, y.values, 
             test_size=val_split, 
-            random_state=42, 
+            random_state=42,
             stratify=y
         )
         
-        # Data augmentation for minority classes - implement SMOTE-like augmentation
-        class_counts = np.bincount(y_train)
-        max_class_count = max(class_counts)
-        augmented_X = [X_train]
-        augmented_y = [y_train]
+        print(f"Training set size: {len(X_train)}")
         
-        for class_idx in range(len(class_counts)):
-            if class_counts[class_idx] < max_class_count * 0.5:  # If class is significantly underrepresented
-                class_samples = X_train[y_train == class_idx]
-                if len(class_samples) > 5:  # Need enough samples to augment meaningfully
-                    # Generate synthetic samples by adding small noise to existing samples
-                    n_samples = int(max_class_count * 0.7) - len(class_samples)
-                    indices = np.random.randint(0, len(class_samples), size=n_samples)
-                    new_samples = class_samples[indices].copy()
-                    
-                    # Add controlled noise to prevent data leakage
-                    noise = np.random.normal(0, 0.1, new_samples.shape)
-                    new_samples = new_samples + noise
-                    
-                    augmented_X.append(new_samples)
-                    augmented_y.append(np.full(n_samples, class_idx))
-        
-        if len(augmented_X) > 1:
-            X_train = np.vstack(augmented_X)
-            y_train = np.hstack(augmented_y)
-            print(f"After augmentation, training set size: {len(X_train)}")
-            print(f"New class distribution: {np.bincount(y_train)}")
-        
-        # Convert to tensors
         X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
         y_train_tensor = torch.tensor(y_train, dtype=torch.long)
         X_val_tensor = torch.tensor(X_val, dtype=torch.float32)
         y_val_tensor = torch.tensor(y_val, dtype=torch.long)
         
-        # Create datasets
         train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
         val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
         
-        # Move model to device
         model.to(self.DEVICE)
         
-        # Calculate class weights for imbalanced data
         class_counts = np.bincount(y_train)
         class_weights = 1. / class_counts.astype(np.float32)
         class_weights = class_weights / class_weights.sum()
         class_weights = torch.tensor(class_weights, device=self.DEVICE)
         
-        # Training parameters
-        batch_size = 128  # Larger batch size for better gradient estimates
+        batch_size = 128
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         
-        # Cosine annealing with warm restarts often works better
         base_lr = 3e-4
         
-        # AdamW optimizer with weight decay - better generalization
         optimizer = optim.AdamW(
             model.parameters(),
             lr=base_lr,
@@ -292,7 +193,6 @@ class ClassifierModel(nn.Module):
             amsgrad=True
         )
         
-        # Cosine annealing scheduler with warm restarts
         scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer,
             T_0=10,  # First restart after 10 epochs
@@ -300,10 +200,8 @@ class ClassifierModel(nn.Module):
             eta_min=1e-6  # Minimum learning rate
         )
         
-        # Mixed precision for faster training
         scaler = GradScaler()
         
-        # DataLoaders with shuffle=True for training
         train_loader = DataLoader(
             train_dataset, 
             batch_size=batch_size, 
@@ -316,15 +214,13 @@ class ClassifierModel(nn.Module):
             shuffle=False
         )
         
-        # Training tracking
         train_loss_history = []
         val_loss_history = []
         train_acc_history = []
         val_acc_history = []
-        patience = 15  # More reasonable early stopping patience
+        patience = 15
         
         for epoch in range(model.epochs):
-            # Training phase
             model.train()
             total_train_loss = 0
             train_correct = 0
@@ -343,20 +239,16 @@ class ClassifierModel(nn.Module):
                     outputs = model(X_batch)
                     loss = criterion(outputs, y_batch)
                 
-                # Scale gradients and perform backward pass
                 scaler.scale(loss).backward()
                 
-                # Gradient clipping to prevent exploding gradients
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 
-                # Update weights with scaled gradients
                 scaler.step(optimizer)
                 scaler.update()
                 
                 total_train_loss += loss.item()
                 
-                # Calculate accuracy
                 with torch.no_grad():
                     _, predicted = torch.max(outputs.data, 1)
                     train_total += y_batch.size(0)
@@ -366,13 +258,11 @@ class ClassifierModel(nn.Module):
             
             progress_bar.close()
             
-            # Validation phase
             model.eval()
             total_val_loss = 0
             val_correct = 0
             val_total = 0
             
-            # Track per-class metrics for more detailed evaluation
             val_class_correct = [0, 0, 0]  # for classes 0, 1, 2
             val_class_total = [0, 0, 0]
             
@@ -385,35 +275,29 @@ class ClassifierModel(nn.Module):
                     
                     total_val_loss += loss.item()
                     
-                    # Calculate accuracy
                     _, predicted = torch.max(outputs.data, 1)
                     val_total += y_batch.size(0)
                     val_correct += (predicted == y_batch).sum().item()
                     
-                    # Per-class accuracy
-                    for i in range(3):  # For each class
+                    for i in range(3):
                         mask = (y_batch == i)
                         val_class_total[i] += mask.sum().item()
                         if mask.sum() > 0:
                             val_class_correct[i] += (predicted[mask] == i).sum().item()
             
-            # Calculate epoch metrics
             train_loss = total_train_loss / len(train_loader)
             train_acc = 100 * train_correct / train_total
             val_loss = total_val_loss / len(val_loader)
             val_acc = 100 * val_correct / val_total
             
-            # Store history
             train_loss_history.append(train_loss)
             val_loss_history.append(val_loss)
             train_acc_history.append(train_acc)
             val_acc_history.append(val_acc)
             
-            # Update learning rate with scheduler
             scheduler.step()
             current_lr = optimizer.param_groups[0]['lr']
             
-            # Calculate per-class accuracy
             class_accuracies = [100 * correct / total if total > 0 else 0 for correct, total in zip(val_class_correct, val_class_total)]
             
             print(f"\nEpoch {epoch+1}/{model.epochs} (LR: {current_lr:.6f})")
@@ -421,7 +305,6 @@ class ClassifierModel(nn.Module):
             print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
             print(f"Class Accuracies: Sell: {class_accuracies[0]:.2f}%, Hold: {class_accuracies[1]:.2f}%, Buy: {class_accuracies[2]:.2f}%")
             
-            # Save best model based on either validation loss or accuracy
             if val_acc > model.best_val_accuracy:
                 model.best_val_accuracy = val_acc
                 model.patience_counter = 0
@@ -435,7 +318,6 @@ class ClassifierModel(nn.Module):
             else:
                 model.patience_counter += 1
             
-            # Early stopping
             if model.patience_counter >= patience:
                 print(f"Early stopping triggered after {epoch+1} epochs")
                 break
@@ -667,7 +549,7 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=10, interval="1min", age_days=0, epochs=100, pct_threshold=0.01)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=100, pct_threshold=0.01)
     model = model.train_model(model, prompt_save=False, show_loss=True)
     predictions = model.predict(model, model.data)
     print(predictions)

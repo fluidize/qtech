@@ -11,6 +11,9 @@ from plotly.subplots import make_subplots
 
 from rich import print
 
+import talib
+from scipy.stats import kurtosis, skew
+
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
     print("[green]DOWNLOADING DATA[/green]")
     if not kucoin:
@@ -181,7 +184,7 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
 
 def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.01):
     """
-    Enhanced data preparation for classification with advanced feature engineering.
+    Enhanced data preparation for classification with advanced feature engineering using TA-Lib.
     Uses only past information for all calculations to prevent data leakage.
     
     Parameters:
@@ -190,8 +193,6 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
         train_split: Whether to return X,y for training
         pct_threshold: Threshold for classifying returns (in %)
     """
-    from scipy.stats import kurtosis, skew
-    
     pct_threshold = pct_threshold / 100
     df = data.copy()
     
@@ -200,7 +201,6 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
         df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
 
     # ==== PRICE FEATURES ====
-    # Basic price ratios - no leakage as they use current candle data
     price_features = pd.DataFrame({
         'CloseOverOpen': df['Close'] / df['Open'],
         'HighOverLow': df['High'] / df['Low'],
@@ -212,14 +212,12 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     })
     
     # ==== RETURNS ====
-    # Create lagged returns - only past data
     returns_features = pd.DataFrame({
         'Returns': df['Close'].pct_change(),
         'LogReturns': np.log(df['Close'] / df['Close'].shift(1))
     })
     
     # ==== VOLUME FEATURES ====
-    # Volume normalized
     volume_features = pd.DataFrame({
         'RelativeVolume': df['Volume'] / df['Volume'].rolling(window=20, min_periods=1).mean(),
         'VolumeChange': df['Volume'].pct_change(),
@@ -229,34 +227,25 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     # ==== VOLATILITY INDICATORS ====
     volatility_features = pd.DataFrame()
     for window in [5, 10, 20]:
-        # Rolling volatility - std of returns
-        roll_std = returns_features['Returns'].rolling(window=window, min_periods=max(2, window//5)).std()
-        volatility_features[f'Volatility{window}'] = roll_std
-        
-        # Volatility ratio
+        volatility_features[f'Volatility{window}'] = talib.ATR(df['High'], df['Low'], df['Close'], timeperiod=window)
         if window > 5:
-            volatility_features[f'VolatilityRatio{window}'] = volatility_features['Volatility5'] / (roll_std + 1e-8)
+            volatility_features[f'VolatilityRatio{window}'] = volatility_features['Volatility5'] / (volatility_features[f'Volatility{window}'] + 1e-8)
     
     # ==== MOMENTUM INDICATORS ====
     momentum_features = pd.DataFrame()
     for period in [3, 5, 10, 20]:
-        momentum_features[f'Momentum{period}'] = df['Close'] / df['Close'].shift(period) - 1
-        momentum_features[f'ROC{period}'] = (df['Close'] - df['Close'].shift(period)) / df['Close'].shift(period) * 100
+        momentum_features[f'Momentum{period}'] = talib.MOM(df['Close'], timeperiod=period)
+        momentum_features[f'ROC{period}'] = talib.ROC(df['Close'], timeperiod=period)
     
     # ==== MOVING AVERAGES ====
     ma_features = pd.DataFrame()
     for window in [5, 10, 20, 50]:
-        # Simple Moving Average
-        sma = df['Close'].rolling(window=window, min_periods=max(2, window//5)).mean()
-        # Exponential Moving Average
-        ema = df['Close'].ewm(span=window, min_periods=max(2, window//5), adjust=False).mean()
-        
-        ma_features[f'SMA{window}'] = sma
-        ma_features[f'EMA{window}'] = ema
-        ma_features[f'CloseOverSMA{window}'] = df['Close'] / sma
-        ma_features[f'CloseOverEMA{window}'] = df['Close'] / ema
+        ma_features[f'SMA{window}'] = talib.SMA(df['Close'], timeperiod=window)
+        ma_features[f'EMA{window}'] = talib.EMA(df['Close'], timeperiod=window)
+        ma_features[f'CloseOverSMA{window}'] = df['Close'] / ma_features[f'SMA{window}']
+        ma_features[f'CloseOverEMA{window}'] = df['Close'] / ma_features[f'EMA{window}']
     
-    # MA Crossovers - Using past values only
+    # MA Crossovers
     ma_crossovers = pd.DataFrame({
         'SMACross5_10': ma_features['SMA5'] / ma_features['SMA10'],
         'SMACross10_20': ma_features['SMA10'] / ma_features['SMA20'],
@@ -265,53 +254,22 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     })
     
     # ==== OSCILLATORS ====
-    # RSI - Relative Strength Index
-    delta = df['Close'].diff()
-    gain = delta.where(delta > 0, 0).rolling(window=14, min_periods=3).mean()
-    loss = -delta.where(delta < 0, 0).rolling(window=14, min_periods=3).mean()
-    rs = gain / (loss + 1e-9)
-    
-    # Stochastic Oscillator
-    low_min = df['Low'].rolling(window=14, min_periods=3).min()
-    high_max = df['High'].rolling(window=14, min_periods=3).max()
-    
-    # Williams %R
-    highest_high = df['High'].rolling(window=14, min_periods=3).max()
-    lowest_low = df['Low'].rolling(window=14, min_periods=3).min()
-    
-    # CCI - Commodity Channel Index
-    tp = (df['High'] + df['Low'] + df['Close']) / 3
-    ma_tp = tp.rolling(window=20, min_periods=5).mean()
-    mean_deviation = abs(tp - ma_tp).rolling(window=20, min_periods=5).mean()
-    
     oscillator_features = pd.DataFrame({
-        'RSI': 100 - (100 / (1 + rs)),
-        'StochK': 100 * (df['Close'] - low_min) / (high_max - low_min + 1e-9),
-        'StochD': (100 * (df['Close'] - low_min) / (high_max - low_min + 1e-9)).rolling(window=3, min_periods=1).mean(),
-        'WillR': -100 * (highest_high - df['Close']) / (highest_high - lowest_low + 1e-9),
-        'CCI': (tp - ma_tp) / (0.015 * mean_deviation + 1e-9),
-        'ADX': abs(ma_features['EMA20'].pct_change(5) * 100)
+        'RSI': talib.RSI(df['Close'], timeperiod=14),
+        'StochK': talib.STOCH(df['High'], df['Low'], df['Close'], fastk_period=14, slowk_period=3, slowk_matype=0)[0],
+        'StochD': talib.STOCH(df['High'], df['Low'], df['Close'], fastk_period=14, slowk_period=3, slowk_matype=0)[1],
+        'WillR': talib.WILLR(df['High'], df['Low'], df['Close'], timeperiod=14),
+        'CCI': talib.CCI(df['High'], df['Low'], df['Close'], timeperiod=20),
+        'ADX': talib.ADX(df['High'], df['Low'], df['Close'], timeperiod=14)
     })
     
     # ==== PATTERN RECOGNITION ====
     pattern_features = pd.DataFrame({
-        'DojiPattern': (abs(df['Open'] - df['Close']) < 0.1 * (df['High'] - df['Low'])).astype(int)
+        'DojiPattern': talib.CDLDOJI(df['Open'], df['High'], df['Low'], df['Close']),
+        'Hammer': talib.CDLHAMMER(df['Open'], df['High'], df['Low'], df['Close'])
     })
     
-    # Hammer pattern
-    upper_shadow = df['High'] - df[['Open', 'Close']].max(axis=1)
-    lower_shadow = df[['Open', 'Close']].min(axis=1) - df['Low']
-    body = abs(df['Close'] - df['Open'])
-    total_range = df['High'] - df['Low']
-    
-    pattern_features['Hammer'] = (
-        (upper_shadow < 0.3 * total_range) & 
-        (lower_shadow > 0.6 * total_range) & 
-        (body < 0.3 * total_range)
-    ).astype(int)
-    
     # ==== LAGGED FEATURES ====
-    # Create lagged features for most important indicators
     important_cols = ['Returns', 'Close', 'Volume', 'RSI', 'CloseOverSMA20', 'StochK', 'HighOverLow', 'Volatility10']
     lagged_features = pd.DataFrame()
     
@@ -343,19 +301,13 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     ], axis=1)
     
     # ==== HANDLE NaN VALUES ====
-    # Forward fill first
     df = df.ffill()
-    
-    # For any remaining NaNs at the beginning, fill with expanding mean
     for col in df.columns:
         if df[col].isna().any():
             df[col] = df[col].fillna(df[col].expanding().mean())
-    
-    # Finally replace any remaining NaNs with 0
     df = df.fillna(0)
     
     # ==== FILTER EXTREME VALUES ====
-    # Clip extreme values to reduce impact of outliers
     for col in df.columns:
         if col not in ['Open', 'High', 'Low', 'Close', 'Volume']:
             q1 = df[col].quantile(0.01)
@@ -364,43 +316,31 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
                 df[col] = df[col].clip(q1, q99)
     
     if train_split:
-        # Create feature list excluding datetime
         feature_columns = [col for col in df.columns if col != 'Datetime']
-        
-        # Calculate future returns for labels - shift(-1) means next period's return
         future_returns = df['Close'].pct_change().shift(-1)
         
-        # Create labels: 0 = sell, 1 = hold, 2 = buy
         y = pd.Series(1, index=df.index)  # Default to hold
         y[future_returns < -pct_threshold] = 0  # Sell signal
         y[future_returns > pct_threshold] = 2  # Buy signal
         
-        # Extract features
         X = df[feature_columns].copy()
         
-        # Scale features using per-feature robust standardization that doesn't leak
-        window_size = min(100, len(X) // 3)  # Scale based on past window
+        # Scale features using per-feature robust standardization
+        window_size = min(100, len(X) // 3)
         
         for col in X.columns:
-            # Skip features that are already normalized
             if col in ['RSI', 'StochK', 'StochD', 'WillR', 'DojiPattern', 'Hammer'] or 'Over' in col:
                 continue
                 
-            # Calculate rolling mean and std
             roll_mean = X[col].rolling(window=window_size, min_periods=5).mean()
             roll_std = X[col].rolling(window=window_size, min_periods=5).std()
             
-            # Fill initial NaN values in rolling stats
             roll_mean = roll_mean.bfill()
             roll_std = roll_std.bfill()
             
-            # Add small epsilon to avoid division by zero
             X[col] = (X[col] - roll_mean) / (roll_std + 1e-8)
         
-        # Clean up any remaining NaNs
         X = X.fillna(0)
-        
-        # Remove the last row since we don't have future returns for it
         X = X[:-1]
         y = y[:-1]
         
