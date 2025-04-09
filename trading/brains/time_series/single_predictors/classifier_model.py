@@ -45,7 +45,7 @@ class FeatureSelectionCallback:
         return self.important_features
 
 class ClassifierModel(nn.Module):
-    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, pct_threshold=0.01):
+    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, pct_threshold=0.01, use_feature_selection: bool = True):
         super().__init__()
 
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -59,62 +59,42 @@ class ClassifierModel(nn.Module):
             X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
             
             feature_names = X.columns.tolist()
-            self.feature_selector = FeatureSelectionCallback(X.values, y.values, feature_names, top_n=30)
-            important_feature_names = self.feature_selector.get_important_features()
             
-            X = X[important_feature_names]
+            # Conditional feature selection
+            if use_feature_selection:
+                self.feature_selector = FeatureSelectionCallback(X.values, y.values, feature_names, top_n=30)
+                important_feature_names = self.feature_selector.get_important_features()
+                X = X[important_feature_names]
+            else:
+                print("Feature selection is skipped.")
+            
             input_dim = X.shape[1]
-            print(f"Model initialized with input dimension: {input_dim} (after feature selection)")
         else:
-            input_dim = 30
+            input_dim = 10  # Set a default input dimension for inference
         
         self.input_dim = input_dim
-
-        self.hidden_dim = 256
+        self.hidden_dim = 128  # Reduced hidden dimension
         
-        self.feature_extractor = nn.Sequential(
-            nn.BatchNorm1d(input_dim),
-            nn.Linear(input_dim, self.hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(0.3),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(0.3)
-        )
-        
+        # Removed feature extractor
+        # Directly using LSTM
         self.lstm = nn.LSTM(
-            input_size=self.hidden_dim,
+            input_size=self.input_dim,  # Use input_dim directly
             hidden_size=self.hidden_dim,
-            num_layers=2,
-            bidirectional=True,
-            dropout=0.3,
+            num_layers=1,  # Reduced to 1 layer
             batch_first=True
         )
-
-        nn.init.xavier_uniform_(self.lstm.weight_ih_l0) #inp -> hidden
-        nn.init.xavier_uniform_(self.lstm.weight_ih_l1)
-        nn.init.xavier_uniform_(self.lstm.weight_hh_l0) #hidden -> hidden
-        nn.init.xavier_uniform_(self.lstm.weight_hh_l1)
         
-        self.attention = nn.MultiheadAttention(self.hidden_dim * 2, num_heads=4)
-        self.layer_norm1 = nn.LayerNorm(self.hidden_dim * 2)
-        self.layer_norm2 = nn.LayerNorm(self.hidden_dim * 2)
-        
-        self.fc_block1 = nn.Sequential(
-            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(0.3),
-            nn.LayerNorm(self.hidden_dim)
-        )
-        
-        self.fc_block2 = nn.Sequential(
+        self.fc_block = nn.Sequential( #shrinking layers
             nn.Linear(self.hidden_dim, self.hidden_dim // 2),
-            nn.SiLU(),
-            nn.Dropout(0.3),
-            nn.LayerNorm(self.hidden_dim // 2)
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(self.hidden_dim // 2, self.hidden_dim // 4),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim // 4, self.hidden_dim // 8),
+            nn.GELU()
         )
-        
-        self.output = nn.Linear(self.hidden_dim // 2, 3)
+
+        self.output = nn.Linear(self.hidden_dim // 8, 3)
         
         self.best_val_loss = float('inf')
         self.patience_counter = 0
@@ -125,26 +105,13 @@ class ClassifierModel(nn.Module):
         
         if len(x.shape) == 1:
             x = x.unsqueeze(0)
-            
-        x = self.feature_extractor(x)
         
-        # Reshape for sequence models: [batch_size, seq_len=1, features]
         x = x.unsqueeze(1)
 
-        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len=1, hidden_dim*2]
-        lstm_out = self.layer_norm1(lstm_out)
+        lstm_out, _ = self.lstm(x)
+        x = lstm_out.squeeze(1)
         
-        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
-        lstm_out = lstm_out + attn_out
-        lstm_out = self.layer_norm2(lstm_out)
-        
-        x = lstm_out.squeeze(1)  # [batch_size, hidden_dim*2]
-        
-        residual = x
-        x = self.fc_block1(x)
-        x = x + residual
-        x = self.fc_block2(x)
-        
+        x = self.fc_block(x)
         x = self.output(x)
         return x
 
@@ -181,7 +148,7 @@ class ClassifierModel(nn.Module):
         class_weights = class_weights / class_weights.sum()
         class_weights = torch.tensor(class_weights, device=self.DEVICE)
         
-        batch_size = 128
+        batch_size = 64
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         
         base_lr = 3e-4
@@ -197,7 +164,7 @@ class ClassifierModel(nn.Module):
             optimizer,
             T_0=10,  # First restart after 10 epochs
             T_mult=2,  # Double the interval after each restart
-            eta_min=1e-6  # Minimum learning rate
+            eta_min=1e-3  # Minimum learning rate
         )
         
         scaler = GradScaler()
@@ -522,8 +489,8 @@ def load_model(model_path: str, pct_threshold=0.01):
     state_dict = torch.load(model_path, map_location=torch.device('cuda'), weights_only=True)
     
     # Get input dimension from first layer weights
-    if 'feature_extractor.1.weight' in state_dict:
-        input_dim = state_dict['feature_extractor.1.weight'].shape[1]
+    if 'feature_extractor.0.weight' in state_dict:
+        input_dim = state_dict['feature_extractor.0.weight'].shape[1]
         model.input_dim = input_dim
         print(f"Model loaded with input dimension: {input_dim}")
         
@@ -533,13 +500,8 @@ def load_model(model_path: str, pct_threshold=0.01):
         
         # Update feature extraction layer
         model.feature_extractor = nn.Sequential(
-            nn.BatchNorm1d(input_dim),
             nn.Linear(input_dim, model.hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(0.3),
-            nn.Linear(model.hidden_dim, model.hidden_dim),
-            nn.SiLU(),
-            nn.Dropout(0.3)
+            nn.ReLU()  # Changed to ReLU for simplicity
         )
     
     # Now load state dict
@@ -549,7 +511,7 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=100, pct_threshold=0.01)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=100, pct_threshold=0.01, use_feature_selection=False)
     model = model.train_model(model, prompt_save=False, show_loss=True)
     predictions = model.predict(model, model.data)
     print(predictions)
