@@ -9,7 +9,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
 
 import model_tools as mt
-from indicators import *
+from trading.techincal_indicators import *
 
 import warnings
 # warnings.filterwarnings("ignore")

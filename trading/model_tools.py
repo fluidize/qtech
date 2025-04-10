@@ -10,8 +10,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from rich import print
-
-import talib
+import pandas_indicators as ta
 
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
     print("[green]DOWNLOADING DATA[/green]")
@@ -251,7 +250,7 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     
     return df
 
-def prepare_data_with_talib(data, lagged_length=5, train_split=True, pct_threshold=0.05):
+def prepare_data_with_pandas_indicators(data, lagged_length=5, train_split=True, pct_threshold=0.05):
     scalers = {
         'price': MinMaxScaler(feature_range=(0, 1)),
         'volume': QuantileTransformer(output_distribution='normal'),
@@ -260,15 +259,15 @@ def prepare_data_with_talib(data, lagged_length=5, train_split=True, pct_thresho
 
     df = data.copy()
     
-    # Ensure there are no NaN values before using TA-Lib
+    # Ensure there are no NaN values before using pandas-ta
     if df.isnull().any().any():
         df = df.fillna(method='ffill')  # Forward fill to handle NaNs
 
     # Drop unnecessary columns if they exist
     df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
 
-    # Calculate log returns and price range using TA-Lib
-    df['Log_Return'] = talib.LOG(df['Close'] / df['Close'].shift(1))  # Using TA-Lib for log returns
+    # Calculate log returns and price range
+    df['Log_Return'] = ta.LOG(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
     # Create lagged features
@@ -281,22 +280,19 @@ def prepare_data_with_talib(data, lagged_length=5, train_split=True, pct_thresho
     
     if lagged_features:
         df = pd.concat([df] + lagged_features, axis=1)
-    
-    # Calculate Z-Score using TA-Lib
-    df['Close_ZScore'] = (df['Close'] - talib.SMA(df['Close'], timeperiod=20)) / talib.STDDEV(df['Close'], timeperiod=20)
 
-    # Moving Averages using TA-Lib
-    df['MA10'] = talib.SMA(df['Close'], timeperiod=10)
-    df['MA20'] = talib.SMA(df['Close'], timeperiod=20)
-    df['MA50'] = talib.SMA(df['Close'], timeperiod=50)
-    df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
-    
-    # RSI using TA-Lib
-    df['RSI'] = talib.RSI(df['Close'], timeperiod=14)
+    # Calculate technical indicators using pandas-indicators
+    df['MA10'] = ta.SMA(df['Close'], timeperiod=10)
+    df['MA20'] = ta.SMA(df['Close'], timeperiod=20)
+    df['MA50'] = ta.SMA(df['Close'], timeperiod=50)
+    df['RSI'] = ta.RSI(df['Close'], timeperiod=14)
+
+    # Calculate Z-Score
+    df['Close_ZScore'] = (df['Close'] - df['MA20']) / df['Close'].rolling(window=20).std()
 
     # Check for NaN values after calculations
     if df.isnull().any().any():
-        df = df.fillna(method='ffill')  # Forward fill to handle NaNs
+        df = df.ffill()  # Forward fill to handle NaNs
 
     df.dropna(inplace=True)
     
@@ -304,7 +300,7 @@ def prepare_data_with_talib(data, lagged_length=5, train_split=True, pct_thresho
         price_features = ['Open', 'High', 'Low', 'Close']
         volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
         bounded_features = ['RSI']  # Features that are already bounded (e.g., 0-100)
-        normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross', 'Close_ZScore']
+        normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'Close_ZScore']
         
         technical_features = [col for col in df.columns 
                             if col not in (price_features + volume_features + bounded_features + 
@@ -355,3 +351,13 @@ def loss_plot(loss_history):
     fig.update_layout(title='Loss', xaxis_title='Epoch', yaxis_title='Loss')
 
     return fig
+
+if __name__ == "__main__":
+    data = fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
+    
+    main_data, _ = prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.05)
+    pandas_indicators_data, _ = prepare_data_with_pandas_indicators(data, lagged_length=5, train_split=True, pct_threshold=0.05)
+
+    print(main_data)
+    print(pandas_indicators_data)
+
