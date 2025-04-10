@@ -182,35 +182,96 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     
     return df, scalers
 
-def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.01):
-    """
-    Enhanced data preparation for classification with advanced feature engineering using TA-Lib.
-    Uses only past information for all calculations to prevent data leakage.
-    
-    Parameters:
-        data: DataFrame with OHLCV data
-        lagged_length: Number of lagged features to create
-        train_split: Whether to return X,y for training
-        pct_threshold: Threshold for classifying returns (in %)
-        scale_y: Whether to scale the target variable
-    """
-    pct_threshold = pct_threshold / 100
-    df = data.copy()
-    
+def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.05):
     scalers = {
         'price': MinMaxScaler(feature_range=(0, 1)),
         'volume': QuantileTransformer(output_distribution='normal'),
         'technical': StandardScaler()
     }
 
-    # Keep only OHLCV columns to avoid any potential leakage
-    if len(df.columns) > 5:
-        df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+    df = data.copy()
+    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
 
+    # Calculate returns and features
     df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
-    # Lagged features
+    # Create lagged features
+    lagged_features = []
+    for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
+        for i in range(1, lagged_length):
+            lagged_features.append(pd.DataFrame({
+                f'Prev{i}_{col}': df[col].shift(i)
+            }))
+    
+    if lagged_features:
+        df = pd.concat([df] + lagged_features, axis=1)
+    
+    # Technical indicators
+    df['Close_ZScore'] = (df['Close'] - df['Close'].rolling(window=100).mean()) / df['Close'].rolling(window=100).std()
+    df['MA10'] = df['Close'].rolling(window=10).mean() / df['Close']
+    df['MA20'] = df['Close'].rolling(window=20).mean() / df['Close']
+    df['MA50'] = df['Close'].rolling(window=50).mean() / df['Close']
+    df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
+    df['RSI'] = compute_rsi(df['Close'], 14)
+
+    # Handle NaN values
+    df = df.bfill().ffill()
+    df.dropna(inplace=True)
+    
+    if train_split:
+        # Prepare features
+        price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
+        volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
+        technical_features = ['RSI', 'MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross', 'Close_ZScore']
+        
+        # Scale features
+        df[price_features] = scalers['price'].fit_transform(df[price_features])
+        df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
+        df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
+
+        # Prepare X
+        if 'Datetime' in df.columns:
+            X = df.drop(['Datetime'], axis=1)
+        else:
+            X = df
+        
+        pct_change = df['Close'].pct_change().shift(-1)  # Y IS 1 AHEAD PRIOR
+        pct_threshold = pct_threshold / 100
+
+        # 0 = below threshold | 1 = within threshold | 2 = above threshold
+        y = pd.Series(1, index=df.index)
+        y[pct_change < -pct_threshold] = 0
+        y[pct_change > pct_threshold] = 2
+        
+        X = X[:-1]
+        y = y[:-1]
+
+        return X, y
+    
+    return df
+
+def prepare_data_with_talib(data, lagged_length=5, train_split=True, pct_threshold=0.05):
+    scalers = {
+        'price': MinMaxScaler(feature_range=(0, 1)),
+        'volume': QuantileTransformer(output_distribution='normal'),
+        'technical': StandardScaler()
+    }
+
+    df = data.copy()
+    
+    # Ensure there are no NaN values before using TA-Lib
+    if df.isnull().any().any():
+        df = df.fillna(method='ffill')  # Forward fill to handle NaNs
+
+    # Drop unnecessary columns if they exist
+    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
+
+    # Calculate log returns and price range using TA-Lib
+    df['Log_Return'] = talib.LOG(df['Close'] / df['Close'].shift(1))  # Using TA-Lib for log returns
+    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+    
+    # Create lagged features
     lagged_features = []
     for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
         for i in range(1, lagged_length):
@@ -225,17 +286,17 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     df['Close_ZScore'] = (df['Close'] - talib.SMA(df['Close'], timeperiod=20)) / talib.STDDEV(df['Close'], timeperiod=20)
 
     # Moving Averages using TA-Lib
-    df['MA10'] = talib.SMA(df['Close'], timeperiod=10) / df['Close']
-    df['MA20'] = talib.SMA(df['Close'], timeperiod=20) / df['Close']
-    df['MA50'] = talib.SMA(df['Close'], timeperiod=50) / df['Close']
+    df['MA10'] = talib.SMA(df['Close'], timeperiod=10)
+    df['MA20'] = talib.SMA(df['Close'], timeperiod=20)
+    df['MA50'] = talib.SMA(df['Close'], timeperiod=50)
     df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
     
     # RSI using TA-Lib
     df['RSI'] = talib.RSI(df['Close'], timeperiod=14)
 
-    # Check for NaN values
+    # Check for NaN values after calculations
     if df.isnull().any().any():
-        df = df.fillna(df.mean())
+        df = df.fillna(method='ffill')  # Forward fill to handle NaNs
 
     df.dropna(inplace=True)
     
@@ -270,6 +331,7 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
         
         X = X[:-1]
         y = y[:-1]
+
         return X, y
     
     return df

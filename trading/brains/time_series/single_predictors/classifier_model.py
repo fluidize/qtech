@@ -73,50 +73,62 @@ class ClassifierModel(nn.Module):
             input_dim = 10  # Set a default input dimension for inference
         
         self.input_dim = input_dim
-        self.hidden_dim = 128  # Reduced hidden dimension
+        self.hidden_dim = 512  # Reduced hidden dimension
         
-        # Removed feature extractor
-        # Directly using LSTM
-        self.lstm = nn.LSTM(
-            input_size=self.input_dim,  # Use input_dim directly
+        self.lstm1 = nn.LSTM(
+            input_size=self.input_dim,
             hidden_size=self.hidden_dim,
-            num_layers=1,  # Reduced to 1 layer
-            batch_first=True
+            num_layers=3,
+            batch_first=True,
+            bidirectional=True
+        )
+
+        self.lstm2 = nn.LSTM(
+            input_size=self.hidden_dim * 2,
+            hidden_size=self.hidden_dim,
+            num_layers=3,
+            batch_first=True,
+            bidirectional=True
         )
         
         self.fc_block = nn.Sequential( #shrinking layers
-            nn.Linear(self.hidden_dim, self.hidden_dim // 2),
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
             nn.GELU(),
             nn.Dropout(0.2),
-            nn.Linear(self.hidden_dim // 2, self.hidden_dim // 4),
+            nn.Linear(self.hidden_dim, self.hidden_dim // 2),
             nn.GELU(),
-            nn.Linear(self.hidden_dim // 4, self.hidden_dim // 8),
-            nn.GELU()
         )
 
-        self.output = nn.Linear(self.hidden_dim // 8, 3)
+        self.fc1 = nn.Linear(self.hidden_dim // 2, self.hidden_dim // 2)
+        self.fc2 = nn.Linear(self.hidden_dim // 2, self.hidden_dim // 2)
+
+        self.output = nn.Linear(self.hidden_dim // 2, 3)
         
         self.best_val_loss = float('inf')
         self.patience_counter = 0
         self.best_val_accuracy = 0.0
 
-    def forward(self, x):
-        batch_size = x.size(0)
-        
+    def forward(self, x):       
         if len(x.shape) == 1:
             x = x.unsqueeze(0)
         
         x = x.unsqueeze(1)
 
-        lstm_out, _ = self.lstm(x)
+        lstm_out, _ = self.lstm1(x)
+        x = lstm_out.squeeze(1)
+
+        lstm_out, _ = self.lstm2(x)
         x = lstm_out.squeeze(1)
         
         x = self.fc_block(x)
+        x = self.fc1(x)
+        x = self.fc2(x)
         x = self.output(x)
         return x
 
-    def train_model(self, model, prompt_save=False, show_loss=False, val_split=0.2):
+    def train_model(self, model, prompt_save=False, show_loss=False):
         X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
+        print(X)
         
         if self.feature_selector and self.feature_selector.important_features:
             X = X[self.feature_selector.important_features]
@@ -124,22 +136,14 @@ class ClassifierModel(nn.Module):
         print("Class distribution: \n", y.value_counts())
         print(f"Feature count: {X.shape[1]}")
         
-        X_train, X_val, y_train, y_val = train_test_split(
-            X.values, y.values, 
-            test_size=val_split, 
-            random_state=42,
-            stratify=y
-        )
+        X_train, y_train = X.values, y.values  # Removed validation split
         
         print(f"Training set size: {len(X_train)}")
         
         X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
         y_train_tensor = torch.tensor(y_train, dtype=torch.long)
-        X_val_tensor = torch.tensor(X_val, dtype=torch.float32)
-        y_val_tensor = torch.tensor(y_val, dtype=torch.long)
         
         train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-        val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
         
         model.to(self.DEVICE)
         
@@ -149,43 +153,21 @@ class ClassifierModel(nn.Module):
         class_weights = torch.tensor(class_weights, device=self.DEVICE)
         
         batch_size = 64
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        criterion = nn.CrossEntropyLoss()
         
-        base_lr = 3e-4
+        base_lr = 1e-3
         
-        optimizer = optim.AdamW(
+        optimizer = optim.Adam(
             model.parameters(),
             lr=base_lr,
-            weight_decay=1e-4,
             amsgrad=True
         )
         
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer,
-            T_0=10,  # First restart after 10 epochs
-            T_mult=2,  # Double the interval after each restart
-            eta_min=1e-3  # Minimum learning rate
-        )
-        
-        scaler = GradScaler()
-        
-        train_loader = DataLoader(
-            train_dataset, 
-            batch_size=batch_size, 
-            shuffle=True
-        )
-        
-        val_loader = DataLoader(
-            val_dataset, 
-            batch_size=batch_size, 
-            shuffle=False
-        )
+        # Removed validation-related code
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
         
         train_loss_history = []
-        val_loss_history = []
-        train_acc_history = []
-        val_acc_history = []
-        patience = 15
+        # Removed validation loss and accuracy history tracking
         
         for epoch in range(model.epochs):
             model.train()
@@ -201,19 +183,12 @@ class ClassifierModel(nn.Module):
                 
                 optimizer.zero_grad()
                 
-                # Use mixed precision for faster training
-                with autocast('cuda'):
-                    outputs = model(X_batch)
-                    loss = criterion(outputs, y_batch)
+                outputs = model(X_batch)
+                loss = criterion(outputs, y_batch)
                 
-                scaler.scale(loss).backward()
-                
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                
-                scaler.step(optimizer)
-                scaler.update()
-                
+                loss.backward()
+                optimizer.step()
+
                 total_train_loss += loss.item()
                 
                 with torch.no_grad():
@@ -225,88 +200,22 @@ class ClassifierModel(nn.Module):
             
             progress_bar.close()
             
-            model.eval()
-            total_val_loss = 0
-            val_correct = 0
-            val_total = 0
-            
-            val_class_correct = [0, 0, 0]  # for classes 0, 1, 2
-            val_class_total = [0, 0, 0]
-            
-            with torch.no_grad():
-                for X_batch, y_batch in val_loader:
-                    X_batch, y_batch = X_batch.to(self.DEVICE), y_batch.to(self.DEVICE)
-                    
-                    outputs = model(X_batch)
-                    loss = criterion(outputs, y_batch)
-                    
-                    total_val_loss += loss.item()
-                    
-                    _, predicted = torch.max(outputs.data, 1)
-                    val_total += y_batch.size(0)
-                    val_correct += (predicted == y_batch).sum().item()
-                    
-                    for i in range(3):
-                        mask = (y_batch == i)
-                        val_class_total[i] += mask.sum().item()
-                        if mask.sum() > 0:
-                            val_class_correct[i] += (predicted[mask] == i).sum().item()
-            
             train_loss = total_train_loss / len(train_loader)
             train_acc = 100 * train_correct / train_total
-            val_loss = total_val_loss / len(val_loader)
-            val_acc = 100 * val_correct / val_total
             
             train_loss_history.append(train_loss)
-            val_loss_history.append(val_loss)
-            train_acc_history.append(train_acc)
-            val_acc_history.append(val_acc)
             
-            scheduler.step()
-            current_lr = optimizer.param_groups[0]['lr']
+            print(f"\nEpoch {epoch + 1}/{model.epochs}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
             
-            class_accuracies = [100 * correct / total if total > 0 else 0 for correct, total in zip(val_class_correct, val_class_total)]
-            
-            print(f"\nEpoch {epoch+1}/{model.epochs} (LR: {current_lr:.6f})")
-            print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-            print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-            print(f"Class Accuracies: Sell: {class_accuracies[0]:.2f}%, Hold: {class_accuracies[1]:.2f}%, Buy: {class_accuracies[2]:.2f}%")
-            
-            if val_acc > model.best_val_accuracy:
-                model.best_val_accuracy = val_acc
-                model.patience_counter = 0
-                torch.save(model.state_dict(), 'best_acc_model.pth')
-                print("✓ Saved new best accuracy model")
-            elif val_loss < model.best_val_loss:
-                model.best_val_loss = val_loss
-                model.patience_counter = 0
-                torch.save(model.state_dict(), 'best_loss_model.pth')
-                print("✓ Saved new best loss model")
-            else:
-                model.patience_counter += 1
-            
-            if model.patience_counter >= patience:
-                print(f"Early stopping triggered after {epoch+1} epochs")
-                break
-        
+            # Removed validation-related logic
+
         if show_loss:
-            fig = make_loss_plot(train_loss_history, val_loss_history, train_acc_history, val_acc_history)
+            fig = make_loss_plot(train_loss_history)  # Adjusted to only plot training loss
             fig.show()
         
         if ((input("Save? y/n ").lower() == 'y') if prompt_save else False):
             save_path = input("Enter save path: ")
             torch.save(model.state_dict(), save_path)
-        
-        # Load the best model for evaluation
-        try:
-            model.load_state_dict(torch.load('best_acc_model.pth'))
-            print("Loaded best accuracy model for evaluation")
-        except:
-            try:
-                model.load_state_dict(torch.load('best_loss_model.pth'))
-                print("Loaded best loss model for evaluation")
-            except:
-                print("No saved model found, using current model state")
         
         return model
     
@@ -420,10 +329,8 @@ class ClassifierModel(nn.Module):
         fig.show()
         return fig
 
-def make_loss_plot(train_loss, val_loss=None, train_acc=None, val_acc=None):
-    from plotly.subplots import make_subplots
-    
-    fig = make_subplots(rows=2, cols=1, subplot_titles=("Loss During Training", "Accuracy During Training"))
+def make_loss_plot(train_loss):
+    fig = go.Figure()
     
     # Plot training loss
     fig.add_trace(
@@ -432,53 +339,16 @@ def make_loss_plot(train_loss, val_loss=None, train_acc=None, val_acc=None):
             y=train_loss,
             mode='lines',
             name='Training Loss'
-        ),
-        row=1, col=1
+        )
     )
-    
-    # Plot validation loss if provided
-    if val_loss is not None:
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(1, len(val_loss) + 1)),
-                y=val_loss,
-                mode='lines',
-                name='Validation Loss'
-            ),
-            row=1, col=1
-        )
-    
-    # Plot accuracy
-    if train_acc is not None:
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(1, len(train_acc) + 1)),
-                y=train_acc,
-                mode='lines',
-                name='Training Accuracy'
-            ),
-            row=2, col=1
-        )
-    
-    if val_acc is not None:
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(1, len(val_acc) + 1)),
-                y=val_acc,
-                mode='lines',
-                name='Validation Accuracy'
-            ),
-            row=2, col=1
-        )
     
     fig.update_layout(
         height=800,
         template="plotly_dark"
     )
     
-    fig.update_yaxes(title_text="Loss", row=1, col=1)
-    fig.update_yaxes(title_text="Accuracy (%)", row=2, col=1)
-    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_yaxes(title_text="Loss")
+    fig.update_xaxes(title_text="Epoch")
     
     return fig
 
@@ -511,8 +381,8 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=100, pct_threshold=0.01, use_feature_selection=False)
-    model = model.train_model(model, prompt_save=False, show_loss=True)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=100, pct_threshold=0.5, use_feature_selection=False)
+    model = model.train_model(model, prompt_save=False, show_loss=False)
     predictions = model.predict(model, model.data)
     print(predictions)
     model.prediction_plot(model.data, predictions)
