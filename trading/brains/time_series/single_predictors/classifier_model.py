@@ -28,11 +28,17 @@ class FeatureSelectionCallback:
         self.important_features = None
         
     def get_important_features(self):
-        # Use Random Forest for feature selection
-        rf = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
-        rf.fit(self.X_train, self.y_train)
+        # Use Gradient Boosting Machine for feature selection
+        from sklearn.ensemble import GradientBoostingClassifier
+        gbm = GradientBoostingClassifier(
+            n_estimators=100,
+            learning_rate=0.1,
+            max_depth=3,
+            random_state=42
+        )
+        gbm.fit(self.X_train, self.y_train)
         
-        importances = rf.feature_importances_
+        importances = gbm.feature_importances_
         indices = np.argsort(importances)[::-1]
 
         self.important_features = [self.feature_names[i] for i in indices[:self.top_n]]
@@ -44,19 +50,34 @@ class FeatureSelectionCallback:
             
         return self.important_features
 
+class Attention(nn.Module):
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1)
+        )
+        
+    def forward(self, x):
+        attention_weights = self.attention(x)
+        attention_weights = torch.softmax(attention_weights, dim=1)
+        return attention_weights
+
 class ClassifierModel(nn.Module):
-    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, pct_threshold=0.01, use_feature_selection: bool = True):
+    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, pct_threshold=0.01, lagged_length=10, use_feature_selection: bool = True):
         super().__init__()
 
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.epochs = epochs
         self.pct_threshold = pct_threshold
         self.feature_selector = None
-        
+        self.lagged_length = lagged_length
+
         # Dynamically determine input dimension from data
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
-            X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
+            X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
             
             feature_names = X.columns.tolist()
             
@@ -73,61 +94,51 @@ class ClassifierModel(nn.Module):
             input_dim = 10  # Set a default input dimension for inference
         
         self.input_dim = input_dim
-        self.hidden_dim = 512  # Reduced hidden dimension
+        self.hidden_dim = 256
         
+        # Feature processing
+        self.batch_norm = nn.BatchNorm1d(self.input_dim)
+        
+        # LSTM layers
         self.lstm1 = nn.LSTM(
             input_size=self.input_dim,
             hidden_size=self.hidden_dim,
-            num_layers=3,
-            batch_first=True,
-            bidirectional=True
-        )
-
-        self.lstm2 = nn.LSTM(
-            input_size=self.hidden_dim * 2,
-            hidden_size=self.hidden_dim,
-            num_layers=3,
-            batch_first=True,
-            bidirectional=True
+            num_layers=2,
+            bidirectional=True,
+            dropout=0.1,
+            batch_first=True
         )
         
-        self.fc_block = nn.Sequential( #shrinking layers
-            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
-            nn.GELU(),
-            nn.Dropout(0.2),
-            nn.Linear(self.hidden_dim, self.hidden_dim // 2),
-            nn.GELU(),
-        )
+        self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
+        self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.output = nn.Linear(self.hidden_dim, 3)
 
-        self.fc1 = nn.Linear(self.hidden_dim // 2, self.hidden_dim // 2)
-        self.fc2 = nn.Linear(self.hidden_dim // 2, self.hidden_dim // 2)
+        self._init_weights()
 
-        self.output = nn.Linear(self.hidden_dim // 2, 3)
-        
-        self.best_val_loss = float('inf')
-        self.patience_counter = 0
-        self.best_val_accuracy = 0.0
-
-    def forward(self, x):       
-        if len(x.shape) == 1:
-            x = x.unsqueeze(0)
-        
-        x = x.unsqueeze(1)
-
-        lstm_out, _ = self.lstm1(x)
-        x = lstm_out.squeeze(1)
-
-        lstm_out, _ = self.lstm2(x)
-        x = lstm_out.squeeze(1)
-        
-        x = self.fc_block(x)
+    def forward(self, x):
+        x = self.batch_norm(x)
+        x, _ = self.lstm1(x)
         x = self.fc1(x)
         x = self.fc2(x)
         x = self.output(x)
+        
         return x
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.LSTM):
+                for name, param in m.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param)
+                    elif 'bias' in name:
+                        nn.init.zeros_(param)
 
     def train_model(self, model, prompt_save=False, show_loss=False):
-        X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
+        X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
         print(X)
         
         if self.feature_selector and self.feature_selector.important_features:
@@ -136,7 +147,7 @@ class ClassifierModel(nn.Module):
         print("Class distribution: \n", y.value_counts())
         print(f"Feature count: {X.shape[1]}")
         
-        X_train, y_train = X.values, y.values  # Removed validation split
+        X_train, y_train = X.values, y.values
         
         print(f"Training set size: {len(X_train)}")
         
@@ -152,23 +163,29 @@ class ClassifierModel(nn.Module):
         class_weights = class_weights / class_weights.sum()
         class_weights = torch.tensor(class_weights, device=self.DEVICE)
         
-        batch_size = 64
-        criterion = nn.CrossEntropyLoss()
+        batch_size = 128
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
         
         base_lr = 1e-3
         
-        optimizer = optim.Adam(
+        optimizer = optim.AdamW(
             model.parameters(),
             lr=base_lr,
-            amsgrad=True
+            amsgrad=True,
+            weight_decay=1e-7
         )
-        
-        # Removed validation-related code
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=model.epochs)
+
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
         
         train_loss_history = []
-        # Removed validation loss and accuracy history tracking
+        train_acc_history = []
         
+        patience = 10
+        min_delta = 0.001
+        best_val_loss = float('inf')
+        counter = 0
+
         for epoch in range(model.epochs):
             model.train()
             total_train_loss = 0
@@ -196,6 +213,7 @@ class ClassifierModel(nn.Module):
                     train_total += y_batch.size(0)
                     train_correct += (predicted == y_batch).sum().item()
                 
+                lr_scheduler.step()
                 progress_bar.update(1)
             
             progress_bar.close()
@@ -204,13 +222,21 @@ class ClassifierModel(nn.Module):
             train_acc = 100 * train_correct / train_total
             
             train_loss_history.append(train_loss)
+            train_acc_history.append(train_acc)
             
             print(f"\nEpoch {epoch + 1}/{model.epochs}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
             
-            # Removed validation-related logic
+            if train_loss < best_val_loss - min_delta:
+                best_val_loss = train_loss
+                counter = 0
+            else:
+                counter += 1
+                if counter >= patience:
+                    print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+                    break
 
         if show_loss:
-            fig = make_loss_plot(train_loss_history)  # Adjusted to only plot training loss
+            fig = self.loss_plot(train_loss_history, train_acc_history)
             fig.show()
         
         if ((input("Save? y/n ").lower() == 'y') if prompt_save else False):
@@ -220,7 +246,7 @@ class ClassifierModel(nn.Module):
         return model
     
     def predict(self, model, data):
-        X, y = mt.prepare_data_classifier(data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=10)
+        X, y = mt.prepare_data_classifier(data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
         
         # Use the same features as during training if feature selection was performed
         if self.feature_selector and self.feature_selector.important_features:
@@ -258,7 +284,6 @@ class ClassifierModel(nn.Module):
                 all_predictions.extend(predictions)
                 all_probabilities.append(probabilities.cpu().numpy())
         
-        # Store probabilities for potential confidence-based filtering
         self.prediction_probabilities = np.vstack(all_probabilities)
         
         return np.array(all_predictions)
@@ -267,21 +292,17 @@ class ClassifierModel(nn.Module):
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Price'))
         
-        # Filter predictions by confidence if available
-        confidence_threshold = 0.6
+        confidence_threshold = 0.9
         high_confidence_mask = np.zeros(len(predictions), dtype=bool)
         
         if hasattr(self, 'prediction_probabilities'):
-            # Find predictions with high confidence
             max_probs = np.max(self.prediction_probabilities, axis=1)
             high_confidence_mask = max_probs > confidence_threshold
         
-        # Separate by prediction type and confidence
         up_x, up_y = [], []
         down_x, down_y = [], []
         hold_x, hold_y = [], []
         
-        # High confidence predictions
         hc_up_x, hc_up_y = [], []
         hc_down_x, hc_down_y = [], []
         
@@ -329,28 +350,56 @@ class ClassifierModel(nn.Module):
         fig.show()
         return fig
 
-def make_loss_plot(train_loss):
-    fig = go.Figure()
-    
-    # Plot training loss
-    fig.add_trace(
-        go.Scatter(
-            x=list(range(1, len(train_loss) + 1)),
-            y=train_loss,
-            mode='lines',
-            name='Training Loss'
+    def loss_plot(self, train_loss, train_acc=None):
+        """
+        Create a plot showing training loss and accuracy over epochs.
+        
+        Args:
+            train_loss (list): List of training loss values
+            train_acc (list, optional): List of training accuracy values
+        """
+        fig = go.Figure()
+        
+        # Add training loss trace
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(1, len(train_loss) + 1)),
+                y=train_loss,
+                mode='lines',
+                name='Training Loss',
+                line=dict(color='red')
+            )
         )
-    )
-    
-    fig.update_layout(
-        height=800,
-        template="plotly_dark"
-    )
-    
-    fig.update_yaxes(title_text="Loss")
-    fig.update_xaxes(title_text="Epoch")
-    
-    return fig
+        
+        # Add training accuracy trace if provided
+        if train_acc is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=list(range(1, len(train_acc) + 1)),
+                    y=train_acc,
+                    mode='lines',
+                    name='Training Accuracy',
+                    line=dict(color='green'),
+                    yaxis='y2'
+                )
+            )
+        
+        # Update layout
+        fig.update_layout(
+            title='Training Metrics',
+            xaxis_title='Epoch',
+            yaxis_title='Loss',
+            yaxis2=dict(
+                title='Accuracy (%)',
+                overlaying='y',
+                side='right',
+                range=[0, 100]
+            ),
+            template="plotly_dark",
+            showlegend=True
+        )
+        
+        return fig
 
 def load_model(model_path: str, pct_threshold=0.01):
     model = ClassifierModel(train=False, pct_threshold=pct_threshold)
@@ -381,8 +430,7 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=100, pct_threshold=0.5, use_feature_selection=False)
-    model = model.train_model(model, prompt_save=False, show_loss=False)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=3, interval="1min", age_days=0, epochs=100, pct_threshold=0.1, lagged_length=5, use_feature_selection=False)
+    model = model.train_model(model, prompt_save=False, show_loss=True)
     predictions = model.predict(model, model.data)
-    print(predictions)
-    model.prediction_plot(model.data, predictions)
+    # model.prediction_plot(model.data, predictions)
