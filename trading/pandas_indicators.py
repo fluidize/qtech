@@ -120,10 +120,17 @@ def MFI(high, low, close, volume, timeperiod=14):
     mfi = 100 - (100 / (1 + positive_mf / negative_mf))
     return mfi
 
-def identify_candlestick_patterns(df):
+def identify_candlestick_patterns(df, patterns=None):
     """
     Identify various candlestick patterns in the data.
-    Returns a DataFrame with binary indicators (1 for pattern present, 0 for absent).
+    Args:
+        df: DataFrame with OHLCV data
+        patterns: List of patterns to identify. If None, identifies all patterns.
+                 Available patterns: ['doji', 'hammer', 'shooting_star', 'engulfing', 
+                                    'harami', 'morning_star', 'evening_star', 'three_white_soldiers',
+                                    'three_black_crows', 'dark_cloud_cover', 'piercing_line']
+    Returns:
+        DataFrame with binary indicators (1 for pattern present, 0 for absent)
     """
     # Calculate basic candle properties
     df['body'] = df['Close'] - df['Open']
@@ -132,31 +139,27 @@ def identify_candlestick_patterns(df):
     df['total_range'] = df['High'] - df['Low']
     df['body_ratio'] = abs(df['body']) / df['total_range']
     
-    # Initialize pattern columns
-    patterns = [
-        "2crows", "3blackcrows", "3inside", "3linestrike", "3outside", "3starsinsouth",
-        "3whitesoldiers", "abandonedbaby", "advanceblock", "belthold", "breakaway",
-        "closingmarubozu", "concealbabyswall", "counterattack", "darkcloudcover", "doji",
-        "dojistar", "dragonflydoji", "engulfing", "eveningdojistar", "eveningstar",
-        "gapsidesidewhite", "gravestonedoji", "hammer", "hangingman", "harami",
-        "haramicross", "highwave", "hikkake", "hikkakemod", "homingpigeon",
-        "identical3crows", "inneck", "inside", "invertedhammer", "kicking", "kickingbylength",
-        "ladderbottom", "longleggeddoji", "longline", "marubozu", "matchinglow", "mathold",
-        "morningdojistar", "morningstar", "onneck", "piercing", "rickshawman",
-        "risefall3methods", "separatinglines", "shootingstar", "shortline", "spinningtop",
-        "stalledpattern", "sticksandwich", "takuri", "tasukigap", "thrusting", "tristar",
-        "unique3river", "upsidegap2crows", "xsidegap3methods"
-    ]
+    # Available patterns
+    available_patterns = ['doji', 'hammer', 'shooting_star', 'engulfing', 'harami', 
+                         'morning_star', 'evening_star', 'three_white_soldiers',
+                         'three_black_crows', 'dark_cloud_cover', 'piercing_line']
     
+    # If no patterns specified, use all available patterns
+    if patterns is None:
+        patterns = available_patterns
+    else:
+        # Validate patterns
+        invalid_patterns = set(patterns) - set(available_patterns)
+        if invalid_patterns:
+            raise ValueError(f"Invalid patterns: {invalid_patterns}. Available patterns: {available_patterns}")
+    
+    # Initialize pattern columns
     for pattern in patterns:
         df[pattern] = 0
     
     # Helper functions for pattern detection
     def is_doji(row):
         return abs(row['body']) < (row['total_range'] * 0.1)
-    
-    def is_marubozu(row):
-        return row['body_ratio'] > 0.9
     
     def is_hammer(row):
         return (row['lower_shadow'] > 2 * abs(row['body'])) and (row['upper_shadow'] < abs(row['body']))
@@ -172,63 +175,88 @@ def identify_candlestick_patterns(df):
         return (abs(prev_row['body']) > abs(curr_row['body']) and
                 prev_row['Open'] > curr_row['Close'] and prev_row['Close'] < curr_row['Open'])
     
-    # Pattern detection
-    for i in range(1, len(df)):
-        prev_row = df.iloc[i-1]
-        curr_row = df.iloc[i]
-        
-        # Single candle patterns
-        if is_doji(curr_row):
-            df.at[i, 'doji'] = 1
-            if curr_row['lower_shadow'] > curr_row['upper_shadow']:
-                df.at[i, 'dragonflydoji'] = 1
-            elif curr_row['upper_shadow'] > curr_row['lower_shadow']:
-                df.at[i, 'gravestonedoji'] = 1
-        
-        if is_marubozu(curr_row):
-            df.at[i, 'marubozu'] = 1
-            if curr_row['body'] > 0:
-                df.at[i, 'closingmarubozu'] = 1
-        
-        if is_hammer(curr_row):
-            df.at[i, 'hammer'] = 1
-            if curr_row['body'] < 0:
-                df.at[i, 'hangingman'] = 1
-        
-        if is_shooting_star(curr_row):
-            df.at[i, 'shootingstar'] = 1
-        
-        # Two candle patterns
-        if is_engulfing(prev_row, curr_row):
-            df.at[i, 'engulfing'] = 1
-        
-        if is_harami(prev_row, curr_row):
-            df.at[i, 'harami'] = 1
-            if is_doji(curr_row):
-                df.at[i, 'haramicross'] = 1
+    def is_morning_star(prev2_row, prev_row, curr_row):
+        return (prev2_row['body'] < 0 and 
+                abs(prev_row['body']) < (prev_row['total_range'] * 0.1) and
+                curr_row['body'] > 0 and
+                curr_row['Close'] > prev2_row['Close'])
     
-    # Three candle patterns
+    def is_evening_star(prev2_row, prev_row, curr_row):
+        return (prev2_row['body'] > 0 and 
+                abs(prev_row['body']) < (prev_row['total_range'] * 0.1) and
+                curr_row['body'] < 0 and
+                curr_row['Close'] < prev2_row['Close'])
+    
+    def is_three_white_soldiers(prev2_row, prev_row, curr_row):
+        return (prev2_row['body'] > 0 and prev_row['body'] > 0 and curr_row['body'] > 0 and
+                prev_row['Close'] > prev2_row['Close'] and curr_row['Close'] > prev_row['Close'])
+    
+    def is_three_black_crows(prev2_row, prev_row, curr_row):
+        return (prev2_row['body'] < 0 and prev_row['body'] < 0 and curr_row['body'] < 0 and
+                prev_row['Close'] < prev2_row['Close'] and curr_row['Close'] < prev_row['Close'])
+    
+    def is_dark_cloud_cover(prev_row, curr_row):
+        return (prev_row['body'] > 0 and curr_row['body'] < 0 and
+                curr_row['Open'] > prev_row['High'] and
+                curr_row['Close'] < (prev_row['Open'] + prev_row['Close']) / 2)
+    
+    def is_piercing_line(prev_row, curr_row):
+        return (prev_row['body'] < 0 and curr_row['body'] > 0 and
+                curr_row['Open'] < prev_row['Low'] and
+                curr_row['Close'] > (prev_row['Open'] + prev_row['Close']) / 2)
+    
+    # Pattern detection
     for i in range(2, len(df)):
         prev2_row = df.iloc[i-2]
         prev_row = df.iloc[i-1]
         curr_row = df.iloc[i]
         
-        # Three black crows
-        if (prev2_row['body'] < 0 and prev_row['body'] < 0 and curr_row['body'] < 0 and
-            prev_row['Close'] < prev2_row['Close'] and curr_row['Close'] < prev_row['Close']):
-            df.at[i, '3blackcrows'] = 1
+        # Single candle patterns
+        if 'doji' in patterns and is_doji(curr_row):
+            df.at[i, 'doji'] = 1
         
-        # Three white soldiers
-        if (prev2_row['body'] > 0 and prev_row['body'] > 0 and curr_row['body'] > 0 and
-            prev_row['Close'] > prev2_row['Close'] and curr_row['Close'] > prev_row['Close']):
-            df.at[i, '3whitesoldiers'] = 1
+        if 'hammer' in patterns and is_hammer(curr_row):
+            df.at[i, 'hammer'] = 1
+        
+        if 'shooting_star' in patterns and is_shooting_star(curr_row):
+            df.at[i, 'shooting_star'] = 1
+        
+        # Two candle patterns
+        if 'engulfing' in patterns and is_engulfing(prev_row, curr_row):
+            df.at[i, 'engulfing'] = 1
+        
+        if 'harami' in patterns and is_harami(prev_row, curr_row):
+            df.at[i, 'harami'] = 1
+        
+        if 'dark_cloud_cover' in patterns and is_dark_cloud_cover(prev_row, curr_row):
+            df.at[i, 'dark_cloud_cover'] = 1
+        
+        if 'piercing_line' in patterns and is_piercing_line(prev_row, curr_row):
+            df.at[i, 'piercing_line'] = 1
+        
+        # Three candle patterns
+        if 'morning_star' in patterns and is_morning_star(prev2_row, prev_row, curr_row):
+            df.at[i, 'morning_star'] = 1
+        
+        if 'evening_star' in patterns and is_evening_star(prev2_row, prev_row, curr_row):
+            df.at[i, 'evening_star'] = 1
+        
+        if 'three_white_soldiers' in patterns and is_three_white_soldiers(prev2_row, prev_row, curr_row):
+            df.at[i, 'three_white_soldiers'] = 1
+        
+        if 'three_black_crows' in patterns and is_three_black_crows(prev2_row, prev_row, curr_row):
+            df.at[i, 'three_black_crows'] = 1
     
     return df[patterns]
 
-def get_candlestick_patterns(df):
+def get_candlestick_patterns(df, patterns=None):
     """
     Get candlestick patterns for the given OHLCV data.
-    Returns a DataFrame with binary indicators for each pattern.
+    Args:
+        df: DataFrame with OHLCV data
+        patterns: List of patterns to identify. If None, identifies all patterns.
+    Returns:
+        DataFrame with binary indicators for each pattern.
     """
-    patterns_df = identify_candlestick_patterns(df)
+    patterns_df = identify_candlestick_patterns(df, patterns)
     return patterns_df

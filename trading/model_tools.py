@@ -182,6 +182,8 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     return df, scalers
 
 def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.05):
+    pct_threshold = pct_threshold / 100
+
     scalers = {
         'price': MinMaxScaler(feature_range=(0, 1)),
         'volume': QuantileTransformer(output_distribution='normal'),
@@ -191,11 +193,9 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     df = data.copy()
     df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
 
-    # Calculate returns and features
-    df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
-    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
+    df['Log_Return'] = ta.LOG(df['Close'])
+    df['Price_Range'] = (df['High'] - df['Low']) / df['Close'] #normalize
     
-    # Create lagged features
     lagged_features = []
     for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
         for i in range(1, lagged_length):
@@ -206,26 +206,24 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     if lagged_features:
         df = pd.concat([df] + lagged_features, axis=1)
     
-    # Technical indicators
-    df['Close_ZScore'] = (df['Close'] - df['Close'].rolling(window=100).mean()) / df['Close'].rolling(window=100).std()
-    df['MA10'] = df['Close'].rolling(window=10).mean() / df['Close']
-    df['MA20'] = df['Close'].rolling(window=20).mean() / df['Close']
-    df['MA50'] = df['Close'].rolling(window=50).mean() / df['Close']
+    df['Close_ZScore'] = (df['Close'] - ta.SMA(df['Close'], timeperiod=100)) / ta.STDDEV(df['Close'], timeperiod=100)
+    df['MA10'] = ta.SMA(df['Close'], timeperiod=10) / df['Close']
+    df['MA20'] = ta.SMA(df['Close'], timeperiod=20) / df['Close']
+    df['MA50'] = ta.SMA(df['Close'], timeperiod=50) / df['Close']
     df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
-    df['RSI'] = compute_rsi(df['Close'], 14)
+    df['RSI'] = ta.RSI(df['Close'], timeperiod=14)
 
-    # Handle NaN values
     df = df.bfill().ffill()
     df.dropna(inplace=True)
     
     if train_split:
-        # Prepare features
         price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
         volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
         technical_features = ['RSI', 'MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross', 'Close_ZScore']
         
-        # Scale features
         df[price_features] = scalers['price'].fit_transform(df[price_features])
+        df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
+        df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
         df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
         df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
 
@@ -236,94 +234,11 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
             X = df
         
         pct_change = df['Close'].pct_change().shift(-1)  # Y IS 1 AHEAD PRIOR
-        pct_threshold = pct_threshold / 100
 
         # 0 = below threshold | 1 = within threshold | 2 = above threshold
         y = pd.Series(1, index=df.index)
         y[pct_change < -pct_threshold] = 0
         y[pct_change > pct_threshold] = 2
-        
-        X = X[:-1]
-        y = y[:-1]
-
-        return X, y
-    
-    return df
-
-def prepare_data_with_pandas_indicators(data, lagged_length=5, train_split=True, pct_threshold=0.05):
-    scalers = {
-        'price': MinMaxScaler(feature_range=(0, 1)),
-        'volume': QuantileTransformer(output_distribution='normal'),
-        'technical': StandardScaler()
-    }
-
-    df = data.copy()
-    
-    # Ensure there are no NaN values before using pandas-ta
-    if df.isnull().any().any():
-        df = df.fillna(method='ffill')  # Forward fill to handle NaNs
-
-    # Drop unnecessary columns if they exist
-    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
-
-    # Calculate log returns and price range
-    df['Log_Return'] = ta.LOG(df['Close'])
-    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
-    
-    # Create lagged features
-    lagged_features = []
-    for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
-        for i in range(1, lagged_length):
-            lagged_features.append(pd.DataFrame({
-                f'Prev{i}_{col}': df[col].shift(i)
-            }))
-    
-    if lagged_features:
-        df = pd.concat([df] + lagged_features, axis=1)
-
-    # Calculate technical indicators using pandas-indicators
-    df['MA10'] = ta.SMA(df['Close'], timeperiod=10)
-    df['MA20'] = ta.SMA(df['Close'], timeperiod=20)
-    df['MA50'] = ta.SMA(df['Close'], timeperiod=50)
-    df['RSI'] = ta.RSI(df['Close'], timeperiod=14)
-
-    # Calculate Z-Score
-    df['Close_ZScore'] = (df['Close'] - df['MA20']) / df['Close'].rolling(window=20).std()
-
-    # Check for NaN values after calculations
-    if df.isnull().any().any():
-        df = df.ffill()  # Forward fill to handle NaNs
-
-    df.dropna(inplace=True)
-    
-    if train_split:
-        price_features = ['Open', 'High', 'Low', 'Close']
-        volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
-        bounded_features = ['RSI']  # Features that are already bounded (e.g., 0-100)
-        normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'Close_ZScore']
-        
-        technical_features = [col for col in df.columns 
-                            if col not in (price_features + volume_features + bounded_features + 
-                                        normalized_features + ['Datetime'])]
-        
-        df[price_features] = scalers['price'].fit_transform(df[price_features])
-        df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
-        df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
-        df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
-        
-        if technical_features:
-            df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
-
-        if 'Datetime' in df.columns:
-            X = df.drop(['Datetime'], axis=1)
-        else:
-            X = df
-        
-        # Define y based on pct_threshold
-        future_returns = df['Close'].pct_change().shift(-1)
-        y = pd.Series(1, index=df.index)  # Default to hold
-        y[future_returns < -pct_threshold] = 0  # Sell signal
-        y[future_returns > pct_threshold] = 2  # Buy signal
         
         X = X[:-1]
         y = y[:-1]
@@ -355,9 +270,8 @@ def loss_plot(loss_history):
 if __name__ == "__main__":
     data = fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
     
-    main_data, _ = prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.05)
-    pandas_indicators_data, _ = prepare_data_with_pandas_indicators(data, lagged_length=5, train_split=True, pct_threshold=0.05)
+    main_data, _ = prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.1)
 
     print(main_data)
-    print(pandas_indicators_data)
+    print(_)
 
