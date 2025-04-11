@@ -70,11 +70,10 @@ class ResidualBlock(nn.Module):
     def __init__(self, in_features, out_features):
         super().__init__()
         self.lin1 = nn.Linear(in_features, out_features)
-        self.bn1 = nn.BatchNorm1d(out_features)
+        self.bn1 = nn.LayerNorm(out_features)
         self.lin2 = nn.Linear(out_features, out_features)
-        self.bn2 = nn.BatchNorm1d(out_features)
+        self.bn2 = nn.LayerNorm(out_features)
         
-        # If input and output dimensions differ, we need a shortcut projection
         self.shortcut = nn.Identity()
         if in_features != out_features:
             self.shortcut = nn.Linear(in_features, out_features)
@@ -89,7 +88,6 @@ class ResidualBlock(nn.Module):
         out = self.lin2(out)
         out = self.bn2(out)
         
-        # Add the shortcut (residual connection)
         out += self.shortcut(residual)
         out = F.leaky_relu(out, 0.2)
         
@@ -108,12 +106,9 @@ class ClassifierModel(nn.Module):
         # Dynamically determine input dimension from data
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
-            # Use the enhanced data preparation directly from model_tools
             X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
-            
             feature_names = X.columns.tolist()
             
-            # Conditional feature selection
             if use_feature_selection:
                 self.feature_selector = FeatureSelectionCallback(X.values, y.values, feature_names, top_n=30)
                 important_feature_names = self.feature_selector.get_important_features()
@@ -126,18 +121,11 @@ class ClassifierModel(nn.Module):
             input_dim = 10  # Set a default input dimension for inference
         
         self.input_dim = input_dim
-        self.hidden_dim = 256
+        self.hidden_dim = 512
         
-        # Feature processing
-        self.batch_norm_input = nn.BatchNorm1d(self.input_dim)
-        self.dropout_input = nn.Dropout(0.1)
-        
-        # First dense layer to transform input
-        self.input_dense = nn.Linear(self.input_dim, self.hidden_dim)
-        
-        # Deep bidirectional LSTM
+        # LSTM Layer
         self.lstm = nn.LSTM(
-            input_size=self.hidden_dim,
+            input_size=self.input_dim,  # Use input_dim as the input size
             hidden_size=self.hidden_dim,
             num_layers=2,
             bidirectional=True,
@@ -145,39 +133,39 @@ class ClassifierModel(nn.Module):
             batch_first=True
         )
         
+        self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
+        self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
+
         self.attention = Attention(self.hidden_dim * 2)
-        
         self.res_block1 = ResidualBlock(self.hidden_dim * 2, self.hidden_dim)
         self.res_block2 = ResidualBlock(self.hidden_dim, self.hidden_dim)
+        self.fc_out = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.output = nn.Linear(self.hidden_dim, 3)
         
-        self.fc_out = nn.Linear(self.hidden_dim, self.hidden_dim // 2)
-        self.output = nn.Linear(self.hidden_dim // 2, 3)
-        
+        self.layer_norm = nn.LayerNorm(self.input_dim)
         self.dropout = nn.Dropout(0.2)
         
         self._init_weights()
 
     def forward(self, x):
-        x = self.batch_norm_input(x)
-        x = self.dropout_input(x)
-
-        x = F.leaky_relu(self.input_dense(x), 0.2)
+        x = self.layer_norm(x)
         
-        if len(x.shape) == 2:
-            x = x.unsqueeze(1)
+        # if len(x.shape) == 2:
+        #     x = x.unsqueeze(1)
         
         lstm_out, _ = self.lstm(x)
         
-        attention_weights = self.attention(lstm_out)
-        context = torch.sum(attention_weights * lstm_out, dim=1)
+        # attention_weights = self.attention(lstm_out)
+        # context = torch.sum(attention_weights * lstm_out, dim=1)
         
-        x = self.res_block1(context)
-        x = self.dropout(x)
-        x = self.res_block2(x)
-        x = self.dropout(x)
+        # x = self.res_block1(context)
+        # x = self.res_block2(x)
         
-        x = F.leaky_relu(self.fc_out(x), 0.2)
-        x = self.dropout(x)
+        # x = F.leaky_relu(self.fc_out(x), 0.2)
+
+        x = self.fc1(lstm_out)
+        x = self.fc2(x)
+
         x = self.output(x)
         
         return x
@@ -223,7 +211,7 @@ class ClassifierModel(nn.Module):
         train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
         val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
         
-        model.to(self.DEVICE)
+        model = model.to(self.DEVICE)
         
         class_counts = np.bincount(y_train)
         class_weights = total_samples / (len(class_counts) * class_counts)
@@ -258,6 +246,8 @@ class ClassifierModel(nn.Module):
         val_loss_history = []
         val_acc_history = []
 
+        model = model.to(self.DEVICE)
+        
         for epoch in range(model.epochs):
             model.train()
             total_train_loss = 0
@@ -277,7 +267,7 @@ class ClassifierModel(nn.Module):
                 
                 loss.backward()
                 
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
                 
                 optimizer.step()
 
@@ -527,7 +517,7 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=3, interval="1min", age_days=0, epochs=100, pct_threshold=0.1, lagged_length=5, use_feature_selection=False)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=100, pct_threshold=0.1, lagged_length=5, use_feature_selection=False)
     model = model.train_model(model, prompt_save=False, show_loss=True)
     predictions = model.predict(model, model.data)
     # model.prediction_plot(model.data, predictions)
