@@ -517,7 +517,7 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=100, pct_threshold=0.1, lagged_length=5, use_feature_selection=False)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=1, pct_threshold=0.1, lagged_length=5, use_feature_selection=False)
     model = model.train_model(model, prompt_save=False, show_loss=True)
-    predictions = model.predict(model, model.data)
+    # predictions = model.predict(model, model.data)
     # model.prediction_plot(model.data, predictions)
