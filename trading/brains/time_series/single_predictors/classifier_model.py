@@ -106,7 +106,7 @@ class ClassifierModel(nn.Module):
         # Dynamically determine input dimension from data
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
-            X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
+            X, y = mt.prepare_data_classifier_unnormalized(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
             feature_names = X.columns.tolist()
             
             if use_feature_selection:
@@ -184,7 +184,7 @@ class ClassifierModel(nn.Module):
                         nn.init.zeros_(param)
 
     def train_model(self, model, prompt_save=False, show_loss=False):
-        X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
+        X, y = mt.prepare_data_classifier_unnormalized(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
         
         if self.feature_selector and self.feature_selector.important_features:
             X = X[self.feature_selector.important_features]
@@ -326,7 +326,7 @@ class ClassifierModel(nn.Module):
         return model
     
     def predict(self, model, data):
-        X, y = mt.prepare_data_classifier(data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
+        X, y = mt.prepare_data_classifier_unnormalized(data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
         
         if self.feature_selector and self.feature_selector.important_features:
             available_features = set(X.columns)
@@ -517,7 +517,7 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=1, interval="1min", age_days=0, epochs=1, pct_threshold=0.1, lagged_length=5, use_feature_selection=False)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=10, interval="1min", age_days=0, epochs=75, pct_threshold=0.1, lagged_length=5, use_feature_selection=False)
     model = model.train_model(model, prompt_save=False, show_loss=True)
     # predictions = model.predict(model, model.data)
     # model.prediction_plot(model.data, predictions)
