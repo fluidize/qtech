@@ -8,9 +8,7 @@ from torch.amp import autocast, GradScaler
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import PowerTransformer
-from sklearn.ensemble import RandomForestClassifier
+import lightgbm as lgb
 
 from rich import print
 from tqdm import tqdm
@@ -31,8 +29,7 @@ class FeatureSelectionCallback:
         
     def get_important_features(self):
         # Use Gradient Boosting Machine for feature selection
-        from sklearn.ensemble import GradientBoostingClassifier
-        gbm = GradientBoostingClassifier(
+        gbm = lgb.LGBMClassifier(
             n_estimators=100,
             learning_rate=0.1,
             max_depth=3,
@@ -102,8 +99,7 @@ class ClassifierModel(nn.Module):
         self.pct_threshold = pct_threshold
         self.feature_selector = None
         self.lagged_length = lagged_length
-
-        # Dynamically determine input dimension from data
+        
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
             X, y = mt.prepare_data_classifier_test(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
@@ -267,7 +263,15 @@ class ClassifierModel(nn.Module):
                 optimizer.zero_grad()
                 
                 outputs = model(X_batch)
-                loss = criterion(outputs, y_batch)
+
+                # L1 and L2 reg
+                l1_lambda = 1e-6
+                l2_lambda = 1e-6
+
+                l1_norm = sum(p.abs().sum() for p in model.parameters())
+                l2_norm = sum(p.pow(2.0).sum() for p in model.parameters())
+
+                loss = criterion(outputs, y_batch) + l1_lambda * l1_norm + l2_lambda * l2_norm
                 
                 loss.backward()
                 
@@ -284,7 +288,6 @@ class ClassifierModel(nn.Module):
                 
                 progress_bar.update(1)
             
-            # Validation phase
             model.eval()
             total_val_loss = 0
             val_correct = 0
@@ -521,7 +524,7 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=3, interval="1min", age_days=0, epochs=100, pct_threshold=0.01, lagged_length=10, use_feature_selection=False)
+    model = ClassifierModel(ticker="BTC-USDT", chunks=10, interval="1min", age_days=0, epochs=100, pct_threshold=0.01, lagged_length=20, use_feature_selection=True)
     model = model.train_model(model, prompt_save=False, show_loss=True)
     # predictions = model.predict(model, model.data)
     # model.prediction_plot(model.data, predictions)

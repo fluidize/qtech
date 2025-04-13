@@ -255,7 +255,7 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
                         if col not in (price_features + volume_features + bounded_features + 
                                         pattern_features + ['Datetime'])]
     
-    # df[price_features] = scalers['price'].fit_transform(df[price_features])
+    df[price_features] = scalers['price'].fit_transform(df[price_features])
     df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
     df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
     df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
@@ -292,6 +292,8 @@ def prepare_data_classifier_test(data, lagged_length=5, train_split=True, pct_th
     }
 
     df = data.copy()
+
+    df.drop(columns=['Datetime'], inplace=True)
 
     df['Log_Return'] = ta.LOG(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
@@ -334,7 +336,7 @@ def prepare_data_classifier_test(data, lagged_length=5, train_split=True, pct_th
         df[pattern] = pattern_df[pattern]
     
     lagged_features = []
-    for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
+    for col in df.columns:
         for i in range(1, lagged_length):
             lagged_features.append(pd.DataFrame({
                 f'Prev{i}_{col}': df[col].shift(i)
@@ -368,15 +370,12 @@ def prepare_data_classifier_test(data, lagged_length=5, train_split=True, pct_th
     # df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
     # df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
     
-    if technical_features:
-        df[technical_features] = df[technical_features].replace([np.inf, -np.inf], np.nan)
-        df[technical_features] = df[technical_features].fillna(df[technical_features].mean())
-        df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
+    # if technical_features:
+    #     df[technical_features] = df[technical_features].replace([np.inf, -np.inf], np.nan)
+    #     df[technical_features] = df[technical_features].fillna(df[technical_features].mean())
+    #     df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
         
-    if 'Datetime' in df.columns:
-        X = df.drop(['Datetime'], axis=1)
-    else:
-        X = df
+    X = df
     
     pct_change = df['Close'].pct_change().shift(-1)
 
