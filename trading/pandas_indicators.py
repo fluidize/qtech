@@ -120,8 +120,6 @@ def MFI(high, low, close, volume, timeperiod=14):
     mfi = 100 - (100 / (1 + positive_mf / negative_mf))
     return mfi
 
-# New indicators below
-
 def KAMA(series, er_period=10, fast_period=2, slow_period=30):
     """Kaufman Adaptive Moving Average"""
     change = abs(series - series.shift(er_period))

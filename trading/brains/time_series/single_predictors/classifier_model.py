@@ -106,7 +106,7 @@ class ClassifierModel(nn.Module):
         # Dynamically determine input dimension from data
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
-            X, y = mt.prepare_data_classifier_unnormalized(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
+            X, y = mt.prepare_data_classifier_test(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
             feature_names = X.columns.tolist()
             
             if use_feature_selection:
@@ -133,23 +133,24 @@ class ClassifierModel(nn.Module):
             batch_first=True
         )
         
-        self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
-        self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
-
         self.attention = Attention(self.hidden_dim * 2)
         self.res_block1 = ResidualBlock(self.hidden_dim * 2, self.hidden_dim)
         self.res_block2 = ResidualBlock(self.hidden_dim, self.hidden_dim)
-        self.fc_out = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.fc_out = nn.Linear(self.hidden_dim, self.hidden_dim)        
+        self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
+        self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.output = nn.Linear(self.hidden_dim, 3)
         
         self.layer_norm = nn.LayerNorm(self.input_dim)
+        self.batch_norm = nn.BatchNorm1d(self.input_dim)
+        self.instance_norm = nn.InstanceNorm1d(self.input_dim)
+
         self.dropout = nn.Dropout(0.2)
         
         self._init_weights()
 
     def forward(self, x):
-        x = self.layer_norm(x)
-        
+        x = self.batch_norm(x)
         # if len(x.shape) == 2:
         #     x = x.unsqueeze(1)
         
@@ -158,7 +159,7 @@ class ClassifierModel(nn.Module):
         # attention_weights = self.attention(lstm_out)
         # context = torch.sum(attention_weights * lstm_out, dim=1)
         
-        # x = self.res_block1(context)
+        x = self.res_block1(lstm_out)
         # x = self.res_block2(x)
         
         # x = F.leaky_relu(self.fc_out(x), 0.2)
@@ -184,7 +185,8 @@ class ClassifierModel(nn.Module):
                         nn.init.zeros_(param)
 
     def train_model(self, model, prompt_save=False, show_loss=False):
-        X, y = mt.prepare_data_classifier_unnormalized(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
+        X, y = mt.prepare_data_classifier_test(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
+        print(X)
         
         if self.feature_selector and self.feature_selector.important_features:
             X = X[self.feature_selector.important_features]
@@ -198,10 +200,12 @@ class ClassifierModel(nn.Module):
         
         print(f"Feature count: {X.shape[1]}")
         
-        # Split into train and validation sets
         train_size = int(0.8 * len(X))
         X_train, X_val = X[:train_size], X[train_size:]
         y_train, y_val = y[:train_size], y[train_size:]
+        
+        X_train = X_train.apply(pd.to_numeric, errors='coerce')
+        X_val = X_val.apply(pd.to_numeric, errors='coerce')
         
         X_train_tensor = torch.tensor(X_train.values, dtype=torch.float32)
         y_train_tensor = torch.tensor(y_train.values, dtype=torch.long)
@@ -219,7 +223,7 @@ class ClassifierModel(nn.Module):
         
         print("Class weights:", class_weights.cpu().numpy())
         
-        batch_size = 64
+        batch_size = 128
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         
         base_lr = 1e-3
@@ -326,7 +330,7 @@ class ClassifierModel(nn.Module):
         return model
     
     def predict(self, model, data):
-        X, y = mt.prepare_data_classifier_unnormalized(data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
+        X, y = mt.prepare_data_classifier_test(data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
         
         if self.feature_selector and self.feature_selector.important_features:
             available_features = set(X.columns)
@@ -517,7 +521,7 @@ def load_model(model_path: str, pct_threshold=0.01):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="SOL-USDT", chunks=10, interval="1min", age_days=0, epochs=75, pct_threshold=0.1, lagged_length=5, use_feature_selection=False)
+    model = ClassifierModel(ticker="SOL-USDT", chunks=3, interval="1min", age_days=0, epochs=100, pct_threshold=0.01, lagged_length=10, use_feature_selection=False)
     model = model.train_model(model, prompt_save=False, show_loss=True)
     # predictions = model.predict(model, model.data)
     # model.prediction_plot(model.data, predictions)

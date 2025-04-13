@@ -96,14 +96,6 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
         
     return data
 
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
 def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     scalers = {
         'price': MinMaxScaler(feature_range=(0, 1)),
@@ -112,7 +104,6 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     }
 
     df = data.copy()
-    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
 
     # Calculate log returns and price range using TA-Lib
     df['Log_Return'] = talib.LOG(df['Close'] / df['Close'].shift(1))  # Using TA-Lib for log returns
@@ -191,7 +182,6 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     }
 
     df = data.copy()
-    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
 
     df['Log_Return'] = ta.LOG(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
@@ -250,55 +240,58 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
     df['RSI'] = ta.RSI(df['Close'], timeperiod=14)
     
-    df['RSI_MA_Cross'] = df['RSI'] - ta.SMA(df['RSI'], timeperiod=14)
+
     
     df = df.bfill().ffill()
     df.dropna(inplace=True)
     
-    if train_split:
-        price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
-        volume_features = ['Volume', 'OBV'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
-        bounded_features = ['RSI', 'STOCH_K', 'STOCH_D', 'MFI', 'WillR']  # Features that are already bounded
-        pattern_features = patterns
-        
-        technical_features = [col for col in df.columns 
-                            if col not in (price_features + volume_features + bounded_features + 
-                                          pattern_features + ['Datetime'])]
-        
-        df[price_features] = scalers['price'].fit_transform(df[price_features])
-        df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
-        df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
-        df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
-        
-        if technical_features:
-            df[technical_features] = df[technical_features].replace([np.inf, -np.inf], np.nan)
-            df[technical_features] = df[technical_features].fillna(df[technical_features].mean())
-            df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
-            
-        if 'Datetime' in df.columns:
-            X = df.drop(['Datetime'], axis=1)
-        else:
-            X = df
-        
-        pct_change = df['Close'].pct_change().shift(-1)
 
-        # 0 = below threshold | 1 = within threshold | 2 = above threshold
-        y = pd.Series(1, index=df.index)
-        y[pct_change < -pct_threshold] = 0
-        y[pct_change > pct_threshold] = 2
-        
-        X = X[:-1]
-        y = y[:-1]
-
-        return X, y
+    price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
+    volume_features = ['Volume', 'OBV'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
+    bounded_features = ['RSI', 'STOCH_K', 'STOCH_D', 'MFI', 'WillR']  # Features that are already bounded
+    pattern_features = patterns
     
-    return df
+    technical_features = [col for col in df.columns 
+                        if col not in (price_features + volume_features + bounded_features + 
+                                        pattern_features + ['Datetime'])]
+    
+    # df[price_features] = scalers['price'].fit_transform(df[price_features])
+    df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
+    df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
+    df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
+    
+    if technical_features:
+        df[technical_features] = df[technical_features].replace([np.inf, -np.inf], np.nan)
+        df[technical_features] = df[technical_features].fillna(df[technical_features].mean())
+        df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
+        
+    if 'Datetime' in df.columns:
+        X = df.drop(['Datetime'], axis=1)
+    else:
+        X = df
+    
+    pct_change = df['Close'].pct_change().shift(-1)
 
-def prepare_data_classifier_unnormalized(data, lagged_length=5, train_split=True, pct_threshold=0.05):
+    # 0 = below threshold | 1 = within threshold | 2 = above threshold
+    y = pd.Series(1, index=df.index)
+    y[pct_change < -pct_threshold] = 0
+    y[pct_change > pct_threshold] = 2
+    
+    X = X[:-1]
+    y = y[:-1]
+
+    return X, y
+
+def prepare_data_classifier_test(data, lagged_length=5, train_split=True, pct_threshold=0.05):
     pct_threshold = pct_threshold / 100
 
+    scalers = {
+        'price': MinMaxScaler(feature_range=(0, 1)),
+        'volume': QuantileTransformer(output_distribution='normal'),
+        'technical': StandardScaler()
+    }
+
     df = data.copy()
-    df = df.drop(columns=['MA50', 'MA20', 'MA10', 'RSI'], errors='ignore')
 
     df['Log_Return'] = ta.LOG(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
@@ -357,38 +350,45 @@ def prepare_data_classifier_unnormalized(data, lagged_length=5, train_split=True
     df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
     df['RSI'] = ta.RSI(df['Close'], timeperiod=14)
     
-    df['RSI_MA_Cross'] = df['RSI'] - ta.SMA(df['RSI'], timeperiod=14)
-    
     df = df.bfill().ffill()
     df.dropna(inplace=True)
     
-    if train_split:
-        price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
-        volume_features = ['Volume', 'OBV'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
-        bounded_features = ['RSI', 'STOCH_K', 'STOCH_D', 'MFI', 'WillR']  # Features that are already bounded
-        pattern_features = patterns
-        
-        technical_features = [col for col in df.columns 
-                            if col not in (price_features + volume_features + bounded_features + 
-                                          pattern_features + ['Datetime'])]
-        
-        if 'Datetime' in df.columns:
-            X = df.drop(['Datetime'], axis=1)
-        else:
-            X = df
-        
-        pct_change = df['Close'].pct_change().shift(-1)
 
-        y = pd.Series(1, index=df.index)
-        y[pct_change < -pct_threshold] = 0
-        y[pct_change > pct_threshold] = 2
-        
-        X = X[:-1]
-        y = y[:-1]
-
-        return X, y
+    price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
+    volume_features = ['Volume', 'OBV'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
+    bounded_features = ['RSI', 'STOCH_K', 'STOCH_D', 'MFI', 'WillR']  # Features that are already bounded
+    pattern_features = patterns
     
-    return df
+    technical_features = [col for col in df.columns 
+                        if col not in (price_features + volume_features + bounded_features + 
+                                        pattern_features + ['Datetime'])]
+    
+    # df[price_features] = scalers['price'].fit_transform(df[price_features])
+    # df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
+    # df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
+    # df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
+    
+    if technical_features:
+        df[technical_features] = df[technical_features].replace([np.inf, -np.inf], np.nan)
+        df[technical_features] = df[technical_features].fillna(df[technical_features].mean())
+        df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
+        
+    if 'Datetime' in df.columns:
+        X = df.drop(['Datetime'], axis=1)
+    else:
+        X = df
+    
+    pct_change = df['Close'].pct_change().shift(-1)
+
+    # 0 = below threshold | 1 = within threshold | 2 = above threshold
+    y = pd.Series(1, index=df.index)
+    y[pct_change < -pct_threshold] = 0
+    y[pct_change > pct_threshold] = 2
+    
+    X = X[:-1]
+    y = y[:-1]
+
+    return X, y
 
 def prediction_plot(actual, predicted):
     difference = len(actual)-len(predicted)
@@ -414,7 +414,7 @@ if __name__ == "__main__":
     data = fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
     
     main_data, _ = prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.1)
-
+    test_data, _ = prepare_data_classifier_test(data, lagged_length=5, train_split=False, pct_threshold=0.1)
     print(main_data)
-    print(_)
+    print(test_data)
 
