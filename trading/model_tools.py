@@ -105,13 +105,35 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
 
     df = data.copy()
 
-    # Calculate log returns and price range using TA-Lib
-    df['Log_Return'] = talib.LOG(df['Close'] / df['Close'].shift(1))  # Using TA-Lib for log returns
+    # Calculate technical indicators using pandas_indicators
+    df['Log_Return'] = ta.LOG(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
-    # Lagged features
+    df['MACD'], df['MACD_Signal'] = ta.MACD(df['Close'])
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+    
+    df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = ta.BBANDS(df['Close'])
+    df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']
+    
+    df['ATR'] = ta.ATR(df['High'], df['Low'], df['Close'])
+    
+    df['STOCH_K'], df['STOCH_D'] = ta.STOCH(df['High'], df['Low'], df['Close'])
+    
+    df['OBV'] = ta.OBV(df['Close'], df['Volume'])
+    
+    df['ROC'] = ta.ROC(df['Close'])
+    
+    df['WillR'] = ta.WILLR(df['High'], df['Low'], df['Close'])
+    
+    df['CCI'] = ta.CCI(df['High'], df['Low'], df['Close'])
+    
+    df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = ta.ADX(df['High'], df['Low'], df['Close'])
+    
+    df['MFI'] = ta.MFI(df['High'], df['Low'], df['Close'], df['Volume'])
+    
+    # Create lagged features
     lagged_features = []
-    for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
+    for col in df.columns:
         for i in range(1, lagged_length):
             lagged_features.append(pd.DataFrame({
                 f'Prev{i}_{col}': df[col].shift(i)
@@ -120,33 +142,24 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     if lagged_features:
         df = pd.concat([df] + lagged_features, axis=1)
     
-    # Calculate Z-Score using TA-Lib
-    df['Close_ZScore'] = (df['Close'] - talib.SMA(df['Close'], timeperiod=20)) / talib.STDDEV(df['Close'], timeperiod=20)
-
-    # Moving Averages using TA-Lib
-    df['MA10'] = talib.SMA(df['Close'], timeperiod=10) / df['Close']
-    df['MA20'] = talib.SMA(df['Close'], timeperiod=20) / df['Close']
-    df['MA50'] = talib.SMA(df['Close'], timeperiod=50) / df['Close']
+    df['Close_ZScore'] = (df['Close'] - ta.SMA(df['Close'], timeperiod=100)) / ta.STDDEV(df['Close'], timeperiod=100)
+    df['MA10'] = ta.SMA(df['Close'], timeperiod=10) / df['Close']
+    df['MA20'] = ta.SMA(df['Close'], timeperiod=20) / df['Close']
+    df['MA50'] = ta.SMA(df['Close'], timeperiod=50) / df['Close']
     df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
+    df['RSI'] = ta.RSI(df['Close'], timeperiod=14)
     
-    # RSI using TA-Lib
-    df['RSI'] = talib.RSI(df['Close'], timeperiod=14)
-
-    # Check for NaN values
-    if df.isnull().any().any():
-        df = df.fillna(df.mean())
-
+    df = df.bfill().ffill()
     df.dropna(inplace=True)
-    
+
     if train_split:
-        price_features = ['Open', 'High', 'Low', 'Close']
-        volume_features = ['Volume'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
-        bounded_features = ['RSI']  # Features that are already bounded (e.g., 0-100)
-        normalized_features = ['MA10', 'MA20', 'MA50', 'Price_Range', 'MA10_MA20_Cross', 'Close_ZScore']
+        price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
+        volume_features = ['Volume', 'OBV'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
+        bounded_features = ['RSI', 'STOCH_K', 'STOCH_D', 'MFI', 'WillR']  # Features that are already bounded
         
         technical_features = [col for col in df.columns 
-                            if col not in (price_features + volume_features + bounded_features + 
-                                        normalized_features + ['Datetime'])]
+                            if col not in (price_features + volume_features + bounded_features + ['Datetime'])]
+        
         if scale_y:
             df[price_features] = scalers['price'].fit_transform(df[price_features])
         else:
@@ -182,118 +195,9 @@ def prepare_data_classifier(data, lagged_length=5, train_split=True, pct_thresho
     }
 
     df = data.copy()
-
-    df['Log_Return'] = ta.LOG(df['Close'])
-    df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
-    macd, signal = ta.MACD(df['Close'])
-    df['MACD'] = macd
-    df['MACD_Signal'] = signal
-    df['MACD_Hist'] = macd - signal
-    
-    upper, middle, lower = ta.BBANDS(df['Close'])
-    df['BB_Upper'] = upper
-    df['BB_Middle'] = middle
-    df['BB_Lower'] = lower
-    df['BB_Width'] = (upper - lower) / middle
-    
-    df['ATR'] = ta.ATR(df['High'], df['Low'], df['Close'])
-    
-    k, d = ta.STOCH(df['High'], df['Low'], df['Close'])
-    df['STOCH_K'] = k
-    df['STOCH_D'] = d
-    
-    df['OBV'] = ta.OBV(df['Close'], df['Volume'])
-    
-    df['ROC'] = ta.ROC(df['Close'])
-    
-    df['WillR'] = ta.WILLR(df['High'], df['Low'], df['Close'])
-    
-    df['CCI'] = ta.CCI(df['High'], df['Low'], df['Close'])
-    
-    adx, plus_di, minus_di = ta.ADX(df['High'], df['Low'], df['Close'])
-    df['ADX'] = adx
-    df['PLUS_DI'] = plus_di
-    df['MINUS_DI'] = minus_di
-    
-    df['MFI'] = ta.MFI(df['High'], df['Low'], df['Close'], df['Volume'])
-    
-    patterns = ['doji', 'hammer', 'engulfing', 'morning_star', 'evening_star']
-    pattern_df = ta.get_candlestick_patterns(df, patterns)
-    for pattern in patterns:
-        df[pattern] = pattern_df[pattern]
-    
-    lagged_features = []
-    for col in ['Close', 'Volume', 'High', 'Low', 'Open']:
-        for i in range(1, lagged_length):
-            lagged_features.append(pd.DataFrame({
-                f'Prev{i}_{col}': df[col].shift(i)
-            }))
-    
-    if lagged_features:
-        df = pd.concat([df] + lagged_features, axis=1)
-    
-    df['Close_ZScore'] = (df['Close'] - ta.SMA(df['Close'], timeperiod=100)) / ta.STDDEV(df['Close'], timeperiod=100)
-    df['MA10'] = ta.SMA(df['Close'], timeperiod=10) / df['Close']
-    df['MA20'] = ta.SMA(df['Close'], timeperiod=20) / df['Close']
-    df['MA50'] = ta.SMA(df['Close'], timeperiod=50) / df['Close']
-    df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
-    df['RSI'] = ta.RSI(df['Close'], timeperiod=14)
-    
-
-    
-    df = df.bfill().ffill()
-    df.dropna(inplace=True)
-    
-
-    price_features = ['Open', 'High', 'Low', 'Close'] + [f'Prev{i}_{col}' for i in range(1, lagged_length) for col in ['Open', 'High', 'Low', 'Close']]
-    volume_features = ['Volume', 'OBV'] + [f'Prev{i}_Volume' for i in range(1, lagged_length)]
-    bounded_features = ['RSI', 'STOCH_K', 'STOCH_D', 'MFI', 'WillR']  # Features that are already bounded
-    pattern_features = patterns
-    
-    technical_features = [col for col in df.columns 
-                        if col not in (price_features + volume_features + bounded_features + 
-                                        pattern_features + ['Datetime'])]
-    
-    df[price_features] = scalers['price'].fit_transform(df[price_features])
-    df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
-    df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
-    df[volume_features] = scalers['volume'].fit_transform(df[volume_features])
-    
-    if technical_features:
-        df[technical_features] = df[technical_features].replace([np.inf, -np.inf], np.nan)
-        df[technical_features] = df[technical_features].fillna(df[technical_features].mean())
-        df[technical_features] = scalers['technical'].fit_transform(df[technical_features])
-        
     if 'Datetime' in df.columns:
-        X = df.drop(['Datetime'], axis=1)
-    else:
-        X = df
-    
-    pct_change = df['Close'].pct_change().shift(-1)
-
-    # 0 = below threshold | 1 = within threshold | 2 = above threshold
-    y = pd.Series(1, index=df.index)
-    y[pct_change < -pct_threshold] = 0
-    y[pct_change > pct_threshold] = 2
-    
-    X = X[:-1]
-    y = y[:-1]
-
-    return X, y
-
-def prepare_data_classifier_test(data, lagged_length=5, train_split=True, pct_threshold=0.05):
-    pct_threshold = pct_threshold / 100
-
-    scalers = {
-        'price': MinMaxScaler(feature_range=(0, 1)),
-        'volume': QuantileTransformer(output_distribution='normal'),
-        'technical': StandardScaler()
-    }
-
-    df = data.copy()
-
-    df.drop(columns=['Datetime'], inplace=True)
+        df.drop(columns=['Datetime'], inplace=True)
 
     df['Log_Return'] = ta.LOG(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
@@ -413,7 +317,5 @@ if __name__ == "__main__":
     data = fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
     
     main_data, _ = prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.1)
-    test_data, _ = prepare_data_classifier_test(data, lagged_length=5, train_split=False, pct_threshold=0.1)
     print(main_data)
-    print(test_data)
 
