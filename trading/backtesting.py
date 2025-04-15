@@ -9,11 +9,10 @@ from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
 
 import model_tools as mt
-from trading.techincal_indicators import *
+import pandas_indicators as ta
 
 import warnings
 # warnings.filterwarnings("ignore")
-
 # Buy signals: Any positive change in position
 # Sell signals: Any negative change in position
 # If .diff() is 0, then no change in position
@@ -48,16 +47,20 @@ class VectorizedBacktesting:
             raise ValueError("No data available. Call fetch_data() first.")
 
         self.data['Returns'] = self.data['Close'].pct_change()
-        self.data['MA50'] = self.data['Close'].rolling(window=50).mean()
-        self.data['MA100'] = self.data['Close'].rolling(window=100).mean()
-        self.data['RSI'] = calculate_rsi(self.data, 14)
+        self.data['MA50'] = ta.SMA(self.data['Close'], timeperiod=50)
+        self.data['MA100'] = ta.SMA(self.data['Close'], timeperiod=100)
         
-        macd_line, signal_line, histogram = calculate_macd(self.data)
+        # Use pandas_indicators for technical indicators
+        self.data['RSI'] = ta.RSI(self.data['Close'], timeperiod=14)
+        
+        # Calculate MACD
+        macd_line, signal_line= ta.MACD(self.data['Close'])
         self.data['MACD_Line'] = macd_line
         self.data['MACD_Signal'] = signal_line
-        self.data['MACD_Hist'] = histogram
+        self.data['MACD_Hist'] = macd_line - signal_line
         
-        self.data['SuperTrend'] = calculate_supertrend(self.data, 7)
+        # Calculate SuperTrend
+        self.data['SuperTrend'], self.data['SuperTrend_Upper'], self.data['SuperTrend_Lower'] = ta.SuperTrend(self.data['High'], self.data['Low'], self.data['Close'], period=7, multiplier=3)
         
         self.data['STD'] = self.data['Close'].rolling(window=5).std()
         
@@ -68,7 +71,6 @@ class VectorizedBacktesting:
         
         self.data['Strategy_Returns'] = self.data['Position'].shift(1) * self.data['Returns']
 
-        
         self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
         
@@ -504,60 +506,60 @@ class VectorizedBacktesting:
         
         return position
 
-    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\best_model.pth", batch_size: int = 64) -> pd.Series:
+    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\BTC-USDT_1min_0.01_20.pth", batch_size: int = 64) -> pd.Series:
         sys.path.append(r"trading\brains\time_series\single_predictors")
         from classifier_model import load_model
+        import model_tools as mt
         
         position = pd.Series(0, index=data.index)
         
-        model = load_model(model_path)
+        # Load model with correct input dimension
+        model = load_model(model_path, 30)
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.eval()
-
-        # Precompute static features
-        features = data[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-        print("a")
-        features, _ = mt.prepare_data_classifier(features, train_split=True)
-        print("b")
-        # Convert features to tensor
-        features_tensor = torch.tensor(features.values, dtype=torch.float32)
-        features_tensor = features_tensor.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-
-        # Use DataLoader for batching
-        dataset = TensorDataset(features_tensor)
+        print(f"Model loaded. Selected features: {len(model.selected_features)}")
+        
+        features_df, _ = mt.prepare_data_classifier(data, lagged_length=20, train_split=False, pct_threshold=0.01)
+        
+        selected_features = model.selected_features
+        
+        missing_features = [f for f in selected_features if f not in features_df.columns]
+        if missing_features:
+            print(f"Warning: Missing {len(missing_features)} features: {missing_features[:5]}...")
+            available_features = [f for f in selected_features if f in features_df.columns]
+            features_df = features_df[available_features]
+        else:
+            features_df = features_df[selected_features]
+        
+        # Convert to tensor
+        X = torch.tensor(features_df.values, dtype=torch.float32)
+        
+        # Use batching for faster processing
+        dataset = TensorDataset(X)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
-        progress_bar = tqdm(total=len(dataloader), desc="Backtesting")
+        
         all_predictions = []
+        
+        # Make predictions in batches
         with torch.no_grad():
             for batch in dataloader:
-                batch_features = batch[0]
-                logits = model(batch_features)
-                probabilities = torch.softmax(logits, dim=1)
-                predictions = np.argmax(probabilities.cpu(), axis=1)
-                all_predictions.extend(predictions)
-                progress_bar.update(1)
-        progress_bar.close()
-
-        # Assign positions based on predictions with proper position management
-        current_position = 0
-        for i, prediction in enumerate(all_predictions):
-            if prediction == 2:  # Buy signal
-                if current_position <= 0:  # Only buy if not already long
-                    position.iloc[i] = 1
-                    current_position = 1
-                else:
-                    position.iloc[i] = 0  # Hold existing position
-            elif prediction == 0:  # Sell signal
-                if current_position >= 0:  # Only sell if not already short
-                    position.iloc[i] = -1
-                    current_position = -1
-                else:
-                    position.iloc[i] = 0  # Hold existing position
-            else:  # Hold signal
-                position.iloc[i] = 0  # Close any open position
-                current_position = 0
-
+                batch_X = batch[0].to(model.DEVICE)
+                # Normalize the batch if needed (similar to forward method)
+                batch_X = model.batch_norm(batch_X)
+                outputs = model(batch_X)
+                _, predicted = torch.max(outputs, 1)
+                all_predictions.extend(predicted.cpu().numpy())
+        
+        # Align predictions with DataFrame
+        for i, idx in enumerate(features_df.index):
+            if i < len(all_predictions):
+                position[idx] = all_predictions[i]
+        
+        # Map the predictions to positions (2 = buy, 0 = sell)
+        position[position == 2] = 1
+        position[position == 0] = 0
+        # Position 1 (hold) remains as 1
+        
         return position
 
 if __name__ == "__main__":
