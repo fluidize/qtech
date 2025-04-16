@@ -72,4 +72,4 @@ def monte_carlo_simulation(n_steps, n_paths, time_unit=1):
     plt.show()
 
 if __name__ == "__main__":
-    paths = monte_carlo_simulation(n_steps=1000, n_paths=5000, time_unit=1)
+    paths = monte_carlo_simulation(n_steps=1000, n_paths=250, time_unit=1)
