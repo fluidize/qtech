@@ -108,7 +108,7 @@ class ClassifierModel(nn.Module):
 
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
-            X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
+            X, y = mt.prepare_data_classifier(self.data, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
             feature_names = X.columns.tolist()
             
             if use_feature_selection:
@@ -188,7 +188,7 @@ class ClassifierModel(nn.Module):
                         nn.init.zeros_(param)
 
     def train_model(self, model, prompt_save=False, show_loss=False):
-        X, y = mt.prepare_data_classifier(self.data, train_split=True, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
+        X, y = mt.prepare_data_classifier(self.data, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
         print(X)
         
         if self.feature_selector and self.feature_selector.important_features:
@@ -345,7 +345,7 @@ class ClassifierModel(nn.Module):
             save_path = f"{self.ticker}_{self.interval}_{self.pct_threshold}_{self.lagged_length}.pth"
             torch.save({
                 'model_state_dict': best_state_dict,
-                'selected_features': self.feature_selector.important_features  # Save selected features
+                'selected_features': self.feature_selector.important_features if self.feature_selector else None  # Save selected features
             }, save_path)
         
         return model

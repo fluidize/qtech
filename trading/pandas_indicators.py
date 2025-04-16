@@ -1,15 +1,15 @@
 import pandas as pd
 import numpy as np
 
-def SMA(series, timeperiod=20):
+def sma(series, timeperiod=20):
     """Simple Moving Average"""
     return series.rolling(window=timeperiod).mean()
 
-def EMA(series, timeperiod=20):
+def ema(series, timeperiod=20):
     """Exponential Moving Average"""
     return series.ewm(span=timeperiod, adjust=False).mean()
 
-def RSI(series, timeperiod=14):
+def rsi(series, timeperiod=14):
     """Relative Strength Index"""
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=timeperiod).mean()
@@ -17,7 +17,7 @@ def RSI(series, timeperiod=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def MACD(series, fastperiod=12, slowperiod=26, signalperiod=9):
+def macd(series, fastperiod=12, slowperiod=26, signalperiod=9):
     """Moving Average Convergence Divergence"""
     exp1 = series.ewm(span=fastperiod, adjust=False).mean()
     exp2 = series.ewm(span=slowperiod, adjust=False).mean()
@@ -25,15 +25,15 @@ def MACD(series, fastperiod=12, slowperiod=26, signalperiod=9):
     signal = macd.ewm(span=signalperiod, adjust=False).mean()
     return macd, signal
 
-def BBANDS(series, timeperiod=20, nbdevup=2, nbdevdn=2):
+def bbands(series, timeperiod=20, nbdevup=2, nbdevdn=2):
     """Bollinger Bands"""
-    middle = SMA(series, timeperiod)
+    middle = sma(series, timeperiod)
     std = series.rolling(window=timeperiod).std()
     upper = middle + (std * nbdevup)
     lower = middle - (std * nbdevdn)
     return upper, middle, lower
 
-def STOCH(high, low, close, fastk_period=14, slowk_period=3, slowd_period=3):
+def stoch(high, low, close, fastk_period=14, slowk_period=3, slowd_period=3):
     """Stochastic Oscillator"""
     lowest_low = low.rolling(window=fastk_period).min()
     highest_high = high.rolling(window=fastk_period).max()
@@ -41,7 +41,7 @@ def STOCH(high, low, close, fastk_period=14, slowk_period=3, slowd_period=3):
     d = k.rolling(window=slowk_period).mean()
     return k, d
 
-def ATR(high, low, close, timeperiod=14):
+def atr(high, low, close, timeperiod=14):
     """Average True Range"""
     tr1 = high - low
     tr2 = abs(high - close.shift())
@@ -49,19 +49,19 @@ def ATR(high, low, close, timeperiod=14):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(window=timeperiod).mean()
 
-def OBV(close, volume):
+def obv(close, volume):
     """On Balance Volume"""
     obv = (np.sign(close.diff()) * volume).fillna(0).cumsum()
     return obv
 
-def CCI(high, low, close, timeperiod=20):
+def cci(high, low, close, timeperiod=20):
     """Commodity Channel Index"""
     tp = (high + low + close) / 3
     sma = tp.rolling(window=timeperiod).mean()
     mad = tp.rolling(window=timeperiod).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
     return (tp - sma) / (0.015 * mad)
 
-def ADX(high, low, close, timeperiod=14):
+def adx(high, low, close, timeperiod=14):
     """Average Directional Index"""
     plus_dm = high.diff()
     minus_dm = low.diff()
@@ -81,29 +81,29 @@ def ADX(high, low, close, timeperiod=14):
     
     return adx, plus_di, minus_di
 
-def LOG(series):
+def log_returns(series):
     """Log Returns"""
     return np.log(series / series.shift(1))
 
-def STDDEV(series, timeperiod=20):
+def stddev(series, timeperiod=20):
     """Standard Deviation"""
     return series.rolling(window=timeperiod).std()
 
-def ROC(series, timeperiod=10):
+def roc(series, timeperiod=10):
     """Rate of Change"""
     return series.pct_change(periods=timeperiod) * 100
 
-def MOM(series, timeperiod=10):
+def mom(series, timeperiod=10):
     """Momentum"""
     return series.diff(timeperiod)
 
-def WILLR(high, low, close, timeperiod=14):
+def willr(high, low, close, timeperiod=14):
     """Williams %R"""
     highest_high = high.rolling(window=timeperiod).max()
     lowest_low = low.rolling(window=timeperiod).min()
     return -100 * (highest_high - close) / (highest_high - lowest_low)
 
-def MFI(high, low, close, volume, timeperiod=14):
+def mfi(high, low, close, volume, timeperiod=14):
     """Money Flow Index"""
     typical_price = (high + low + close) / 3
     money_flow = typical_price * volume
@@ -120,7 +120,7 @@ def MFI(high, low, close, volume, timeperiod=14):
     mfi = 100 - (100 / (1 + positive_mf / negative_mf))
     return mfi
 
-def KAMA(series, er_period=10, fast_period=2, slow_period=30):
+def kama(series, er_period=10, fast_period=2, slow_period=30):
     """Kaufman Adaptive Moving Average"""
     change = abs(series - series.shift(er_period))
     volatility = series.diff().abs().rolling(window=er_period).sum()
@@ -151,13 +151,13 @@ def KAMA(series, er_period=10, fast_period=2, slow_period=30):
     
     return kama
 
-def VWAP(high, low, close, volume):
+def vwap(high, low, close, volume):
     """Volume Weighted Average Price"""
     typical_price = (high + low + close) / 3
     vwap = (typical_price * volume).cumsum() / volume.cumsum()
     return vwap
 
-def SuperTrend(high, low, close, period=14, multiplier=3):
+def superTrend(high, low, close, period=14, multiplier=3):
     """SuperTrend indicator"""
     atr = ATR(high, low, close, period)
     
@@ -186,7 +186,7 @@ def SuperTrend(high, low, close, period=14, multiplier=3):
                 
     return supertrend, upper_band, lower_band
 
-def TSI(close, long_period=25, short_period=13, signal_period=13):
+def tsi(close, long_period=25, short_period=13, signal_period=13):
     """True Strength Index"""
     momentum = close.diff()  # 1-period price change
     
@@ -205,13 +205,13 @@ def TSI(close, long_period=25, short_period=13, signal_period=13):
     
     return tsi, signal
 
-def CMF(high, low, close, volume, period=20):
+def cmf(high, low, close, volume, period=20):
     """Chaikin Money Flow"""
     mfv = volume * ((close - low) - (high - close)) / (high - low)
     cmf = mfv.rolling(window=period).sum() / volume.rolling(window=period).sum()
     return cmf
 
-def HMA(series, period=16):
+def hma(series, period=16):
     """Hull Moving Average"""
     wma_half_period = WMA(series, period=period//2)
     wma_full_period = WMA(series, period=period)
@@ -220,7 +220,7 @@ def HMA(series, period=16):
     sqrt_period = int(np.sqrt(period))
     return WMA(2 * wma_half_period - wma_full_period, period=sqrt_period)
 
-def WMA(series, period=20):
+def wma(series, period=20):
     """Weighted Moving Average"""
     weights = np.arange(1, period + 1)
     sum_weights = weights.sum()
@@ -231,7 +231,7 @@ def WMA(series, period=20):
     
     return result
 
-def ICHIMOKU(high, low, close, tenkan_period=9, kijun_period=26, senkou_period=52, chikou_period=26):
+def ichimoku(high, low, close, tenkan_period=9, kijun_period=26, senkou_period=52, chikou_period=26):
     """Ichimoku Cloud"""
     # Tenkan-sen (Conversion Line): (highest high + lowest low) / 2 for the past tenkan_period
     tenkan_sen = (high.rolling(window=tenkan_period).max() + low.rolling(window=tenkan_period).min()) / 2
@@ -250,7 +250,7 @@ def ICHIMOKU(high, low, close, tenkan_period=9, kijun_period=26, senkou_period=5
     
     return tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b, chikou_span
 
-def PPO(series, fast_period=12, slow_period=26, signal_period=9):
+def ppo(series, fast_period=12, slow_period=26, signal_period=9):
     """Percentage Price Oscillator"""
     fast_ema = EMA(series, timeperiod=fast_period)
     slow_ema = EMA(series, timeperiod=slow_period)
@@ -261,7 +261,7 @@ def PPO(series, fast_period=12, slow_period=26, signal_period=9):
     
     return ppo, signal, histogram
 
-def AOBV(close, volume, fast_period=5, slow_period=10):
+def aobv(close, volume, fast_period=5, slow_period=10):
     """Adaptive On Balance Volume - OBV with smoothing and signal line"""
     # Calculate OBV
     obv = OBV(close, volume)
