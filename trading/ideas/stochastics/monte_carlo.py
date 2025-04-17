@@ -15,16 +15,16 @@ def monte_carlo_simulation(n_steps, n_paths, time_unit=1):
     stddev = np.sqrt(variance)
 
     for i in tqdm(range(n_paths), desc="Simulating paths"):
-        paths.append(wiener.wiener_process(n_steps, time_unit=time_unit, gbm=True, live_plot=False))
+        paths.append(wiener.wiener_process(n_steps, time_unit=time_unit, gbm=True))
     
     paths_array = np.array(paths)
     
     df = pd.DataFrame(paths_array.T) 
+    return df
 
+def plot_paths(df):
     mean_path = df.mean(axis=1)
-    #66% - 95% - 99.7% rule
-    std_mult = 2
-    stddev_path = df.std(axis=1) * std_mult
+    stddev_path = df.std(axis=1)
 
     fig = make_subplots(rows=2, cols=1, subplot_titles=("Simulated Paths", "Distributions"))
 
@@ -33,29 +33,11 @@ def monte_carlo_simulation(n_steps, n_paths, time_unit=1):
 
     fig.add_trace(go.Scatter(x=df.index, y=mean_path, mode='lines', name='Mean Path', line=dict(color='blue', width=2)), row=1, col=1)
 
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=mean_path + stddev_path,
-        mode='lines',
-        line=dict(color='lightblue', dash='dash'),
-        name='Mean + Std Dev',
-        showlegend=False
-    ), row=1, col=1)
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=mean_path - stddev_path,
-        mode='lines',
-        line=dict(color='lightblue', dash='dash'),
-        fill='tonexty',
-        name='Variance Area',
-        showlegend=False
-    ), row=1, col=1)
-
     final_values = df.iloc[-1]
     fig.add_trace(go.Histogram(x=final_values, name='Final Values', opacity=0.75, nbinsx=1000), row=2, col=1)
 
     fig.update_layout(
-        title=f'Monte Carlo Simulation | {n_paths} paths | {n_steps} steps | {stddev:.2f} Standard Deviation',
+        title=f'Monte Carlo Simulation | {df.shape[1]} paths | {stddev_path.iloc[0]:.2f} Standard Deviation',
         xaxis_title='Steps',
         yaxis_title='Process Value',
         template='plotly_dark'
@@ -72,4 +54,6 @@ def monte_carlo_simulation(n_steps, n_paths, time_unit=1):
     plt.show()
 
 if __name__ == "__main__":
-    paths = monte_carlo_simulation(n_steps=1000, n_paths=250, time_unit=1)
+    paths = monte_carlo_simulation(n_steps=1000, n_paths=1000, time_unit=1)
+    fig = go.Figure(data=go.Histogram(x=paths, nbinsx=1000))
+    fig.show()

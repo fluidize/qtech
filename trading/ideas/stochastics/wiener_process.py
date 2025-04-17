@@ -6,7 +6,7 @@ def wiener_process(n_steps, time_unit=1, gbm=True):
     y = []
     w = 1 if gbm else 0
 
-    for i in range(n_steps):
+    for i in range(n_steps * time_unit):
         delta_t = time_unit / n_steps
         # in a wiener process, the variance of the increment delta_w is delta_t. in order to get the stddev, we sqrt
         # the variance of each step is: Var[ΔW]=Δt
