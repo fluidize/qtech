@@ -189,6 +189,6 @@ class Arbitrage:
         self._find_best_arbitrage()
         self.save_arbitrage_to_csv()
 
-
-arbitrage = Arbitrage(pd.read_csv(r"trading\options\low_mid_cap.csv")["Ticker"].tolist())
-arbitrage.run()
+if __name__ == "__main__":
+    arbitrage = Arbitrage(pd.read_csv(r"trading\options\low_mid_cap.csv")["Ticker"].tolist())
+    arbitrage.run()
