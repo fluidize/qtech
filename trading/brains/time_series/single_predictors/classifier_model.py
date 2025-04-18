@@ -493,7 +493,9 @@ def load_model(model_path: str, input_dim: int = None):
     return model #return raw class
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="BTC-USDT", chunks=1, interval="1min", age_days=0, epochs=50, pct_threshold=0.01, lagged_length=20, use_feature_selection=True)
+    model = ClassifierModel(ticker="BTC-USDT", chunks=30, interval="1min", age_days=0, epochs=50, pct_threshold=0.1, lagged_length=20, use_feature_selection=True)
     model = model.train_model(model, prompt_save=True, show_loss=True)
-    predictions = model.predict(model, model.data)
+    with torch.no_grad():
+        predictions = model(mt.prepare_data_classifier(model.data, pct_threshold=model.pct_threshold, lagged_length=model.lagged_length))
+        
     model.prediction_plot(model.data, predictions)
