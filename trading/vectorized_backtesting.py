@@ -47,20 +47,20 @@ class VectorizedBacktesting:
             raise ValueError("No data available. Call fetch_data() first.")
 
         self.data['Returns'] = self.data['Close'].pct_change()
-        self.data['MA50'] = ta.SMA(self.data['Close'], timeperiod=50)
-        self.data['MA100'] = ta.SMA(self.data['Close'], timeperiod=100)
+        self.data['MA50'] = ta.sma(self.data['Close'], timeperiod=50)
+        self.data['MA100'] = ta.sma(self.data['Close'], timeperiod=100)
         
         # Use pandas_indicators for technical indicators
-        self.data['RSI'] = ta.RSI(self.data['Close'], timeperiod=14)
+        self.data['RSI'] = ta.rsi(self.data['Close'], timeperiod=14)
         
         # Calculate MACD
-        macd_line, signal_line= ta.MACD(self.data['Close'])
+        macd_line, signal_line = ta.macd(self.data['Close'])
         self.data['MACD_Line'] = macd_line
         self.data['MACD_Signal'] = signal_line
         self.data['MACD_Hist'] = macd_line - signal_line
         
         # Calculate SuperTrend
-        self.data['SuperTrend'], self.data['SuperTrend_Upper'], self.data['SuperTrend_Lower'] = ta.SuperTrend(self.data['High'], self.data['Low'], self.data['Close'], period=7, multiplier=3)
+        self.data['SuperTrend'], self.data['SuperTrend_Upper'], self.data['SuperTrend_Lower'] = ta.supertrend(self.data['High'], self.data['Low'], self.data['Close'], period=7, multiplier=3)
         
         self.data['STD'] = self.data['Close'].rolling(window=5).std()
         
@@ -506,20 +506,21 @@ class VectorizedBacktesting:
         
         return position
 
-    def nn_strategy(self, data: pd.DataFrame, model_path: str = r"trading\BTC-USDT_1min_0.01_20.pth", batch_size: int = 64) -> pd.Series:
+    def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64) -> pd.Series:
         sys.path.append(r"trading\brains\time_series\single_predictors")
         from classifier_model import load_model
         import model_tools as mt
         
+        USE_BATCH = False
+        MODEL_PATH = r"trading\BTC-USDT_1min_0.1_20.pth"
+        
         position = pd.Series(0, index=data.index)
         
-        # Load model with correct input dimension
-        model = load_model(model_path, 30)
+        model = load_model(MODEL_PATH, 30)
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.eval()
-        print(f"Model loaded. Selected features: {len(model.selected_features)}")
         
-        features_df, _ = mt.prepare_data_classifier(data, lagged_length=20, train_split=False, pct_threshold=0.01)
+        features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=20, pct_threshold=0.01)
         
         selected_features = model.selected_features
         
@@ -531,34 +532,40 @@ class VectorizedBacktesting:
         else:
             features_df = features_df[selected_features]
         
-        # Convert to tensor
         X = torch.tensor(features_df.values, dtype=torch.float32)
         
-        # Use batching for faster processing
-        dataset = TensorDataset(X)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        if USE_BATCH:
+            dataset = TensorDataset(X)
+            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+            
+            all_predictions = []
+            
+            with torch.no_grad():
+                progress_bar = tqdm(range(len(dataloader)), desc="Processing predictions")
+                for batch in dataloader:
+                    batch_X = batch[0].to(model.DEVICE)
+                    outputs = model(batch_X)
+                    _, predicted = torch.max(outputs, 1)
+                    all_predictions.extend(predicted.cpu().numpy())
+                    progress_bar.update(1)
+                progress_bar.close()
+            for i, idx in enumerate(features_df.index):
+                if i < len(all_predictions):
+                    position[idx] = all_predictions[i]
+        else:
+            with torch.no_grad():
+                progress_bar = tqdm(range(features_df.shape[0]), desc="Processing predictions")
+                for i, idx in enumerate(features_df.index):
+                    single_X = X[i:i+1].to(model.DEVICE)
+                    outputs = model(single_X)
+                    _, predicted = torch.max(outputs, 1)
+                    position[idx] = predicted.cpu().numpy()[0]
+                    progress_bar.update(1)
+                progress_bar.close()
         
-        all_predictions = []
-        
-        # Make predictions in batches
-        with torch.no_grad():
-            for batch in dataloader:
-                batch_X = batch[0].to(model.DEVICE)
-                # Normalize the batch if needed (similar to forward method)
-                batch_X = model.batch_norm(batch_X)
-                outputs = model(batch_X)
-                _, predicted = torch.max(outputs, 1)
-                all_predictions.extend(predicted.cpu().numpy())
-        
-        # Align predictions with DataFrame
-        for i, idx in enumerate(features_df.index):
-            if i < len(all_predictions):
-                position[idx] = all_predictions[i]
-        
-        # Map the predictions to positions (2 = buy, 0 = sell)
+        # 2 = buy 1 = hold 0 = sell
         position[position == 2] = 1
         position[position == 0] = 0
-        # Position 1 (hold) remains as 1
         
         return position
 
@@ -566,7 +573,7 @@ if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="SOL-USDT",
         initial_capital=39.5,
-        chunks=1,
+        chunks=30,
         interval="1min",
         age_days=0
     )

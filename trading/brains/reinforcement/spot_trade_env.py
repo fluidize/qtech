@@ -11,12 +11,6 @@ import plotly.graph_objects as go
 import requests
 from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 
-import sys
-sys.path.append("trading")
-import trading.brains.time_series.single_pytorch_model as single_pytorch_model
-from trading.brains.time_series.single_pytorch_model import load_model, SingleModel
-
-# from indicators import *
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
     print("[green]DOWNLOADING DATA[/green]")
     if not kucoin:
