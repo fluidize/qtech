@@ -157,12 +157,12 @@ def vwap(high, low, close, volume):
     vwap = (typical_price * volume).cumsum() / volume.cumsum()
     return vwap
 
-def superTrend(high, low, close, period=14, multiplier=3):
+def supertrend(high, low, close, period=14, multiplier=3):
     """SuperTrend indicator"""
-    atr = ATR(high, low, close, period)
+    average_true_range = atr(high, low, close, period)
     
-    upper_band = ((high + low) / 2) + (multiplier * atr)
-    lower_band = ((high + low) / 2) - (multiplier * atr)
+    upper_band = ((high + low) / 2) + (multiplier * average_true_range)
+    lower_band = ((high + low) / 2) - (multiplier * average_true_range)
     
     supertrend = pd.Series(0, index=close.index)
     
