@@ -15,6 +15,7 @@ from models import DQNNetwork, ActorCriticNetwork, PPONetwork
 class DQNAgent:
     """
     Deep Q-Network (DQN) Agent for trading decisions.
+    Implements key DQN features: target network, experience replay, epsilon-greedy exploration.
     """
     
     def __init__(self, 
@@ -31,42 +32,19 @@ class DQNAgent:
                  buffer_capacity: int = 100000,
                  prioritized_replay: bool = False,
                  device: str = 'auto'):
-        """
-        Initialize the DQN agent
-        
-        Args:
-            state_dim: Dimension of state space
-            action_dim: Dimension of action space
-            hidden_dims: Hidden layer dimensions
-            learning_rate: Learning rate for optimizer
-            gamma: Discount factor
-            epsilon_start: Initial exploration rate
-            epsilon_end: Final exploration rate
-            epsilon_decay: Rate of epsilon decay
-            target_update_freq: Frequency of target network updates
-            batch_size: Batch size for training
-            buffer_capacity: Maximum capacity of replay buffer
-            prioritized_replay: Whether to use prioritized experience replay
-            device: Device to use for tensor operations ('cpu', 'cuda', or 'auto')
-        """
-        # Set device
-        if device == 'auto':
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        else:
-            self.device = torch.device(device)
-            
+        """Initialize the DQN agent"""
+        self.device = torch.device('cuda' if torch.cuda.is_available() and device == 'auto' else 'cpu' if device == 'auto' else device)
         print(f"Using device: {self.device}")
             
-        # Initialize networks
+        # Initialize policy network (active) and target network (stable reference)
         self.policy_net = DQNNetwork(state_dim, action_dim, hidden_dims).to(self.device)
         self.target_net = DQNNetwork(state_dim, action_dim, hidden_dims).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()  # Set target network to evaluation mode
+        self.target_net.eval()  # Target network is used for inference only
         
-        # Initialize optimizer
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
         
-        # Initialize replay buffer
+        # Select the appropriate replay buffer based on whether we're using prioritized replay
         if prioritized_replay:
             self.memory = PrioritizedReplayBuffer(buffer_capacity)
             self.prioritized_replay = True
@@ -74,9 +52,9 @@ class DQNAgent:
             self.memory = ReplayBuffer(buffer_capacity)
             self.prioritized_replay = False
             
-        # Set hyperparameters
-        self.gamma = gamma
-        self.epsilon = epsilon_start
+        # Store hyperparameters
+        self.gamma = gamma  # Discount factor for future rewards
+        self.epsilon = epsilon_start  # Current exploration rate
         self.epsilon_start = epsilon_start
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
@@ -92,52 +70,41 @@ class DQNAgent:
         
     def select_action(self, state: np.ndarray, evaluate: bool = False) -> int:
         """
-        Select an action using epsilon-greedy policy
-        
-        Args:
-            state: Current state
-            evaluate: Whether to use greedy policy (True) or epsilon-greedy (False)
-            
-        Returns:
-            Selected action
+        Select an action using epsilon-greedy policy.
+        During evaluation, always selects the best action.
+        During training, randomly explores with probability epsilon.
         """
         if evaluate or random.random() > self.epsilon:
-            # Greedy action selection
+            # Greedy action selection (exploit)
             with torch.no_grad():
                 state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
                 q_values = self.policy_net(state_tensor)
                 return q_values.argmax().item()
         else:
-            # Random action selection
+            # Random action selection (explore)
             return random.randrange(self.action_dim)
         
     def update_epsilon(self):
-        """
-        Update exploration rate using epsilon decay
-        """
+        """Decay exploration rate over time to reduce exploration"""
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         
     def store_transition(self, state, action, next_state, reward, done):
-        """
-        Store transition in replay buffer
-        
-        Args:
-            state: Current state
-            action: Action taken
-            next_state: Next state
-            reward: Reward received
-            done: Whether episode is done
-        """
+        """Store experience tuple in replay buffer for later training"""
         self.memory.push(state, action, next_state, reward, done)
         
     def update(self) -> Optional[float]:
         """
-        Update policy network using a batch of transitions
+        Update policy network using a batch of experiences.
+        
+        Implements the core DQN learning algorithm:
+        1. Sample transitions from replay buffer
+        2. Compute Q-values for current states/actions
+        3. Compute target Q-values using Bellman equation
+        4. Update policy network to minimize the difference
         
         Returns:
-            Loss value if update performed, None otherwise
+            Loss value if update performed, None if insufficient samples
         """
-        # Check if enough samples are available
         if not self.memory.can_sample(self.batch_size):
             return None
         
@@ -149,57 +116,55 @@ class DQNAgent:
             transitions = self.memory.sample(self.batch_size)
             weights_tensor = torch.ones(self.batch_size).to(self.device)
             
-        # Convert batch of transitions to transition of batches
+        # Prepare batch data
         batch = Transition(*zip(*transitions))
         
-        # Create tensors for batch elements
         state_batch = torch.FloatTensor(np.array(batch.state)).to(self.device)
         action_batch = torch.LongTensor(np.array(batch.action)).view(-1, 1).to(self.device)
         reward_batch = torch.FloatTensor(np.array(batch.reward)).to(self.device)
         next_state_batch = torch.FloatTensor(np.array(batch.next_state)).to(self.device)
         done_batch = torch.FloatTensor(np.array(batch.done)).to(self.device)
         
-        # Compute Q(s_t, a) for actions taken
+        # Current Q-values: Q(s,a) for the actions that were actually taken
         q_values = self.policy_net(state_batch).gather(1, action_batch)
         
-        # Compute max Q(s_{t+1}, a) for all next states
-        with torch.no_grad():
+        # Compute target Q-values using Bellman equation: r + γ * max_a' Q(s',a')
+        with torch.no_grad():  # No need to compute gradients for target computation
             next_q_values = self.target_net(next_state_batch).max(1)[0]
             
-        # Compute expected Q values
+        # Target Q = reward + (discount * next Q-value), unless the episode is done
         expected_q_values = reward_batch + (1 - done_batch) * self.gamma * next_q_values
         
-        # Compute loss
+        # Compute loss - either weighted MSE (for prioritized replay) or regular MSE
         if self.prioritized_replay:
-            # Compute element-wise loss for priority update
+            # For prioritized replay, we need per-element losses to update priorities
             element_wise_loss = F.smooth_l1_loss(q_values.squeeze(), 
                                               expected_q_values.unsqueeze(1).squeeze(),
                                               reduction='none')
             
-            # Apply importance sampling weights
+            # Apply importance sampling weights to correct for sampling bias
             loss = torch.mean(element_wise_loss * weights_tensor)
             
-            # Update priorities in buffer
-            priorities = element_wise_loss.detach().cpu().numpy() + 1e-6  # Add small constant to avoid zero priorities
+            # Update priorities based on TD error
+            priorities = element_wise_loss.detach().cpu().numpy() + 1e-6  # Avoid zero priorities
             self.memory.update_priorities(indices, priorities)
         else:
             loss = F.smooth_l1_loss(q_values.squeeze(), expected_q_values.unsqueeze(1).squeeze())
         
-        # Optimize the model
+        # Update policy network
         self.optimizer.zero_grad()
         loss.backward()
         
-        # Clip gradients to stabilize training
+        # Clip gradients to prevent exploding gradients problem
         for param in self.policy_net.parameters():
             param.grad.data.clamp_(-1, 1)
             
         self.optimizer.step()
         
-        # Record loss
         loss_value = loss.item()
         self.losses.append(loss_value)
         
-        # Update target network if needed
+        # Periodically update target network with policy network weights
         self.steps += 1
         if self.steps % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -207,12 +172,7 @@ class DQNAgent:
         return loss_value
     
     def save(self, path: str):
-        """
-        Save agent model to file
-        
-        Args:
-            path: Path to save model
-        """
+        """Save agent model to file"""
         torch.save({
             'policy_net': self.policy_net.state_dict(),
             'target_net': self.target_net.state_dict(),
@@ -225,12 +185,7 @@ class DQNAgent:
         }, path)
         
     def load(self, path: str):
-        """
-        Load agent model from file
-        
-        Args:
-            path: Path to load model from
-        """
+        """Load agent model from file"""
         checkpoint = torch.load(path, map_location=self.device)
         
         # Recreate model if dimensions don't match
@@ -248,13 +203,16 @@ class DQNAgent:
         self.target_net.load_state_dict(checkpoint['target_net'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         
-        # Load training state
         self.steps = checkpoint['steps']
         self.epsilon = checkpoint['epsilon']
         
 class PPOAgent:
     """
     Proximal Policy Optimization (PPO) Agent for trading decisions.
+    
+    PPO is an on-policy algorithm that optimizes a "surrogate" objective function
+    with constraints to prevent too large policy updates. It achieves this by clipping 
+    the probability ratio between old and new policies.
     """
     
     def __init__(self,
@@ -271,57 +229,34 @@ class PPOAgent:
                  optimization_epochs: int = 10,
                  continuous_actions: bool = False,
                  device: str = 'auto'):
-        """
-        Initialize the PPO agent
-        
-        Args:
-            state_dim: Dimension of state space
-            action_dim: Dimension of action space
-            hidden_dims: Hidden layer dimensions
-            learning_rate: Learning rate for optimizer
-            gamma: Discount factor
-            gae_lambda: GAE lambda parameter for advantage estimation
-            clip_epsilon: PPO clipping parameter
-            critic_coef: Coefficient for critic loss
-            entropy_coef: Coefficient for entropy bonus
-            batch_size: Batch size for training
-            optimization_epochs: Number of optimization epochs per update
-            continuous_actions: Whether actions are continuous
-            device: Device to use for tensor operations
-        """
-        # Set device
-        if device == 'auto':
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        else:
-            self.device = torch.device(device)
-            
+        """Initialize the PPO agent"""
+        self.device = torch.device('cuda' if torch.cuda.is_available() and device == 'auto' else 'cpu' if device == 'auto' else device)
         print(f"Using device: {self.device}")
         
-        # Initialize network
+        # Initialize the actor-critic network
         self.network = PPONetwork(state_dim, action_dim, continuous_actions, hidden_dims).to(self.device)
-        
-        # Initialize optimizer
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
         
-        # Set hyperparameters
-        self.gamma = gamma
-        self.gae_lambda = gae_lambda
-        self.clip_epsilon = clip_epsilon
-        self.critic_coef = critic_coef
-        self.entropy_coef = entropy_coef
-        self.batch_size = batch_size
-        self.optimization_epochs = optimization_epochs
-        self.continuous_actions = continuous_actions
+        # PPO hyperparameters
+        self.gamma = gamma  # Discount factor for future rewards
+        self.gae_lambda = gae_lambda  # Controls the bias-variance tradeoff in advantage estimation
+        self.clip_epsilon = clip_epsilon  # Clip parameter for PPO's trust region constraint
+        self.critic_coef = critic_coef  # Weight for value function loss
+        self.entropy_coef = entropy_coef  # Weight for entropy loss (encourages exploration)
+        self.batch_size = batch_size  # Mini-batch size for optimization
+        self.optimization_epochs = optimization_epochs  # Number of passes through the experience buffer
+        self.continuous_actions = continuous_actions  # Whether the action space is continuous
         self.state_dim = state_dim
         self.action_dim = action_dim
         
-        # Experience buffer
-        self.states = []
-        self.actions = []
-        self.log_probs = []
-        self.rewards = []
-        self.values = []
-        self.dones = []
+        # Experience buffer for on-policy learning
+        # Unlike DQN, PPO collects and uses experience immediately, then discards it
+        self.states = []  # States encountered
+        self.actions = []  # Actions taken
+        self.log_probs = []  # Log probabilities of actions under the policy
+        self.rewards = []  # Rewards received
+        self.values = []  # Value estimates from critic
+        self.dones = []  # Terminal state flags
         
         # Training metrics
         self.steps = 0
@@ -329,47 +264,49 @@ class PPOAgent:
         
     def select_action(self, state: np.ndarray, evaluate: bool = False) -> int:
         """
-        Select an action based on current policy
+        Select an action based on current policy.
         
-        Args:
-            state: Current state
-            evaluate: Whether to select deterministically for evaluation
-            
-        Returns:
-            Selected action
+        In PPO:
+        - During training, actions are sampled stochastically from the policy distribution
+        - During evaluation, actions are selected deterministically (highest probability)
+        
+        For continuous actions, this uses a Normal distribution.
+        For discrete actions, this uses a Categorical distribution.
         """
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             
             if self.continuous_actions:
+                # For continuous actions, the network outputs mean and log_std of a Normal distribution
                 mean, log_std, value = self.network(state_tensor)
                 
                 if evaluate:
-                    # Deterministic action for evaluation
+                    # During evaluation, just use the mean (most likely action)
                     action = mean
                     log_prob = None
                 else:
-                    # Sample from normal distribution
-                    std = torch.exp(log_std)
+                    # During training, sample from the distribution to explore
+                    std = torch.exp(log_std)  # Convert log_std to std
                     normal = torch.distributions.Normal(mean, std)
-                    action = normal.sample()
-                    log_prob = normal.log_prob(action)
+                    action = normal.sample()  # Sample an action
+                    log_prob = normal.log_prob(action)  # Compute log probability of the sampled action
                     
                 action = action.cpu().numpy().flatten()
             else:
+                # For discrete actions, the network outputs action probabilities
                 action_probs, value = self.network(state_tensor)
                 
                 if evaluate:
-                    # Deterministic action for evaluation
+                    # During evaluation, choose the action with highest probability
                     action = torch.argmax(action_probs, dim=1).item()
                     log_prob = None
                 else:
-                    # Sample from categorical distribution
+                    # During training, sample from the categorical distribution
                     m = torch.distributions.Categorical(action_probs)
-                    action = m.sample().item()
-                    log_prob = m.log_prob(torch.tensor([action]).to(self.device)).item()
+                    action = m.sample().item()  # Sample an action
+                    log_prob = m.log_prob(torch.tensor([action]).to(self.device)).item()  # Compute log probability
             
-            # Store experience if not evaluating
+            # Store experience for training (if not in evaluation mode)
             if not evaluate:
                 self.states.append(state)
                 self.actions.append(action)
@@ -380,18 +317,23 @@ class PPOAgent:
         
     def store_outcome(self, reward: float, done: bool):
         """
-        Store reward and done signal for the last action
-        
-        Args:
-            reward: Reward received
-            done: Whether the episode is done
+        Store reward and done signal for the last action taken.
+        Called after each environment step to track outcomes.
         """
         self.rewards.append(reward)
         self.dones.append(done)
         
     def compute_advantages(self, last_value: float) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Compute advantages and returns using GAE
+        Compute advantages and returns using Generalized Advantage Estimation (GAE).
+        
+        GAE provides a balance between bias and variance in advantage estimation:
+        - λ=0 corresponds to a TD(0) estimate (low variance, high bias)
+        - λ=1 corresponds to Monte Carlo estimate (high variance, low bias)
+        
+        The advantage formula is:
+        A_t = δ_t + (γλ)δ_{t+1} + (γλ)²δ_{t+2} + ...
+        where δ_t = r_t + γV(s_{t+1}) - V(s_t) is the TD error
         
         Args:
             last_value: Value estimate for the final state
@@ -399,24 +341,39 @@ class PPOAgent:
         Returns:
             Tuple of (returns, advantages)
         """
-        # Initialize return and advantage arrays
         returns = np.zeros(len(self.rewards), dtype=np.float32)
         advantages = np.zeros(len(self.rewards), dtype=np.float32)
         
         values = self.values + [last_value]
         
+        # Compute advantages using GAE (Generalized Advantage Estimation)
         gae = 0
         for t in reversed(range(len(self.rewards))):
+            # TD error: reward + discounted next value - current value
             delta = self.rewards[t] + self.gamma * values[t+1] * (1 - self.dones[t]) - values[t]
+            
+            # Recursive formula for GAE advantage: δ_t + γλA_{t+1}, with initialization A_T = 0
             gae = delta + self.gamma * self.gae_lambda * (1 - self.dones[t]) * gae
             advantages[t] = gae
+            
+            # Returns are advantages + value estimates (R_t = A_t + V(s_t))
             returns[t] = advantages[t] + values[t]
             
         return torch.FloatTensor(returns).to(self.device), torch.FloatTensor(advantages).to(self.device)
         
     def update(self, next_state: np.ndarray = None) -> Dict[str, float]:
         """
-        Update policy using the collected experiences
+        Update policy using the collected experiences.
+        
+        This implements the PPO algorithm:
+        1. Compute advantages using GAE
+        2. Normalize advantages (to stabilize training)
+        3. Perform multiple optimization epochs over mini-batches
+        4. For each batch:
+           a. Compute probability ratio between new and old policies
+           b. Compute clipped surrogate objective
+           c. Compute value loss and entropy bonus
+           d. Update the policy and value networks
         
         Args:
             next_state: Next state value to use for the last experience
@@ -424,11 +381,11 @@ class PPOAgent:
         Returns:
             Dictionary of loss metrics
         """
-        # Ensure we have enough experience
+        # Skip update if no experiences collected
         if len(self.states) == 0:
             return {k: 0.0 for k in self.losses.keys()}
         
-        # Get value of final state
+        # Get value of final state to complete the trajectory
         if next_state is not None:
             with torch.no_grad():
                 next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0).to(self.device)
@@ -438,47 +395,50 @@ class PPOAgent:
                     _, last_value = self.network(next_state_tensor)
                 last_value = last_value.item()
         else:
-            last_value = 0.0
+            last_value = 0.0  # Assume final state has zero value if not provided
             
-        # Compute returns and advantages
+        # Compute advantages and returns
         returns, advantages = self.compute_advantages(last_value)
         
-        # Convert list to tensors
+        # Convert experience lists to tensors
         states = torch.FloatTensor(np.array(self.states)).to(self.device)
         
         if self.continuous_actions:
             actions = torch.FloatTensor(np.array(self.actions)).to(self.device)
+            # For continuous actions, sum log probs across action dimensions
             old_log_probs = torch.FloatTensor(np.array(self.log_probs)).sum(dim=1).to(self.device)
         else:
             actions = torch.LongTensor(np.array(self.actions)).to(self.device)
             old_log_probs = torch.FloatTensor(np.array(self.log_probs)).to(self.device)
         
-        # Normalize advantages
+        # Normalize advantages (reduces variance and stabilizes learning)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
         
-        # Optimization loop
+        # Loss tracking
         total_losses = []
         actor_losses = []
         critic_losses = []
         entropy_losses = []
         
+        # Perform multiple optimization epochs
         for _ in range(self.optimization_epochs):
-            # Create data loader for mini-batches
+            # Randomly shuffle indices for mini-batch sampling
             indices = np.arange(len(self.states))
             np.random.shuffle(indices)
             
+            # Process mini-batches
             for start_idx in range(0, len(self.states), self.batch_size):
                 end_idx = min(start_idx + self.batch_size, len(self.states))
                 batch_indices = indices[start_idx:end_idx]
                 
-                # Get batch data
+                # Extract mini-batch data
                 batch_states = states[batch_indices]
                 batch_actions = actions[batch_indices]
                 batch_returns = returns[batch_indices]
                 batch_advantages = advantages[batch_indices]
                 batch_old_log_probs = old_log_probs[batch_indices]
                 
-                # Forward pass
+                # Forward pass through the network
                 if self.continuous_actions:
                     mean, log_std, values = self.network(batch_states)
                     std = torch.exp(log_std)
@@ -491,20 +451,28 @@ class PPOAgent:
                     log_probs = dist.log_prob(batch_actions)
                     entropy = dist.entropy().mean()
                 
-                # Compute ratios and surrogate objectives
+                # Compute policy ratio: π_new(a|s) / π_old(a|s)
+                # Using log probabilities: exp(log(π_new) - log(π_old))
                 ratios = torch.exp(log_probs - batch_old_log_probs)
+                
+                # Compute surrogate objectives
+                # surr1: standard policy gradient objective multiplied by advantages
                 surr1 = ratios * batch_advantages
+                # surr2: clipped ratio times advantages
                 surr2 = torch.clamp(ratios, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * batch_advantages
                 
                 # Compute losses
+                # Actor loss: negative of minimum surrogate objective (we minimize the negative)
                 actor_loss = -torch.min(surr1, surr2).mean()
+                # Critic loss: MSE between predicted values and target returns
                 critic_loss = F.mse_loss(values.squeeze(-1), batch_returns)
+                # Entropy loss: Encourages exploration by maximizing entropy
                 entropy_loss = -entropy * self.entropy_coef
                 
-                # Total loss
+                # Total loss: combination of actor, critic, and entropy losses
                 loss = actor_loss + self.critic_coef * critic_loss + entropy_loss
                 
-                # Optimize
+                # Backpropagation and optimization
                 self.optimizer.zero_grad()
                 loss.backward()
                 # Clip gradient norm to stabilize training
@@ -524,7 +492,7 @@ class PPOAgent:
             self.losses["critic"].append(np.mean(critic_losses))
             self.losses["entropy"].append(np.mean(entropy_losses))
             
-        # Clear experience buffer
+        # Clear experience buffer after update (PPO is on-policy)
         self.states = []
         self.actions = []
         self.log_probs = []
@@ -541,12 +509,7 @@ class PPOAgent:
         }
     
     def save(self, path: str):
-        """
-        Save agent model to file
-        
-        Args:
-            path: Path to save model
-        """
+        """Save agent model to file"""
         torch.save({
             'network': self.network.state_dict(),
             'optimizer': self.optimizer.state_dict(),
@@ -558,12 +521,7 @@ class PPOAgent:
         }, path)
         
     def load(self, path: str):
-        """
-        Load agent model from file
-        
-        Args:
-            path: Path to load model from
-        """
+        """Load agent model from file"""
         checkpoint = torch.load(path, map_location=self.device)
         
         # Recreate model if necessary
@@ -585,9 +543,7 @@ class PPOAgent:
             
             self.optimizer = optim.Adam(self.network.parameters())
             
-        # Load state dicts
         self.network.load_state_dict(checkpoint['network'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         
-        # Load training state
         self.steps = checkpoint['steps'] 

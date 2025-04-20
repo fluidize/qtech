@@ -324,8 +324,8 @@ def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='Train RL agents for trading')
     
-    parser.add_argument('--algorithm', type=str, default='dqn', choices=['dqn', 'ppo'],
-                        help='RL algorithm to use (default: dqn)')
+    parser.add_argument('--algorithm', type=str, default='ppo', choices=['dqn', 'ppo'],
+                        help='RL algorithm to use (default: ppo)')
     parser.add_argument('--episodes', type=int, default=100,
                         help='Number of training episodes (default: 100)')
     parser.add_argument('--symbol', type=str, default='BTC-USDT',
@@ -347,7 +347,6 @@ def parse_arguments():
     parser.add_argument('--prioritized-replay', action='store_true',
                         help='Use prioritized experience replay (default: False)')
     
-    # DQN specific arguments
     dqn_group = parser.add_argument_group('DQN')
     dqn_group.add_argument('--epsilon-start', type=float, default=1.0,
                            help='Initial exploration rate (default: 1.0)')
@@ -358,7 +357,6 @@ def parse_arguments():
     dqn_group.add_argument('--target-update-freq', type=int, default=10,
                            help='Target network update frequency (default: 10)')
     
-    # PPO specific arguments
     ppo_group = parser.add_argument_group('PPO')
     ppo_group.add_argument('--gae-lambda', type=float, default=0.95,
                            help='GAE lambda parameter (default: 0.95)')
@@ -373,7 +371,6 @@ def parse_arguments():
     ppo_group.add_argument('--optimization-epochs', type=int, default=10,
                            help='Optimization epochs per update (default: 10)')
     
-    # Training parameters
     parser.add_argument('--max-steps', type=int, default=1000,
                         help='Maximum steps per episode (default: 1000)')
     parser.add_argument('--eval-interval', type=int, default=10,
@@ -389,9 +386,46 @@ def parse_arguments():
     
     return parser.parse_args()
 
+class Config:
+    def __init__(self):
+        self.algorithm = 'ppo'  # RL algorithm to use
+        self.episodes = 50  # Number of training episodes
+        self.symbol = 'BTC-USDT'  # Trading pair symbol
+        self.interval = '1min'  # Trading interval
+        self.initial_capital = 10000.0  # Initial capital
+        self.hidden_dims = [128, 64]  # Hidden layer dimensions
+        self.learning_rate = 0.0001  # Learning rate
+        self.gamma = 0.99  # Discount factor
+        self.batch_size = 128  # Batch size
+        self.buffer_capacity = 100000  # Replay buffer capacity
+        self.prioritized_replay = False  # Use prioritized experience replay
+        
+        # DQN specific parameters
+        self.epsilon_start = 1.0  # Initial exploration rate
+        self.epsilon_end = 0.05  # Final exploration rate
+        self.epsilon_decay = 0.999  # Exploration decay rate
+        self.target_update_freq = 10  # Target network update frequency
+        
+        # PPO specific parameters
+        self.gae_lambda = 0.95  # GAE lambda parameter
+        self.clip_epsilon = 0.2  # PPO clipping parameter
+        self.critic_coef = 0.5  # Critic loss coefficient
+        self.entropy_coef = 0.01  # Entropy bonus coefficient
+        self.update_interval = 128  # Steps before policy update
+        self.optimization_epochs = 10  # Optimization epochs per update
+         
+        # Training parameters
+        self.max_steps = 1000  # Maximum steps per episode
+        self.eval_interval = 10  # Interval between evaluations
+        self.save_interval = 25  # Interval between model saves
+        self.model_dir = 'models'  # Directory to save models
+        self.model_name = None  # Base name for model files
+        self.load_model = None  # Path to model file to load
+
 def main():
     """Main function for training RL agents"""
-    args = parse_arguments()
+    # args = parse_arguments()
+    args = Config()
     
     # Generate model name if not provided
     if args.model_name is None:
@@ -481,6 +515,8 @@ def main():
             model_dir=args.model_dir,
             model_name=args.model_name
         )
+
+        evaluate_agent(env, agent)
 
 if __name__ == "__main__":
     main()

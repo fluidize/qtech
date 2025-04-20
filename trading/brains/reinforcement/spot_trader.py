@@ -1,6 +1,3 @@
-# STATE -> ACTIONS
-...
-
 import torch
 import numpy as np
 import pandas as pd
@@ -15,6 +12,7 @@ from rich.table import Table
 from rich.panel import Panel
 
 sys.path.append("trading")
+import pandas_indicators as ta
 from spot_trade_env import TradingEnvironment, Portfolio
 
 class SpotTradingEnv(gym.Env):
@@ -27,7 +25,7 @@ class SpotTradingEnv(gym.Env):
         self,
         symbol: str = "BTC-USDT",
         initial_capital: float = 10000.0,
-        chunks: int = 5,
+        chunks: int = 1,
         interval: str = "5min",
         age_days: int = 10,
         window_size: int = 20,
@@ -118,18 +116,14 @@ class SpotTradingEnv(gym.Env):
         
         # Calculate returns
         returns = context['Close'].pct_change().fillna(0).values
+        log_returns = ta.log_returns(context['Close']).fillna(0).values
         
         # Calculate moving averages
-        ma_short = context['Close'].rolling(window=10).mean().bfill().values
-        ma_long = context['Close'].rolling(window=50).mean().bfill().values
+        ma_short = ta.sma(context['Close'], timeperiod=10).bfill().values
+        ma_long = ta.sma(context['Close'], timeperiod=50).bfill().values
         ma_cross = ma_short - ma_long
         
-        # Calculate RSI
-        delta = context['Close'].diff().fillna(0)
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean().fillna(0)
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean().fillna(0)
-        rs = gain / loss.replace(0, 1e-8)  # Avoid division by zero
-        rsi = 100 - (100 / (1 + rs))
+        rsi = ta.rsi(context['Close'], timeperiod=14)
         
         # Normalize data
         normalized_close = context['Close'] / context['Close'].iloc[0]
@@ -139,15 +133,14 @@ class SpotTradingEnv(gym.Env):
         features = np.column_stack([
             ohlcv[-self.window_size:] / ohlcv[-self.window_size:, 3:4],  # Normalize by close price
             returns[-self.window_size:],
+            log_returns[-self.window_size:],
             ma_cross[-self.window_size:] / ma_long[-self.window_size:],
             rsi[-self.window_size:] / 100,  # Scale to [0, 1]
             volatility[-self.window_size:]
         ])
         
-        # Flatten features
         features = features.flatten().astype(np.float32)
         
-        # Add position information if requested
         if self.include_position:
             # Encode position: 0 = no position, 1 = long position
             position = 1.0 if self.symbol in self.trading_env.portfolio.positions else 0.0
@@ -216,9 +209,9 @@ class SpotTradingEnv(gym.Env):
         # Get new state
         new_observation = self._get_observation()
         
-        # Calculate reward (portfolio value change)
+        ### REWARD FUNCTION
         new_portfolio_value = self.trading_env.portfolio.total_value
-        reward = ((new_portfolio_value / self.last_portfolio_value) - 1.0) * self.reward_scaling
+        reward = new_portfolio_value / self.last_portfolio_value * self.reward_scaling
         
         # Additional metrics for tracking
         self.episode_reward += reward
