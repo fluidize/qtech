@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import model_tools as mt
 
 def sma(series, timeperiod=20):
     """Simple Moving Average"""
@@ -213,12 +214,12 @@ def cmf(high, low, close, volume, period=20):
 
 def hma(series, period=16):
     """Hull Moving Average"""
-    wma_half_period = WMA(series, period=period//2)
-    wma_full_period = WMA(series, period=period)
+    wma_half_period = wma(series, period=period//2)
+    wma_full_period = wma(series, period=period)
     
     # HMA = WMA(2*WMA(period/2) - WMA(period), sqrt(period))
     sqrt_period = int(np.sqrt(period))
-    return WMA(2 * wma_half_period - wma_full_period, period=sqrt_period)
+    return wma(2 * wma_half_period - wma_full_period, period=sqrt_period)
 
 def wma(series, period=20):
     """Weighted Moving Average"""
@@ -252,11 +253,11 @@ def ichimoku(high, low, close, tenkan_period=9, kijun_period=26, senkou_period=5
 
 def ppo(series, fast_period=12, slow_period=26, signal_period=9):
     """Percentage Price Oscillator"""
-    fast_ema = EMA(series, timeperiod=fast_period)
-    slow_ema = EMA(series, timeperiod=slow_period)
+    fast_ema = ema(series, timeperiod=fast_period)
+    slow_ema = ema(series, timeperiod=slow_period)
     
     ppo = ((fast_ema - slow_ema) / slow_ema) * 100
-    signal = EMA(ppo, timeperiod=signal_period)
+    signal = ema(ppo, timeperiod=signal_period)
     histogram = ppo - signal
     
     return ppo, signal, histogram
@@ -264,16 +265,16 @@ def ppo(series, fast_period=12, slow_period=26, signal_period=9):
 def aobv(close, volume, fast_period=5, slow_period=10):
     """Adaptive On Balance Volume - OBV with smoothing and signal line"""
     # Calculate OBV
-    obv = OBV(close, volume)
+    on_balance_volume = obv(close, volume)
     
     # Generate fast and slow EMAs of OBV
-    fast_obv = EMA(obv, timeperiod=fast_period)
-    slow_obv = EMA(obv, timeperiod=slow_period)
+    fast_obv = ema(on_balance_volume, timeperiod=fast_period)
+    slow_obv = ema(on_balance_volume, timeperiod=slow_period)
     
     # Signal: fast OBV - slow OBV (like MACD with OBV)
     signal = fast_obv - slow_obv
     
-    return obv, signal
+    return on_balance_volume, signal
 
 def identify_candlestick_patterns(df, patterns=None):
     """
@@ -413,5 +414,42 @@ def get_candlestick_patterns(df, patterns=None):
     Returns:
         DataFrame with binary indicators for each pattern.
     """
-    patterns_df = identify_candlestick_patterns(df, patterns)
+    patterns_df = identify_candlestick_patterns(df=df, patterns=patterns)
     return patterns_df
+
+if __name__ == "__main__":
+    data = mt.fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
+    data['SMA'] = sma(data['Close'])
+    data['EMA'] = ema(data['Close'])
+    data['RSI'] = rsi(data['Close'])
+    data['MACD'], data['MACD_Signal'] = macd(data['Close'])
+    data['BBands_Upper'], data['BBands_Middle'], data['BBands_Lower'] = bbands(data['Close'])
+    data['Stoch_K'], data['Stoch_D'] = stoch(data['High'], data['Low'], data['Close'])
+    data['ATR'] = atr(data['High'], data['Low'], data['Close'])
+    data['OBV'], data['OBV_Signal'] = aobv(data['Close'], data['Volume'])
+    data['CCI'] = cci(data['High'], data['Low'], data['Close'])
+    data['ADX'], data['ADX_Pos'], data['ADX_Neg'] = adx(data['High'], data['Low'], data['Close'])
+    data['Log_Returns'] = log_returns(data['Close'])
+    data['StdDev'] = stddev(data['Close'])
+    data['ROC'] = roc(data['Close'])
+    data['Momentum'] = mom(data['Close'])
+    data['WilliamsR'] = willr(data['High'], data['Low'], data['Close'])
+    data['MFI'] = mfi(data['High'], data['Low'], data['Close'], data['Volume'])
+    data['KAMA'] = kama(data['Close'])
+    data['VWAP'] = vwap(data['High'], data['Low'], data['Close'], data['Volume'])
+    data['SuperTrend'], data['SuperTrend_Upper'], data['SuperTrend_Lower'] = supertrend(data['High'], data['Low'], data['Close'])
+    data['TSI'], data['TSI_Signal'] = tsi(data['Close'])
+    data['CMF'] = cmf(data['High'], data['Low'], data['Close'], data['Volume'])
+    data['HMA'] = hma(data['Close'])
+    data['WMA'] = wma(data['Close'])
+    data['Ichimoku_Tenkan'], data['Ichimoku_Kijun'], data['Ichimoku_Senkou_A'], data['Ichimoku_Senkou_B'], data['Ichimoku_Chikou'] = ichimoku(data['High'], data['Low'], data['Close'])
+    data['PPO'], data['PPO_Signal'], data['PPO_Histogram'] = ppo(data['Close'])
+    data['AOBV'], data['AOBV_Signal'] = aobv(data['Close'], data['Volume'])
+    data['Doji'], data['Hammer'], data['Shooting_Star'], data['Engulfing'], data['Harami'], data['Morning_Star'], data['Evening_Star'], data['Three_White_Soldiers'], data['Three_Black_Crows'], data['Dark_Cloud_Cover'], data['Piercing_Line'] = get_candlestick_patterns(df=data, patterns=['doji', 'hammer', 'shooting_star', 'engulfing', 'harami', 'morning_star', 'evening_star', 'three_white_soldiers', 'three_black_crows', 'dark_cloud_cover', 'piercing_line'])
+    
+    
+    
+    
+    
+    
+    
