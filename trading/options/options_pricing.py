@@ -34,13 +34,13 @@ def black_scholes_price(S, K, T, r, sigma, option_type='call'):
     return price
 
 # Inputs
-S = 84000         # Current stock price
-K = 175000         # Strike price
+S = 84000
+K = 175000
 expiry_date = datetime(2027, 12, 27)
 today = datetime(2025, 4, 19)
-T = (expiry_date - today).days / 365  # Time to expiry in years
-r = 0.6      # Risk-free interest rate (3%)
-sigma = 0.53    # Volatility (25%)
+T = (expiry_date - today).days / 365
+r = 0.6
+sigma = 0.53
 
 # Get price
 call_price = black_scholes_price(S, K, T, r, sigma, option_type='call')
