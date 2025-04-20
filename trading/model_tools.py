@@ -5,6 +5,10 @@ import yfinance as yf
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
+import hashlib
+import os
+import tempfile
+import json
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -12,7 +16,44 @@ from plotly.subplots import make_subplots
 from rich import print
 import pandas_indicators as ta
 
-def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
+def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cache: bool = True, cache_expiry_hours: int = 24):
+    print("[green]FETCHING DATA[/green]")
+    
+    # Create a unique cache file name based on input parameters
+    cache_key = f"{ticker}_{chunks}_{interval}_{age_days}_{kucoin}"
+    cache_hash = hashlib.sha256(cache_key.encode()).hexdigest()
+    cache_file = os.path.join(tempfile.gettempdir(), f"market_data_{cache_hash}.parquet")
+    
+    # Check if cached data exists and is not expired
+    if use_cache and os.path.exists(cache_file):
+        file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
+        file_age_hours = (datetime.now() - file_modified_time).total_seconds() / 3600
+        
+        if file_age_hours < cache_expiry_hours:
+            try:
+                cached_data = pd.read_parquet(cache_file)
+                print(f"[blue]USING CACHED DATA FROM {file_modified_time}[/blue]")
+                
+                # Save metadata in cache file for debugging
+                with open(f"{cache_file}.json", "w") as f:
+                    json.dump({
+                        "ticker": ticker,
+                        "chunks": chunks,
+                        "interval": interval,
+                        "age_days": age_days,
+                        "kucoin": kucoin,
+                        "cached_time": str(file_modified_time),
+                        "rows": len(cached_data),
+                        "accessed_time": str(datetime.now())
+                    }, f, indent=2)
+                
+                return cached_data
+            except Exception as e:
+                print(f"[yellow]Cache read error: {e}. Fetching fresh data...[/yellow]")
+        else:
+            print(f"[yellow]Cache expired ({file_age_hours:.1f} hours old). Fetching fresh data...[/yellow]")
+    
+    # Fetch fresh data
     print("[green]DOWNLOADING DATA[/green]")
     if not kucoin:
         data = pd.DataFrame()
@@ -93,6 +134,25 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True):
         data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
         data.sort_values('Datetime', inplace=True)
         data.reset_index(drop=True, inplace=True)
+    
+    if use_cache:
+        try:
+            data.to_parquet(cache_file)
+            print(f"[blue]Data cached to {cache_file}[/blue]")
+            
+            with open(f"{cache_file}.json", "w") as f:
+                json.dump({
+                    "ticker": ticker,
+                    "chunks": chunks,
+                    "interval": interval,
+                    "age_days": age_days,
+                    "kucoin": kucoin,
+                    "cached_time": str(datetime.now()),
+                    "rows": len(data)
+                }, f, indent=2)
+                
+        except Exception as e:
+            print(f"[yellow]Failed to cache data: {e}[/yellow]")
         
     return data
 
@@ -301,7 +361,4 @@ def loss_plot(loss_history):
 
 if __name__ == "__main__":
     data = fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
-    
-    main_data, _ = prepare_data_classifier(data, lagged_length=5, train_split=True, pct_threshold=0.1)
-    print(main_data)
 
