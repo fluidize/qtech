@@ -17,14 +17,12 @@ from rich import print
 import pandas_indicators as ta
 
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cache: bool = True, cache_expiry_hours: int = 24):
-    print("[green]FETCHING DATA[/green]")
+    print("[yellow]FETCHING DATA[/yellow]")
     
-    # Create a unique cache file name based on input parameters
     cache_key = f"{ticker}_{chunks}_{interval}_{age_days}_{kucoin}"
     cache_hash = hashlib.sha256(cache_key.encode()).hexdigest()
     cache_file = os.path.join(tempfile.gettempdir(), f"market_data_{cache_hash}.parquet")
     
-    # Check if cached data exists and is not expired
     if use_cache and os.path.exists(cache_file):
         file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
         file_age_hours = (datetime.now() - file_modified_time).total_seconds() / 3600
@@ -34,7 +32,6 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
                 cached_data = pd.read_parquet(cache_file)
                 print(f"[blue]USING CACHED DATA FROM {file_modified_time}[/blue]")
                 
-                # Save metadata in cache file for debugging
                 with open(f"{cache_file}.json", "w") as f:
                     json.dump({
                         "ticker": ticker,
@@ -53,7 +50,6 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
         else:
             print(f"[yellow]Cache expired ({file_age_hours:.1f} hours old). Fetching fresh data...[/yellow]")
     
-    # Fetch fresh data
     print("[green]DOWNLOADING DATA[/green]")
     if not kucoin:
         data = pd.DataFrame()
@@ -165,7 +161,6 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
 
     df = data.copy()
 
-    # Calculate technical indicators using pandas_indicators
     df['Log_Return'] = ta.log_returns(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
@@ -191,7 +186,6 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     
     df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
     
-    # Create lagged features
     lagged_features = []
     for col in df.columns:
         for i in range(1, lagged_length):
