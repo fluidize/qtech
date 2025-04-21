@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import model_tools as mt
+import plotly.graph_objects as go
+import time
 
 def sma(series, timeperiod=20):
     """Simple Moving Average"""
@@ -276,134 +278,142 @@ def aobv(close, volume, fast_period=5, slow_period=10):
     
     return on_balance_volume, signal
 
-def identify_candlestick_patterns(df, patterns=None):
+def psar(high, low, acceleration=0.02, max_acceleration=0.2):
+    """Parabolic SAR"""
+    n = len(high)
+    psar = np.zeros(n, dtype=np.float64)  # Initialize PSAR as a NumPy array
+    trend = np.empty(n, dtype=np.int32)  # Use np.empty instead of np.ones
+    trend.fill(1)  # Fill with 1 for uptrend, -1 for downtrend
+    ep = np.zeros(n, dtype=np.float64)  # Extreme point
+
+    # Initialize first values
+    psar[0] = low[0]
+    ep[0] = high[0]
+    af = acceleration
+
+    for i in range(1, n):
+        # Calculate SAR for current period
+        if trend[i-1] == 1:
+            diff = ep[i-1] - psar[i-1]
+            accel_component = af * diff
+            psar[i] = psar[i-1] + accel_component
+        else:
+            diff = psar[i-1] - ep[i-1]
+            accel_component = af * diff
+            psar[i] = psar[i-1] - accel_component
+
+        trend_reversal = trend[i-1] == 1 and low[i] < psar[i]
+        if trend[i-1] == 1:
+            if low[i] < psar[i]:
+                trend[i] = -1
+                psar[i] = ep[i-1]
+                ep[i] = low[i]
+            else:
+                trend[i] = 1
+                if high[i] > ep[i-1]:
+                    ep[i] = high[i]
+                    af = min(af + acceleration, max_acceleration)
+                else:
+                    ep[i] = ep[i-1]
+        else:
+            if high[i] > psar[i]:
+                trend[i] = 1
+                psar[i] = ep[i-1]
+                ep[i] = high[i]
+            else:
+                trend[i] = -1
+                if low[i] < ep[i-1]:
+                    ep[i] = low[i]
+                    af = min(af + acceleration, max_acceleration)
+                else:
+                    ep[i] = ep[i-1]
+
+    return psar
+
+def identify_candlestick_patterns(open_prices, high_prices, low_prices, close_prices, patterns=None):
     """
     Identify various candlestick patterns in the data.
     Args:
-        df: DataFrame with OHLCV data
+        open_prices: NumPy array of open prices
+        high_prices: NumPy array of high prices
+        low_prices: NumPy array of low prices
+        close_prices: NumPy array of close prices
         patterns: List of patterns to identify. If None, identifies all patterns.
-                 Available patterns: ['doji', 'hammer', 'shooting_star', 'engulfing', 
-                                    'harami', 'morning_star', 'evening_star', 'three_white_soldiers',
-                                    'three_black_crows', 'dark_cloud_cover', 'piercing_line']
     Returns:
-        DataFrame with binary indicators (1 for pattern present, 0 for absent)
+        NumPy array of binary indicators for each pattern.
     """
-    # Calculate basic candle properties
-    df = df.copy()
-    df['body'] = df['Close'] - df['Open']
-    df['upper_shadow'] = df['High'] - df[['Open', 'Close']].max(axis=1)
-    df['lower_shadow'] = df[['Open', 'Close']].min(axis=1) - df['Low']
-    df['total_range'] = df['High'] - df['Low']
-    df['body_ratio'] = abs(df['body']) / df['total_range']
-    
-    # Available patterns
+    n = len(open_prices)
+    body = close_prices - open_prices
+    upper_shadow = high_prices - np.maximum(open_prices, close_prices)
+    lower_shadow = np.minimum(open_prices, close_prices) - low_prices
+    total_range = high_prices - low_prices
+    body_ratio = np.abs(body) / total_range
+
     available_patterns = ['doji', 'hammer', 'shooting_star', 'engulfing', 'harami', 
                          'morning_star', 'evening_star', 'three_white_soldiers',
                          'three_black_crows', 'dark_cloud_cover', 'piercing_line']
     
-    # If no patterns specified, use all available patterns
     if patterns is None:
         patterns = available_patterns
     else:
-        # Validate patterns
         invalid_patterns = set(patterns) - set(available_patterns)
         if invalid_patterns:
             raise ValueError(f"Invalid patterns: {invalid_patterns}. Available patterns: {available_patterns}")
-    
-    # Initialize pattern columns
-    pattern_df = pd.DataFrame(0, index=df.index, columns=patterns)
-    
-    # Helper functions for pattern detection
-    def is_doji(row):
-        return abs(row['body']) < (row['total_range'] * 0.1)
-    
-    def is_hammer(row):
-        return (row['lower_shadow'] > 2 * abs(row['body'])) and (row['upper_shadow'] < abs(row['body']))
-    
-    def is_shooting_star(row):
-        return (row['upper_shadow'] > 2 * abs(row['body'])) and (row['lower_shadow'] < abs(row['body']))
-    
-    def is_engulfing(prev_row, curr_row):
-        return (prev_row['body'] < 0 and curr_row['body'] > 0 and 
-                curr_row['Open'] < prev_row['Close'] and curr_row['Close'] > prev_row['Open'])
-    
-    def is_harami(prev_row, curr_row):
-        return (abs(prev_row['body']) > abs(curr_row['body']) and
-                prev_row['Open'] > curr_row['Close'] and prev_row['Close'] < curr_row['Open'])
-    
-    def is_morning_star(prev2_row, prev_row, curr_row):
-        return (prev2_row['body'] < 0 and 
-                abs(prev_row['body']) < (prev_row['total_range'] * 0.1) and
-                curr_row['body'] > 0 and
-                curr_row['Close'] > prev2_row['Close'])
-    
-    def is_evening_star(prev2_row, prev_row, curr_row):
-        return (prev2_row['body'] > 0 and 
-                abs(prev_row['body']) < (prev_row['total_range'] * 0.1) and
-                curr_row['body'] < 0 and
-                curr_row['Close'] < prev2_row['Close'])
-    
-    def is_three_white_soldiers(prev2_row, prev_row, curr_row):
-        return (prev2_row['body'] > 0 and prev_row['body'] > 0 and curr_row['body'] > 0 and
-                prev_row['Close'] > prev2_row['Close'] and curr_row['Close'] > prev_row['Close'])
-    
-    def is_three_black_crows(prev2_row, prev_row, curr_row):
-        return (prev2_row['body'] < 0 and prev_row['body'] < 0 and curr_row['body'] < 0 and
-                prev_row['Close'] < prev2_row['Close'] and curr_row['Close'] < prev_row['Close'])
-    
-    def is_dark_cloud_cover(prev_row, curr_row):
-        return (prev_row['body'] > 0 and curr_row['body'] < 0 and
-                curr_row['Open'] > prev_row['High'] and
-                curr_row['Close'] < (prev_row['Open'] + prev_row['Close']) / 2)
-    
-    def is_piercing_line(prev_row, curr_row):
-        return (prev_row['body'] < 0 and curr_row['body'] > 0 and
-                curr_row['Open'] < prev_row['Low'] and
-                curr_row['Close'] > (prev_row['Open'] + prev_row['Close']) / 2)
-    
-    # Pattern detection
-    for i in range(2, len(df)):
-        prev2_row = df.iloc[i-2]
-        prev_row = df.iloc[i-1]
-        curr_row = df.iloc[i]
-        
+
+    pattern_results = np.zeros((n, len(patterns)), dtype=np.int32)
+
+    for i in range(2, n):
         # Single candle patterns
-        if 'doji' in patterns and is_doji(curr_row):
-            pattern_df.at[df.index[i], 'doji'] = 1
+        if 'doji' in patterns and abs(body[i]) < (total_range[i] * 0.1):
+            pattern_results[i, patterns.index('doji')] = 1
         
-        if 'hammer' in patterns and is_hammer(curr_row):
-            pattern_df.at[df.index[i], 'hammer'] = 1
+        if 'hammer' in patterns and (lower_shadow[i] > 2 * abs(body[i])) and (upper_shadow[i] < abs(body[i])):
+            pattern_results[i, patterns.index('hammer')] = 1
         
-        if 'shooting_star' in patterns and is_shooting_star(curr_row):
-            pattern_df.at[df.index[i], 'shooting_star'] = 1
+        if 'shooting_star' in patterns and (upper_shadow[i] > 2 * abs(body[i])) and (lower_shadow[i] < abs(body[i])):
+            pattern_results[i, patterns.index('shooting_star')] = 1
         
         # Two candle patterns
-        if 'engulfing' in patterns and is_engulfing(prev_row, curr_row):
-            pattern_df.at[df.index[i], 'engulfing'] = 1
+        if 'engulfing' in patterns and (body[i-1] < 0 and body[i] > 0 and 
+                                      open_prices[i] < close_prices[i-1] and close_prices[i] > open_prices[i-1]):
+            pattern_results[i, patterns.index('engulfing')] = 1
         
-        if 'harami' in patterns and is_harami(prev_row, curr_row):
-            pattern_df.at[df.index[i], 'harami'] = 1
+        if 'harami' in patterns and (abs(body[i-1]) > abs(body[i]) and
+                                    open_prices[i-1] > close_prices[i] and close_prices[i-1] < open_prices[i]):
+            pattern_results[i, patterns.index('harami')] = 1
         
-        if 'dark_cloud_cover' in patterns and is_dark_cloud_cover(prev_row, curr_row):
-            pattern_df.at[df.index[i], 'dark_cloud_cover'] = 1
+        if 'dark_cloud_cover' in patterns and (body[i-1] > 0 and body[i] < 0 and
+                                              open_prices[i] > high_prices[i-1] and
+                                              close_prices[i] < (open_prices[i-1] + close_prices[i-1]) / 2):
+            pattern_results[i, patterns.index('dark_cloud_cover')] = 1
         
-        if 'piercing_line' in patterns and is_piercing_line(prev_row, curr_row):
-            pattern_df.at[df.index[i], 'piercing_line'] = 1
+        if 'piercing_line' in patterns and (body[i-1] < 0 and body[i] > 0 and
+                                           open_prices[i] < low_prices[i-1] and
+                                           close_prices[i] > (open_prices[i-1] + close_prices[i-1]) / 2):
+            pattern_results[i, patterns.index('piercing_line')] = 1
         
         # Three candle patterns
-        if 'morning_star' in patterns and is_morning_star(prev2_row, prev_row, curr_row):
-            pattern_df.at[df.index[i], 'morning_star'] = 1
+        if 'morning_star' in patterns and (body[i-2] < 0 and 
+                                          abs(body[i-1]) < (total_range[i-1] * 0.1) and
+                                          body[i] > 0 and
+                                          close_prices[i] > close_prices[i-2]):
+            pattern_results[i, patterns.index('morning_star')] = 1
         
-        if 'evening_star' in patterns and is_evening_star(prev2_row, prev_row, curr_row):
-            pattern_df.at[df.index[i], 'evening_star'] = 1
+        if 'evening_star' in patterns and (body[i-2] > 0 and 
+                                          abs(body[i-1]) < (total_range[i-1] * 0.1) and
+                                          body[i] < 0 and
+                                          close_prices[i] < close_prices[i-2]):
+            pattern_results[i, patterns.index('evening_star')] = 1
         
-        if 'three_white_soldiers' in patterns and is_three_white_soldiers(prev2_row, prev_row, curr_row):
-            pattern_df.at[df.index[i], 'three_white_soldiers'] = 1
+        if 'three_white_soldiers' in patterns and (body[i-2] > 0 and body[i-1] > 0 and body[i] > 0 and
+                                                  close_prices[i-1] > close_prices[i-2] and close_prices[i] > close_prices[i-1]):
+            pattern_results[i, patterns.index('three_white_soldiers')] = 1
         
-        if 'three_black_crows' in patterns and is_three_black_crows(prev2_row, prev_row, curr_row):
-            pattern_df.at[df.index[i], 'three_black_crows'] = 1
-    
-    return pattern_df
+        if 'three_black_crows' in patterns and (body[i-2] < 0 and body[i-1] < 0 and body[i] < 0 and
+                                               close_prices[i-1] < close_prices[i-2] and close_prices[i] < close_prices[i-1]):
+            pattern_results[i, patterns.index('three_black_crows')] = 1
+
+    return pattern_results
 
 def get_candlestick_patterns(df, patterns=None):
     """
@@ -414,39 +424,60 @@ def get_candlestick_patterns(df, patterns=None):
     Returns:
         DataFrame with binary indicators for each pattern.
     """
-    patterns_df = identify_candlestick_patterns(df=df, patterns=patterns)
-    return patterns_df
+    open_prices = df['Open'].values
+    high_prices = df['High'].values
+    low_prices = df['Low'].values
+    close_prices = df['Close'].values
+
+    pattern_results = identify_candlestick_patterns(open_prices, high_prices, low_prices, close_prices, patterns)
+    
+    # Convert results back to DataFrame
+    pattern_df = pd.DataFrame(pattern_results, index=df.index, columns=patterns)
+    return pattern_df
 
 if __name__ == "__main__":
-    data = mt.fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
-    data['SMA'] = sma(data['Close'])
-    data['EMA'] = ema(data['Close'])
-    data['RSI'] = rsi(data['Close'])
-    data['MACD'], data['MACD_Signal'] = macd(data['Close'])
-    data['BBands_Upper'], data['BBands_Middle'], data['BBands_Lower'] = bbands(data['Close'])
-    data['Stoch_K'], data['Stoch_D'] = stoch(data['High'], data['Low'], data['Close'])
-    data['ATR'] = atr(data['High'], data['Low'], data['Close'])
-    data['OBV'], data['OBV_Signal'] = aobv(data['Close'], data['Volume'])
-    data['CCI'] = cci(data['High'], data['Low'], data['Close'])
-    data['ADX'], data['ADX_Pos'], data['ADX_Neg'] = adx(data['High'], data['Low'], data['Close'])
-    data['Log_Returns'] = log_returns(data['Close'])
-    data['StdDev'] = stddev(data['Close'])
-    data['ROC'] = roc(data['Close'])
-    data['Momentum'] = mom(data['Close'])
-    data['WilliamsR'] = willr(data['High'], data['Low'], data['Close'])
-    data['MFI'] = mfi(data['High'], data['Low'], data['Close'], data['Volume'])
-    data['KAMA'] = kama(data['Close'])
-    data['VWAP'] = vwap(data['High'], data['Low'], data['Close'], data['Volume'])
-    data['SuperTrend'], data['SuperTrend_Upper'], data['SuperTrend_Lower'] = supertrend(data['High'], data['Low'], data['Close'])
-    data['TSI'], data['TSI_Signal'] = tsi(data['Close'])
-    data['CMF'] = cmf(data['High'], data['Low'], data['Close'], data['Volume'])
-    data['HMA'] = hma(data['Close'])
-    data['WMA'] = wma(data['Close'])
-    data['Ichimoku_Tenkan'], data['Ichimoku_Kijun'], data['Ichimoku_Senkou_A'], data['Ichimoku_Senkou_B'], data['Ichimoku_Chikou'] = ichimoku(data['High'], data['Low'], data['Close'])
-    data['PPO'], data['PPO_Signal'], data['PPO_Histogram'] = ppo(data['Close'])
-    data['AOBV'], data['AOBV_Signal'] = aobv(data['Close'], data['Volume'])
-    data['Doji'], data['Hammer'], data['Shooting_Star'], data['Engulfing'], data['Harami'], data['Morning_Star'], data['Evening_Star'], data['Three_White_Soldiers'], data['Three_Black_Crows'], data['Dark_Cloud_Cover'], data['Piercing_Line'] = get_candlestick_patterns(df=data, patterns=['doji', 'hammer', 'shooting_star', 'engulfing', 'harami', 'morning_star', 'evening_star', 'three_white_soldiers', 'three_black_crows', 'dark_cloud_cover', 'piercing_line'])
+    data = mt.fetch_data("BTC-USDT", 29, "1min", 0, kucoin=True)
+    # data['SMA'] = sma(data['Close'])
+    # data['EMA'] = ema(data['Close'])
+    # data['RSI'] = rsi(data['Close'])
+    # data['MACD'], data['MACD_Signal'] = macd(data['Close'])
+    # data['BBands_Upper'], data['BBands_Middle'], data['BBands_Lower'] = bbands(data['Close'])
+    # data['Stoch_K'], data['Stoch_D'] = stoch(data['High'], data['Low'], data['Close'])
+    # data['ATR'] = atr(data['High'], data['Low'], data['Close'])
+    # data['OBV'], data['OBV_Signal'] = aobv(data['Close'], data['Volume'])
+    # data['CCI'] = cci(data['High'], data['Low'], data['Close'])
+    # data['ADX'], data['ADX_Pos'], data['ADX_Neg'] = adx(data['High'], data['Low'], data['Close'])
+    # data['Log_Returns'] = log_returns(data['Close'])
+    # data['StdDev'] = stddev(data['Close'])
+    # data['ROC'] = roc(data['Close'])
+    # data['Momentum'] = mom(data['Close'])
+    # data['WilliamsR'] = willr(data['High'], data['Low'], data['Close'])
+    # data['MFI'] = mfi(data['High'], data['Low'], data['Close'], data['Volume'])
+    # data['KAMA'] = kama(data['Close'])
+    # data['VWAP'] = vwap(data['High'], data['Low'], data['Close'], data['Volume'])
+    # data['SuperTrend'], data['SuperTrend_Upper'], data['SuperTrend_Lower'] = supertrend(data['High'], data['Low'], data['Close'])
+    # data['TSI'], data['TSI_Signal'] = tsi(data['Close'])
+    # data['CMF'] = cmf(data['High'], data['Low'], data['Close'], data['Volume'])
+    # data['HMA'] = hma(data['Close'])
+    # data['WMA'] = wma(data['Close'])
+    # data['Ichimoku_Tenkan'], data['Ichimoku_Kijun'], data['Ichimoku_Senkou_A'], data['Ichimoku_Senkou_B'], data['Ichimoku_Chikou'] = ichimoku(data['High'], data['Low'], data['Close'])
+    # data['PPO'], data['PPO_Signal'], data['PPO_Histogram'] = ppo(data['Close'])
+    # data['AOBV'], data['AOBV_Signal'] = aobv(data['Close'], data['Volume'])
     
+    start_time = time.time()
+    data['Doji'], data['Hammer'], data['Shooting_Star'], data['Engulfing'], data['Harami'], data['Morning_Star'], data['Evening_Star'], data['Three_White_Soldiers'], data['Three_Black_Crows'], data['Dark_Cloud_Cover'], data['Piercing_Line'] = get_candlestick_patterns(df=data, patterns=['doji', 'hammer', 'shooting_star', 'engulfing', 'harami', 'morning_star', 'evening_star', 'three_white_soldiers', 'three_black_crows', 'dark_cloud_cover', 'piercing_line'])
+    end_time = time.time()
+    print(f"Time taken: {end_time - start_time} seconds")
+
+
+    # start_time = time.time()
+    # data['PSAR'] = psar(data['High'].values, data['Low'].values)
+    # end_time = time.time()
+    # print(f"Time taken: {end_time - start_time} seconds")
+    # fig = go.Figure()
+    # fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close']))
+    # fig.add_trace(go.Scatter(x=data.index, y=data['PSAR'], mode='markers', name='PSAR'))
+    # fig.show()
     
     
     
