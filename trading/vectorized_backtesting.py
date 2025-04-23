@@ -40,103 +40,16 @@ class VectorizedBacktesting:
         self.data = mt.fetch_data(self.symbol, self.chunks, self.interval, self.age_days, kucoin=kucoin)
 
     def run_strategy(self, strategy_func, **kwargs):
-
+        """Run a trading strategy on the data"""
         if self.data is None:
             raise ValueError("No data available. Call fetch_data() first.")
-
-        calculations_start_time = time.time()
-        self.data['Returns'] = self.data['Close'].pct_change()
-        
-        self.data['SMA20'] = ta.sma(self.data['Close'], timeperiod=20)
-        self.data['SMA50'] = ta.sma(self.data['Close'], timeperiod=50)
-        self.data['SMA100'] = ta.sma(self.data['Close'], timeperiod=100)
-        self.data['EMA20'] = ta.ema(self.data['Close'], timeperiod=20)
-        
-        self.data['RSI'] = ta.rsi(self.data['Close'], timeperiod=14)
-        
-        macd_line, signal_line = ta.macd(self.data['Close'])
-        self.data['MACD_Line'] = macd_line
-        self.data['MACD_Signal'] = signal_line
-        self.data['MACD_Hist'] = macd_line - signal_line
-        
-        upper, middle, lower = ta.bbands(self.data['Close'])
-        self.data['BB_Upper'] = upper
-        self.data['BB_Middle'] = middle
-        self.data['BB_Lower'] = lower
-        
-        k, d = ta.stoch(self.data['High'], self.data['Low'], self.data['Close'])
-        self.data['Stoch_K'] = k
-        self.data['Stoch_D'] = d
-        
-        self.data['ATR'] = ta.atr(self.data['High'], self.data['Low'], self.data['Close'])
-        
-        self.data['OBV'] = ta.obv(self.data['Close'], self.data['Volume'])
-        
-        self.data['CCI'] = ta.cci(self.data['High'], self.data['Low'], self.data['Close'])
-        
-        adx, plus_di, minus_di = ta.adx(self.data['High'], self.data['Low'], self.data['Close'])
-        self.data['ADX'] = adx
-        self.data['Plus_DI'] = plus_di
-        self.data['Minus_DI'] = minus_di
-        
-        self.data['Log_Returns'] = ta.log_returns(self.data['Close'])
-        
-        self.data['STD'] = ta.stddev(self.data['Close'])
-        
-        self.data['ROC'] = ta.roc(self.data['Close'])
-        
-        self.data['MOM'] = ta.mom(self.data['Close'])
-        
-        self.data['Williams_R'] = ta.willr(self.data['High'], self.data['Low'], self.data['Close'])
-        
-        self.data['MFI'] = ta.mfi(self.data['High'], self.data['Low'], self.data['Close'], self.data['Volume'])
-        
-        self.data['KAMA'] = ta.kama(self.data['Close'])
-        
-        self.data['VWAP'] = ta.vwap(self.data['High'], self.data['Low'], self.data['Close'], self.data['Volume'])
-        
-        supertrend, upper_band, lower_band = ta.supertrend(self.data['High'], self.data['Low'], self.data['Close'])
-        self.data['SuperTrend'] = supertrend
-        self.data['SuperTrend_Upper'] = upper_band
-        self.data['SuperTrend_Lower'] = lower_band
-        
-        tsi, signal = ta.tsi(self.data['Close'])
-        self.data['TSI'] = tsi
-        self.data['TSI_Signal'] = signal
-        
-        self.data['CMF'] = ta.cmf(self.data['High'], self.data['Low'], self.data['Close'], self.data['Volume'])
-        
-        self.data['HMA'] = ta.hma(self.data['Close'])
-        
-        self.data['WMA'] = ta.wma(self.data['Close'])
-        
-        tenkan, kijun, senkou_a, senkou_b, chikou = ta.ichimoku(self.data['High'], self.data['Low'], self.data['Close'])
-        self.data['Ichimoku_Tenkan'] = tenkan
-        self.data['Ichimoku_Kijun'] = kijun
-        self.data['Ichimoku_Senkou_A'] = senkou_a
-        self.data['Ichimoku_Senkou_B'] = senkou_b
-        self.data['Ichimoku_Chikou'] = chikou
-        
-        ppo, signal, hist = ta.ppo(self.data['Close'])
-        self.data['PPO'] = ppo
-        self.data['PPO_Signal'] = signal
-        self.data['PPO_Hist'] = hist
-        
-        obv, signal = ta.aobv(self.data['Close'], self.data['Volume'])
-        self.data['AOBV'] = obv
-        self.data['AOBV_Signal'] = signal
-        
-        self.data['PSAR'] = ta.psar(self.data['High'].values, self.data['Low'].values)
-        
-        patterns_df = ta.get_candlestick_patterns(self.data)
-        self.data = pd.concat([self.data, patterns_df], axis=1)
-        calculations_end_time = time.time()
-        print(f"[green]CALCULATIONS DONE ({calculations_end_time - calculations_start_time:.2f} seconds)[/green]")
 
         backtesting_start_time = time.time()
         signals = strategy_func(self.data, **kwargs)
         backtesting_end_time = time.time()
         print(f"[green]BACKTESTING DONE ({backtesting_end_time - backtesting_start_time:.2f} seconds)[/green]")
+
+        self.data['Returns'] = self.data['Close'].pct_change()
 
         self.data['Position'] = signals
         self.data['Position'] = self.data['Position'].replace(-1, 0)  # Set -1 signals to 0 (close position)
@@ -220,7 +133,7 @@ class VectorizedBacktesting:
                 x=self.data.index,
                 y=self.data['Portfolio_Value'],
                 mode='lines',
-                name='Strategy Portfolio Value',
+                name='Portfolio',
                 line=dict(color='green'),
                 fillcolor='rgba(60, 179, 113, 0.3)'
             ))
@@ -507,9 +420,12 @@ class VectorizedBacktesting:
 
     def reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
+        ma50 = ta.ma(data['Close'], 50)
+        ma100 = ta.ma(data['Close'], 100)
+        macd, signal = ta.macd(data['Close'])
         
-        ma_cross = data['MA50'] < data['MA100']
-        macd_cross = data['MACD_Line'] > data['MACD_Signal']
+        ma_cross = ma50 < ma100
+        macd_cross = macd > signal
         
         position[ma_cross & macd_cross] = 1
         position[~ma_cross & ~macd_cross] = 0
@@ -518,44 +434,48 @@ class VectorizedBacktesting:
 
     def rsi_strategy(self, data: pd.DataFrame, oversold: int = 30, overbought: int = 70) -> pd.Series:
         position = pd.Series(0, index=data.index)
+        rsi = ta.rsi(data['Close'])
         
-        position[data['RSI'] < oversold] = 1
-        position[data['RSI'] > overbought] = 0
+        position[rsi < oversold] = 1
+        position[rsi > overbought] = 0
         
         return position
 
     def macd_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
+        macd, signal = ta.macd(data['Close'])
         
-        position[data['MACD_Line'] > data['MACD_Signal']] = 1
-        position[data['MACD_Line'] < data['MACD_Signal']] = 0
+        position[macd > signal] = 1
+        position[macd < signal] = 0
         
         return position
 
     def supertrend_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        
-        position[data['Close'] > data['SuperTrend']] = 1
-        position[data['Close'] < data['SuperTrend']] = 0
+        supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
+        print(supertrend)
+
+        position[data['Close'] < supertrend_line] = 1
+        position[data['Close'] > supertrend_line] = 0
         
         return position
     
     def psar_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
+        psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
         
-        position[data['Close'] > data['PSAR']] = 1
-        position[data['Close'] < data['PSAR']] = 0
+        position[data['Close'] > psar] = 1
+        position[data['Close'] < psar] = 0
         
         return position
 
-    def custom_scalper_strategy(self, data: pd.DataFrame, 
-                              pct_threshold: float = 0.05,
-                              std_threshold: float = 0.3) -> pd.Series:
+    def custom_scalper_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        pct_threshold = pct_threshold / 100
+        psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
+        candlestick_patterns = ta.get_candlestick_patterns(data, ['Doji', 'Hammer'])
 
-        buy_conditions = data['Close'].pct_change() > pct_threshold
-        sell_conditions = data['Close'].pct_change() < -pct_threshold
+        buy_conditions = (data['Close'] > psar) & candlestick_patterns['Doji']
+        sell_conditions = (data['Close'] < psar) & candlestick_patterns['Hammer']
         
         position[buy_conditions] = 1
         position[sell_conditions] = 0
@@ -636,6 +556,6 @@ if __name__ == "__main__":
     
     backtest.fetch_data(kucoin=True)
     
-    backtest.run_strategy(backtest.psar_strategy)
+    backtest.run_strategy(backtest.supertrend_strategy)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=False)
