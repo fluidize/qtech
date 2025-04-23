@@ -6,19 +6,27 @@ from plotly.subplots import make_subplots
 import scipy.stats as stats
 import matplotlib.pyplot as plt
 
-def wiener_process(n_steps, time_unit=1, gbm=True):
-    #set w to 1 and multiply by delta_w to get log normal distribution
-    y = []
-    w = 1 if gbm else 0
+def wiener_process(n_steps, time_unit=1):
+    w = np.zeros(n_steps * time_unit)
+    delta_t = time_unit / n_steps
 
-    for i in range(n_steps * time_unit):
-        delta_t = time_unit / n_steps
-        # in a wiener process, the variance of the increment delta_w is delta_t. in order to get the stddev, we sqrt
-        # the variance of each step is: Var[ΔW]=Δt
-        delta_w = np.random.normal(1 if gbm else 0, np.sqrt(delta_t)) #numpy requires stddev, not variance
-        w = (w * delta_w) if gbm else (w + delta_w)
-        y.append(w)
-    return y
+    for i in range(1, n_steps * time_unit):
+        delta_w = np.random.normal(0, np.sqrt(delta_t))
+        w[i] = w[i-1] + delta_w
+    
+    return w
+
+def geometric_brownian_motion(S0, drift, volatility, n_steps, time_unit=1):
+    w = wiener_process(n_steps, time_unit=time_unit, gbm=True)
+    
+    S = np.zeros(n_steps * time_unit)
+    S[0] = S0
+    
+    delta_t = time_unit / n_steps
+    for i in range(1, n_steps * time_unit):
+        S[i] = S[i-1] * np.exp((drift - 0.5 * volatility**2) * delta_t + volatility * np.sqrt(delta_t) * (w[i] - w[i-1]))
+    
+    return S
 
 def monte_carlo_simulation(n_steps, n_paths, time_unit=1):
     # if process is log-normal, taking a logarithm reverses the exponential transformation, turning it into a normal distribution
@@ -67,5 +75,22 @@ def plot_paths(df):
     plt.show()
 
 if __name__ == "__main__":
-    paths = monte_carlo_simulation(n_steps=1000, n_paths=1000, time_unit=1)
-    plot_paths(paths)
+    S0 = 100        # Initial stock price
+    mu = 0.05       # Drift (5% expected return)
+    sigma = 0.2     # Volatility (20%)
+    T = 1           # Time period (1 year)
+    dt = 1/252      # Time step (daily for 252 trading days)
+    N = int(T / dt) # Number of time steps
+
+    # Simulate stock price path
+    simulated_prices = geometric_brownian_motion(S0, mu, sigma, N, time_unit=1)
+
+    import matplotlib.pyplot as plt
+
+    # Plot the simulated stock price
+    plt.figure(figsize=(10,6))
+    plt.plot(simulated_prices)
+    plt.title('Simulated Stock Price (Geometric Brownian Motion)')
+    plt.xlabel('Time Steps')
+    plt.ylabel('Stock Price')
+    plt.show()
