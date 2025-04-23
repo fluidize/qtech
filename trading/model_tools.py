@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from rich import print
-import pandas_indicators as ta
+import techincal_analysis as ta
 
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cache: bool = True, cache_expiry_hours: int = 24):
     print("[yellow]FETCHING DATA[/yellow]")
@@ -161,30 +161,30 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
 
     df = data.copy()
 
-    df['Log_Return'] = ta.log_returns(df['Close'])
+    df['Log_Return'] = techincal_analysis.log_returns(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
-    df['MACD'], df['MACD_Signal'] = ta.macd(df['Close'])
+    df['MACD'], df['MACD_Signal'] = techincal_analysis.macd(df['Close'])
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = ta.bbands(df['Close'])
+    df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = techincal_analysis.bbands(df['Close'])
     df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']
     
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'])
+    df['ATR'] = techincal_analysis.atr(df['High'], df['Low'], df['Close'])
     
-    df['STOCH_K'], df['STOCH_D'] = ta.stoch(df['High'], df['Low'], df['Close'])
+    df['STOCH_K'], df['STOCH_D'] = techincal_analysis.stoch(df['High'], df['Low'], df['Close'])
     
-    df['OBV'] = ta.obv(df['Close'], df['Volume'])
+    df['OBV'] = techincal_analysis.obv(df['Close'], df['Volume'])
     
-    df['ROC'] = ta.roc(df['Close'])
+    df['ROC'] = techincal_analysis.roc(df['Close'])
     
-    df['WillR'] = ta.willr(df['High'], df['Low'], df['Close'])
+    df['WillR'] = techincal_analysis.willr(df['High'], df['Low'], df['Close'])
     
-    df['CCI'] = ta.cci(df['High'], df['Low'], df['Close'])
+    df['CCI'] = techincal_analysis.cci(df['High'], df['Low'], df['Close'])
     
-    df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = ta.adx(df['High'], df['Low'], df['Close'])
+    df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = techincal_analysis.adx(df['High'], df['Low'], df['Close'])
     
-    df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
+    df['MFI'] = techincal_analysis.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
     
     lagged_features = []
     for col in df.columns:
@@ -196,12 +196,12 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     if lagged_features:
         df = pd.concat([df] + lagged_features, axis=1)
     
-    df['Close_ZScore'] = (df['Close'] - ta.sma(df['Close'], timeperiod=100)) / ta.stddev(df['Close'], timeperiod=100)
-    df['MA10'] = ta.sma(df['Close'], timeperiod=10) / df['Close']
-    df['MA20'] = ta.sma(df['Close'], timeperiod=20) / df['Close']
-    df['MA50'] = ta.sma(df['Close'], timeperiod=50) / df['Close']
+    df['Close_ZScore'] = (df['Close'] - techincal_analysis.sma(df['Close'], timeperiod=100)) / techincal_analysis.stddev(df['Close'], timeperiod=100)
+    df['MA10'] = techincal_analysis.sma(df['Close'], timeperiod=10) / df['Close']
+    df['MA20'] = techincal_analysis.sma(df['Close'], timeperiod=20) / df['Close']
+    df['MA50'] = techincal_analysis.sma(df['Close'], timeperiod=50) / df['Close']
     df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
-    df['RSI'] = ta.rsi(df['Close'], timeperiod=14)
+    df['RSI'] = techincal_analysis.rsi(df['Close'], timeperiod=14)
     
     df = df.bfill().ffill()
     df.dropna(inplace=True)
@@ -255,45 +255,47 @@ def prepare_data_classifier(data, lagged_length=5, pct_threshold=0.05):
 
     indicators = {}
     
-    indicators['Log_Return'] = ta.log_returns(df['Close'])
+    indicators['Log_Return'] = techincal_analysis.log_returns(df['Close'])
     indicators['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
-    macd, signal = ta.macd(df['Close'])
+    macd, signal = techincal_analysis.macd(df['Close'])
     indicators['MACD'] = macd
     indicators['MACD_Signal'] = signal
     indicators['MACD_Hist'] = macd - signal
 
-    upper, middle, lower = ta.bbands(df['Close'])
+    upper, middle, lower = techincal_analysis.bbands(df['Close'])
     indicators['BB_Upper'] = upper
     indicators['BB_Middle'] = middle
     indicators['BB_Lower'] = lower
     indicators['BB_Width'] = (upper - lower) / middle
     
-    indicators['ATR'] = ta.atr(df['High'], df['Low'], df['Close'])
-    k, d = ta.stoch(df['High'], df['Low'], df['Close'])
+    indicators['ATR'] = techincal_analysis.atr(df['High'], df['Low'], df['Close'])
+    k, d = techincal_analysis.stoch(df['High'], df['Low'], df['Close'])
     indicators['STOCH_K'] = k
     indicators['STOCH_D'] = d
-    indicators['OBV'] = ta.obv(df['Close'], df['Volume'])
-    indicators['ROC'] = ta.roc(df['Close'])
-    indicators['WillR'] = ta.willr(df['High'], df['Low'], df['Close'])
-    indicators['CCI'] = ta.cci(df['High'], df['Low'], df['Close'])
-    adx, plus_di, minus_di = ta.adx(df['High'], df['Low'], df['Close'])
+    indicators['OBV'] = techincal_analysis.obv(df['Close'], df['Volume'])
+    indicators['ROC'] = techincal_analysis.roc(df['Close'])
+    indicators['WillR'] = techincal_analysis.willr(df['High'], df['Low'], df['Close'])
+    indicators['CCI'] = techincal_analysis.cci(df['High'], df['Low'], df['Close'])
+    adx, plus_di, minus_di = techincal_analysis.adx(df['High'], df['Low'], df['Close'])
     indicators['ADX'] = adx
     indicators['PLUS_DI'] = plus_di
     indicators['MINUS_DI'] = minus_di
-    indicators['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
+    indicators['MFI'] = techincal_analysis.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
     
-    patterns = ['doji', 'hammer', 'engulfing', 'morning_star', 'evening_star']
-    pattern_df = ta.get_candlestick_patterns(df, patterns)
+    patterns = ['Doji', 'Hammer', 'Shooting_Star', 'Engulfing', 'Harami', 
+                         'Morning_Star', 'Evening_Star', 'Three_White_Soldiers',
+                         'Three_Black_Crows', 'Dark_Cloud_Cover', 'Piercing_Line']
+    pattern_df = techincal_analysis.get_candlestick_patterns(df, patterns)
     for pattern in patterns:
         indicators[pattern] = pattern_df[pattern]
     
-    indicators['Close_ZScore'] = (df['Close'] - ta.sma(df['Close'], timeperiod=100)) / ta.stddev(df['Close'], timeperiod=100)
-    indicators['MA10'] = ta.sma(df['Close'], timeperiod=10) / df['Close']
-    indicators['MA20'] = ta.sma(df['Close'], timeperiod=20) / df['Close']
-    indicators['MA50'] = ta.sma(df['Close'], timeperiod=50) / df['Close']
+    indicators['Close_ZScore'] = (df['Close'] - techincal_analysis.sma(df['Close'], timeperiod=100)) / techincal_analysis.stddev(df['Close'], timeperiod=100)
+    indicators['MA10'] = techincal_analysis.sma(df['Close'], timeperiod=10) / df['Close']
+    indicators['MA20'] = techincal_analysis.sma(df['Close'], timeperiod=20) / df['Close']
+    indicators['MA50'] = techincal_analysis.sma(df['Close'], timeperiod=50) / df['Close']
     indicators['MA10_MA20_Cross'] = indicators['MA10'] - indicators['MA20']
-    indicators['RSI'] = ta.rsi(df['Close'], timeperiod=14)
+    indicators['RSI'] = techincal_analysis.rsi(df['Close'], timeperiod=14)
     
     lagged_features = {}
     for col in df.columns:

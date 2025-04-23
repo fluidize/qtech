@@ -9,7 +9,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
 
 import model_tools as mt
-import pandas_indicators as ta
+import techincal_analysis as ta
 
 import warnings
 # warnings.filterwarnings("ignore")
@@ -420,21 +420,21 @@ class VectorizedBacktesting:
 
     def reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        ma50 = ta.ma(data['Close'], 50)
-        ma100 = ta.ma(data['Close'], 100)
-        macd, signal = ta.macd(data['Close'])
+        sma50 = techincal_analysis.sma(data['Close'], 50)
+        sma100 = techincal_analysis.sma(data['Close'], 100)
+        macd, signal = techincal_analysis.macd(data['Close'])
         
-        ma_cross = ma50 < ma100
+        sma_cross = sma50 < sma100
         macd_cross = macd > signal
         
-        position[ma_cross & macd_cross] = 1
-        position[~ma_cross & ~macd_cross] = 0
+        position[sma_cross & macd_cross] = 1
+        position[~sma_cross & ~macd_cross] = 0
         
         return position
 
     def rsi_strategy(self, data: pd.DataFrame, oversold: int = 30, overbought: int = 70) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        rsi = ta.rsi(data['Close'])
+        rsi = techincal_analysis.rsi(data['Close'])
         
         position[rsi < oversold] = 1
         position[rsi > overbought] = 0
@@ -443,7 +443,7 @@ class VectorizedBacktesting:
 
     def macd_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        macd, signal = ta.macd(data['Close'])
+        macd, signal = techincal_analysis.macd(data['Close'])
         
         position[macd > signal] = 1
         position[macd < signal] = 0
@@ -452,17 +452,17 @@ class VectorizedBacktesting:
 
     def supertrend_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
+        supertrend, supertrend_line = techincal_analysis.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
         print(supertrend)
 
-        position[data['Close'] < supertrend_line] = 1
-        position[data['Close'] > supertrend_line] = 0
+        position[data['Close'] > supertrend_line] = 1
+        position[data['Close'] < supertrend_line] = 0
         
         return position
     
     def psar_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
+        psar = techincal_analysis.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
         
         position[data['Close'] > psar] = 1
         position[data['Close'] < psar] = 0
@@ -471,11 +471,12 @@ class VectorizedBacktesting:
 
     def custom_scalper_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
-        candlestick_patterns = ta.get_candlestick_patterns(data, ['Doji', 'Hammer'])
+        psar = techincal_analysis.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
+        supertrend, supertrend_line = techincal_analysis.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
+        rsi = techincal_analysis.rsi(data['Close'], timeperiod=30)
 
-        buy_conditions = (data['Close'] > psar) & candlestick_patterns['Doji']
-        sell_conditions = (data['Close'] < psar) & candlestick_patterns['Hammer']
+        buy_conditions = (data['Close'] > psar) & (data['Close'] > supertrend_line) & (rsi < 55)
+        sell_conditions = (data['Close'] < psar) & (data['Close'] < supertrend_line)
         
         position[buy_conditions] = 1
         position[sell_conditions] = 0
@@ -483,8 +484,7 @@ class VectorizedBacktesting:
         return position
 
     def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64) -> pd.Series:
-        sys.path.append(r"trading\brains\time_series\single_predictors")
-        from classifier_model import load_model
+        from brains.time_series.single_predictors.classifier_model import load_model
         import model_tools as mt
         
         USE_BATCH = False
@@ -549,13 +549,13 @@ if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="SOL-USDT",
         initial_capital=39.5,
-        chunks=29,
+        chunks=100,
         interval="1min",
         age_days=0
     )
     
     backtest.fetch_data(kucoin=True)
     
-    backtest.run_strategy(backtest.supertrend_strategy)
+    backtest.run_strategy(backtest.custom_scalper_strategy)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=False)
