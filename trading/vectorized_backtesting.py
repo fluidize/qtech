@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 import model_tools as mt
 import techincal_analysis as ta
+import vb_metrics as metrics
 
 import warnings
 # warnings.filterwarnings("ignore")
@@ -65,59 +66,22 @@ class VectorizedBacktesting:
         return self.data
 
     def get_performance_metrics(self):
-        if self.data is None or 'Strategy_Returns' not in self.data.columns:
+        if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
-        trading_days = 365
-
-        total_return = self.data['Cumulative_Returns'].iloc[-1] - 1
-        max_drawdown = self.data['Drawdown'].min()
-        
-        risk_free_rate = 0.00  #ts market too volatile :broken_heart:
-        daily_rf = (1 + risk_free_rate) ** (1/trading_days) - 1
-        excess_returns = self.data['Strategy_Returns'] - daily_rf
-        sharpe_ratio = np.sqrt(trading_days) * excess_returns.mean() / excess_returns.std()
-        
-        downside_returns = self.data['Strategy_Returns'][self.data['Strategy_Returns'] < 0]
-        sortino_ratio = np.sqrt(trading_days) * (self.data['Strategy_Returns'].mean() - daily_rf) / downside_returns.std()
-
-        pnl_list = []
-        entry_prices = []
-        
-        position_changes = self.data['Position'].diff()
-        for idx in range(len(self.data)):
-            if position_changes[idx] == 1:
-                entry_prices.append(self.data['Close'].iloc[idx])
-            elif position_changes[idx] == -1 and entry_prices:
-                entry_price = entry_prices.pop(0)
-                exit_price = self.data['Close'].iloc[idx]
-                pnl = exit_price - entry_price
-                pnl_list.append(pnl)
-
-        winning_trades = sum(1 for pnl in pnl_list if pnl > 0)
-        total_trades = len(pnl_list)
-        
-        average_wins = np.mean([pnl for pnl in pnl_list if pnl > 0]) if winning_trades > 0 else 0
-        average_losses = np.mean([pnl for pnl in pnl_list if pnl < 0]) if total_trades > 0 else 0
-        RR_ratio = (average_wins / abs(average_losses)) if average_losses < 0 else 0
-
-        win_rate = winning_trades / total_trades if total_trades > 0 else 0
-        BE_rate = 1 / (RR_ratio + 1) if RR_ratio > 0 else 0
-
-        PT_ratio = (self.data['Strategy_Returns'].sum() / total_trades) * 100 if total_trades > 0 else 0
-        profit_factor = (self.data['Strategy_Returns'] > 0).sum() / (self.data['Strategy_Returns'] < 0).sum() if (self.data['Strategy_Returns'] < 0).sum() > 0 else 0
-
         return {
-            'Total Return': total_return,
-            'Max Drawdown': max_drawdown,
-            'Win Rate': win_rate,
-            'Breakeven Rate': BE_rate,
-            'RR Ratio': RR_ratio,
-            'PT Ratio': PT_ratio,
-            'Profit Factor': profit_factor,
-            'Sharpe Ratio': sharpe_ratio,
-            'Sortino Ratio': sortino_ratio,
-            'Total Trades': total_trades,
+            'Total_Return': metrics.get_total_return(self.data['Position'], self.data['Close']),
+            'Alpha': metrics.get_alpha(self.data['Position'], self.data['Close']),
+            'Beta': metrics.get_beta(self.data['Position'], self.data['Close']),
+            'Max_Drawdown': metrics.get_max_drawdown(self.data['Position'], self.data['Close'], self.initial_capital),
+            'Sharpe_Ratio': metrics.get_sharpe_ratio(self.data['Position'], self.data['Close']),
+            'Sortino_Ratio': metrics.get_sortino_ratio(self.data['Position'], self.data['Close']),
+            'Win_Rate': metrics.get_win_rate(self.data['Position'], self.data['Close']),
+            'Breakeven_Rate': metrics.get_breakeven_rate(self.data['Position'], self.data['Close']),
+            'RR_Ratio': metrics.get_rr_ratio(self.data['Position'], self.data['Close']),
+            'PT_Ratio': metrics.get_pt_ratio(self.data['Position'], self.data['Close']),
+            'Profit_Factor': metrics.get_profit_factor(self.data['Position'], self.data['Close']),
+            'Total_Trades': metrics.get_total_trades(self.data['Position'])
         }
 
     def plot_performance(self, show_graph: bool = True, advanced: bool = False):
@@ -129,57 +93,52 @@ class VectorizedBacktesting:
         if not advanced:
             fig = go.Figure()
             
+            portfolio_value = self.data['Portfolio_Value'].values
+            returns = self.data['Returns'].values
+            asset_value = self.initial_capital * (1 + np.cumprod(1 + returns))
+
             fig.add_trace(go.Scatter(
                 x=self.data.index,
-                y=self.data['Portfolio_Value'],
+                y=portfolio_value,
                 mode='lines',
                 name='Portfolio',
                 line=dict(color='green'),
                 fillcolor='rgba(60, 179, 113, 0.3)'
             ))
             
-            asset_value = self.initial_capital * (1 + self.data['Returns'].cumsum())
             fig.add_trace(go.Scatter(
                 x=self.data.index,
                 y=asset_value,
                 mode='lines',
                 name='Asset Value'
             ))
-            
-            position_changes = self.data['Position'].diff()
-            buy_signals = self.data[position_changes > 0]
-            sell_signals = self.data[position_changes < 0]
-            
+
+            position_changes = np.diff(self.data['Position'].values)
+            buy_signals = self.data.index[np.where(position_changes > 0)[0] + 1]
+            sell_signals = self.data.index[np.where(position_changes < 0)[0] + 1]
+
             offset = self.initial_capital * 0.0005
-            buy_asset_values = asset_value[buy_signals.index] - offset
+            buy_asset_values = asset_value[np.where(position_changes > 0)[0] + 1] - offset
+            sell_asset_values = asset_value[np.where(position_changes < 0)[0] + 1] + offset
+
             fig.add_trace(go.Scatter(
-                x=buy_signals.index,
+                x=buy_signals,
                 y=buy_asset_values,
                 mode='markers',
                 name='Buy',
-                marker=dict(
-                    color='green',
-                    size=10,
-                    symbol='triangle-up'
-                )
+                marker=dict(color='green', size=10, symbol='triangle-up')
             ))
-            
-            sell_asset_values = asset_value[sell_signals.index] + offset
+
             fig.add_trace(go.Scatter(
-                x=sell_signals.index,
+                x=sell_signals,
                 y=sell_asset_values,
                 mode='markers',
                 name='Sell',
-                marker=dict(
-                    color='red',
-                    size=10,
-                    symbol='triangle-down'
-                )
+                marker=dict(color='red', size=10, symbol='triangle-down')
             ))
             
-            summary = self.get_performance_metrics()
             fig.update_layout(
-                title=f'{self.symbol} {self.interval} {self.age_days}d old | TR: {summary["Total Return"]*100:.3f}% | Max DD: {summary["Max Drawdown"]*100:.3f}% | RR: {summary["RR Ratio"]:.3f} | WR: {summary["Win Rate"]*100:.3f}% | BE: {summary["Breakeven Rate"]*100:.3f}% | PT: {summary["PT Ratio"]*100:.3f}% | PF: {summary["Profit Factor"]:.3f} | Sharpe: {summary["Sharpe Ratio"]:.3f} | Sortino: {summary["Sortino Ratio"]:.3f} | Trades: {summary["Total Trades"]}',
+                title=f'{self.symbol} {self.interval} {self.age_days}d old | TR: {summary["Total_Return"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | BE: {summary["Breakeven_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis_title='Date',
                 yaxis_title='Value',
                 showlegend=True,
@@ -193,12 +152,13 @@ class VectorizedBacktesting:
                         )
                     )
         else: # Advanced Plotting
+            start = time.time()
             fig = go.Figure().set_subplots(
                 rows=4, cols=2,
                 subplot_titles=(
-                    "Equity Curve", "Drawdown Curve",
+                    f"Equity Curve | TR: {summary['Total_Return']*100:.3f}% | α: {summary['Alpha']*100:.3f}% | β: {summary['Beta']:.3f}", "Drawdown Curve",
                     "Profit and Loss Distribution (%)", "Average Profit per Trade (%)",
-                    f"Win Rate | BE: {summary['Breakeven Rate']*100:.2f}%", "Sharpe Ratio",
+                    f"Win Rate | BE: {summary['Breakeven_Rate']*100:.2f}%", f"Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f}",
                     "Position Size Distribution", "Risk/Reward Distribution"
                 ),
                 specs=[
@@ -222,7 +182,7 @@ class VectorizedBacktesting:
                 row=1, col=1
             )
             
-            asset_value = self.initial_capital * (1 + self.data['Returns'].cumsum())
+            asset_value = self.initial_capital * (1 + self.data['Returns']).cumprod()
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
@@ -250,7 +210,7 @@ class VectorizedBacktesting:
             pnl_list = []
             entry_prices = []
             
-            position_changes = self.data['Position'].diff()
+            position_changes = self.data['Position'].diff().values
             for idx in range(len(self.data)):
                 if position_changes[idx] == 1:
                     entry_prices.append(self.data['Close'].iloc[idx])
@@ -392,6 +352,9 @@ class VectorizedBacktesting:
                 row=4, col=2
             )
 
+            end = time.time()
+            print(f"[green]Advanced Plotting Done ({end - start:.2f} seconds)[/green]")
+
             # Update layout
             fig.update_layout(
                 title_text=f"{self.symbol} {self.interval} Performance Analysis",
@@ -420,9 +383,9 @@ class VectorizedBacktesting:
 
     def reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        sma50 = techincal_analysis.sma(data['Close'], 50)
-        sma100 = techincal_analysis.sma(data['Close'], 100)
-        macd, signal = techincal_analysis.macd(data['Close'])
+        sma50 = ta.sma(data['Close'], 50)
+        sma100 = ta.sma(data['Close'], 100)
+        macd, signal = ta.macd(data['Close'])
         
         sma_cross = sma50 < sma100
         macd_cross = macd > signal
@@ -434,7 +397,7 @@ class VectorizedBacktesting:
 
     def rsi_strategy(self, data: pd.DataFrame, oversold: int = 30, overbought: int = 70) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        rsi = techincal_analysis.rsi(data['Close'])
+        rsi = ta.rsi(data['Close'])
         
         position[rsi < oversold] = 1
         position[rsi > overbought] = 0
@@ -443,7 +406,7 @@ class VectorizedBacktesting:
 
     def macd_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        macd, signal = techincal_analysis.macd(data['Close'])
+        macd, signal = ta.macd(data['Close'])
         
         position[macd > signal] = 1
         position[macd < signal] = 0
@@ -452,8 +415,7 @@ class VectorizedBacktesting:
 
     def supertrend_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        supertrend, supertrend_line = techincal_analysis.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
-        print(supertrend)
+        supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
 
         position[data['Close'] > supertrend_line] = 1
         position[data['Close'] < supertrend_line] = 0
@@ -462,7 +424,7 @@ class VectorizedBacktesting:
     
     def psar_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        psar = techincal_analysis.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
+        psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
         
         position[data['Close'] > psar] = 1
         position[data['Close'] < psar] = 0
@@ -471,9 +433,9 @@ class VectorizedBacktesting:
 
     def custom_scalper_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        psar = techincal_analysis.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
-        supertrend, supertrend_line = techincal_analysis.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
-        rsi = techincal_analysis.rsi(data['Close'], timeperiod=30)
+        psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
+        supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
+        rsi = ta.rsi(data['Close'], timeperiod=30)
 
         buy_conditions = (data['Close'] > psar) & (data['Close'] > supertrend_line) & (rsi < 55)
         sell_conditions = (data['Close'] < psar) & (data['Close'] < supertrend_line)
@@ -549,13 +511,13 @@ if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="SOL-USDT",
         initial_capital=39.5,
-        chunks=100,
+        chunks=1,
         interval="1min",
         age_days=0
     )
     
     backtest.fetch_data(kucoin=True)
     
-    backtest.run_strategy(backtest.custom_scalper_strategy)
+    backtest.run_strategy(backtest.perfect_strategy)
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=False)
+    backtest.plot_performance(advanced=True)
