@@ -1,100 +1,131 @@
-import fintech.trading.algorithmic.spot_trade_env as spot
-from fintech.trading.algorithmic.spot_trade_env import BacktestEnvironment
-from fintech.trading.algorithmic.spot_trade_env import TradingEnvironment
-from numba import jit
+import itertools
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import numpy as np
-from tqdm import tqdm
+from typing import Dict, List, Any, Callable
+from rich import print
+from rich.table import Table
+from rich.console import Console
 
-class GridSearch:
-    def __init__(self, env: TradingEnvironment):
-        self.env = env
-        self.current_symbol = env.get_current_symbol()
+import sys, os
+sys.path.append("trading")
+from vectorized_backtesting import VectorizedBacktesting
+
+class AlgorithmGridSearch:
+    def __init__(
+        self,
+        backtest: VectorizedBacktesting,
+        strategy_func: Callable,
+        param_grid: Dict[str, List[Any]],
+        metric: str = "Total Return"
+    ):
+        """
+        Initialize the grid search framework.
+        
+        Args:
+            backtest: VectorizedBacktesting instance
+            strategy_func: The strategy function to optimize
+            param_grid: Dictionary of parameters to search
+            metric: Performance metric to optimize (default: Total Return)
+        """
+        self.backtest = backtest
+        self.strategy_func = strategy_func
+        self.param_grid = param_grid
+        self.metric = metric
         self.results = []
+        self.console = Console()
 
-    def Custom_Scalper_GridSearch(self, data: pd.DataFrame, std_threshold: float, pct_threshold: float, window_size: int = 5):
-        std = spot._calculate_std(data, window_size)
+    def _generate_param_combinations(self) -> List[Dict[str, Any]]:
+        """Generate all possible combinations of parameters."""
+        keys = self.param_grid.keys()
+        values = self.param_grid.values()
+        combinations = [dict(zip(keys, combo)) for combo in itertools.product(*values)]
+        return combinations
+
+    def run(self) -> pd.DataFrame:
+        """Run the grid search and return results sorted by the specified metric."""
+        param_combinations = self._generate_param_combinations()
+        total_combinations = len(param_combinations)
         
-        closes = data['Close'].values
-        prev_closes = np.roll(closes, 1)
-        price_change_pct = ((closes - prev_closes) / prev_closes) * 100
+        table = Table(title="Grid Search Progress")
+        table.add_column("Combination", justify="right")
+        table.add_column("Parameters", style="cyan")
+        table.add_column("Performance", style="green")
         
-        buy_signals = (price_change_pct > pct_threshold) & (std > std_threshold)
-        sell_signals = price_change_pct < -pct_threshold
-        
-        return {
-            'buy_signals': buy_signals,
-            'sell_signals': sell_signals,
-            'timestamps': data['Datetime'].values,
-            'prices': closes
-        }
-    
-    def evaluate_parameters(self, std_threshold: float, pct_threshold: float) -> float:
-        self.env.reset()
-        
-        data = self.env.data[self.current_symbol]
-        
-        signals = self.Custom_Scalper_GridSearch(data, std_threshold, pct_threshold)
-        
-        for i in range(len(data)):
-            current_signals = {
-                'buy': signals['buy_signals'][i],
-                'sell': signals['sell_signals'][i]
+        for i, params in enumerate(param_combinations, 1):
+            self.backtest.run_strategy(self.strategy_func, **params)
+            metrics = self.backtest.get_performance_metrics()
+            
+            result = {
+                "parameters": params,
+                "metrics": metrics
             }
-            self.env.step()
-            self.env.execute_dict(current_signals)
+            self.results.append(result)
+            
+            table.add_row(
+                f"{i}/{total_combinations}",
+                str(params),
+                f"{metrics[self.metric]:.2%}"
+            )
+            self.console.clear()
+            self.console.print(table)
         
-        summary = self.env.get_summary()
-        return summary['PT Ratio']
+        results_df = pd.DataFrame([
+            {
+                **result["parameters"],
+                **result["metrics"]
+            }
+            for result in self.results
+        ])
+        
+        return results_df.sort_values(by=self.metric, ascending=False)
+
+    def get_best_params(self) -> Dict[str, Any]:
+        """Get the best parameters based on the specified metric."""
+        if not self.results:
+            raise ValueError("No results available. Run the grid search first.")
+        
+        best_result = max(self.results, key=lambda x: x["metrics"][self.metric])
+        return best_result["parameters"]
+
+    def get_best_metrics(self) -> Dict[str, float]:
+        """Get the metrics for the best parameter combination."""
+        if not self.results:
+            raise ValueError("No results available. Run the grid search first.")
+        
+        best_result = max(self.results, key=lambda x: x["metrics"][self.metric])
+        return best_result["metrics"]
+
+    def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
+        """Plot the performance of the best parameter combination."""
+        best_params = self.get_best_params()
+        self.backtest.run_strategy(self.strategy_func, **best_params)
+        return self.backtest.plot_performance(show_graph=show_graph, advanced=advanced)
+
+if __name__ == "__main__":
+    backtest = VectorizedBacktesting(
+        symbol="BTC-USDT",
+        initial_capital=10000.0,
+        chunks=5,
+        interval="5min",
+        age_days=10
+    )
     
-    def run(self, grid1: np.ndarray,
-            grid2: np.ndarray,
-            show_graph: bool = False):
-
-        self.env.fetch_data()
-        print("Starting Grid Search")
-        
-        results = pd.DataFrame(columns=['grid1', 'grid2', 'pt_ratio'])
-        
-        total_iterations = len(grid1) * len(grid2)
-        progress_bar = tqdm(total=total_iterations, desc="Grid Search Progress")
-        
-        for i, std_threshold in enumerate(grid1):
-            for j, pct_threshold in enumerate(grid2):
-                pt_ratio = self.evaluate_parameters(std_threshold, pct_threshold)
-                results = pd.concat([results, pd.DataFrame({'grid1': std_threshold, 'grid2': pct_threshold, 'pt_ratio': pt_ratio})], ignore_index=True)
-                progress_bar.update(1)
-        
-        progress_bar.close()
-        
-        fig = go.Figure(data=go.Heatmap(
-            z=results['pt_ratio'],
-            x=grid2,
-            y=grid1,
-            colorscale='Viridis',
-            colorbar=dict(title="Profit to Trade Ratio (%)"),
-            text=np.round(results['pt_ratio'], 2),
-            texttemplate='%{text}%',
-            textfont={"size": 10},
-            hoverinfo='text',
-        ))
-        
-        fig.update_layout(
-            title=f"Grid Search Results - {self.current_symbol}",
-            xaxis_title="Price Change Threshold (%)",
-            yaxis_title="Standard Deviation Threshold",
-            xaxis=dict(tickmode='linear'),
-            yaxis=dict(tickmode='linear'),
-            autosize=True,
-        )
-        
-        if show_graph:
-            fig.show()
-
-# Example usage
-env = TradingEnvironment(symbols=['SOL-USD'], initial_capital=1000, chunks=1, interval='1m', age_days=0)
-grid_search = GridSearch(env)
-results = grid_search.run(np.array([0.005, 0.01, 0.02]), np.array([0.02, 0.05, 0.1]), show_graph=True)
-        
+    backtest.fetch_data(kucoin=True)
+    
+    param_grid = {
+        "oversold": [20, 25, 30, 35],
+        "overbought": [65, 70, 75, 80]
+    }
+    
+    grid_search = AlgorithmGridSearch(
+        backtest=backtest,
+        strategy_func=backtest.rsi_strategy,
+        param_grid=param_grid,
+        metric="Total Return"
+    )
+    
+    results = grid_search.run()
+    
+    print("\nTop 5 Parameter Combinations:")
+    print(results.head())
+    
+    grid_search.plot_best_performance(advanced=True)
