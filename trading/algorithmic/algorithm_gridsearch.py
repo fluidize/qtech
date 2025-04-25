@@ -4,6 +4,9 @@ from typing import Dict, List, Any, Callable
 from rich import print
 from rich.table import Table
 from rich.console import Console
+from tqdm import tqdm
+import concurrent.futures
+from functools import partial
 
 import sys, os
 sys.path.append("trading")
@@ -15,7 +18,8 @@ class AlgorithmGridSearch:
         backtest: VectorizedBacktesting,
         strategy_func: Callable,
         param_grid: Dict[str, List[Any]],
-        metric: str = "Total Return"
+        metric: str = "Total Return",
+        max_workers: int = None
     ):
         """
         Initialize the grid search framework.
@@ -25,6 +29,7 @@ class AlgorithmGridSearch:
             strategy_func: The strategy function to optimize
             param_grid: Dictionary of parameters to search
             metric: Performance metric to optimize (default: Total Return)
+            max_workers: Maximum number of parallel workers (default: None, uses system's default)
         """
         self.backtest = backtest
         self.strategy_func = strategy_func
@@ -32,51 +37,83 @@ class AlgorithmGridSearch:
         self.metric = metric
         self.results = []
         self.console = Console()
+        self.max_workers = max_workers
 
     def _generate_param_combinations(self) -> List[Dict[str, Any]]:
         """Generate all possible combinations of parameters."""
         keys = self.param_grid.keys()
         values = self.param_grid.values()
         combinations = [dict(zip(keys, combo)) for combo in itertools.product(*values)]
-        return combinations
+        
+        if self.strategy_func.__name__ == "rsi_strategy":
+            valid_combinations = [
+                param for param in combinations 
+                if param["oversold"] < param["overbought"]
+            ]
+        if self.strategy_func.__name__ == "macd_strategy":
+            valid_combinations = [
+                param for param in combinations 
+                if param["fastperiod"] < param["slowperiod"]
+            ]
+        
+        return valid_combinations
 
-    def run(self) -> pd.DataFrame:
-        """Run the grid search and return results sorted by the specified metric."""
+    def _run_single_combination(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a single parameter combination and return the results."""
+        self.backtest.run_strategy(self.strategy_func, **params)
+        metrics = self.backtest.get_performance_metrics()
+        return {
+            "parameters": params,
+            "metrics": metrics
+        }
+
+    def run(self, multiprocessing: bool = False) -> pd.DataFrame:
+        """Run the grid search in parallel and return results sorted by the specified metric."""
         param_combinations = self._generate_param_combinations()
         total_combinations = len(param_combinations)
         
-        table = Table(title="Grid Search Progress")
-        table.add_column("Combination", justify="right")
+        table = Table(title="Grid Search Results")
         table.add_column("Parameters", style="cyan")
         table.add_column("Performance", style="green")
         
-        for i, params in enumerate(param_combinations, 1):
-            self.backtest.run_strategy(self.strategy_func, **params)
-            metrics = self.backtest.get_performance_metrics()
-            
-            result = {
-                "parameters": params,
-                "metrics": metrics
-            }
-            self.results.append(result)
-            
-            table.add_row(
-                f"{i}/{total_combinations}",
-                str(params),
-                f"{metrics[self.metric]:.2%}"
-            )
-            self.console.clear()
-            self.console.print(table)
+        progress_bar = tqdm(total=total_combinations, desc="Grid Search Progress")
         
+        def update_progress(future):
+            result = future.result()
+            self.results.append(result)
+            progress_bar.update(1)
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = [executor.submit(self._run_single_combination, params) for params in param_combinations]
+            
+            for future in futures:
+                future.add_done_callback(update_progress)
+            
+            concurrent.futures.wait(futures)
+        
+        progress_bar.close()
+        
+        # Sort results by metric in descending order
+        sorted_results = sorted(self.results, key=lambda x: x["metrics"][self.metric], reverse=True)
+        
+        # Print the results table
+        for i, result in enumerate(sorted_results, 1):
+            table.add_row(
+                str(result["parameters"]),
+                f"{result['metrics'][self.metric]:.2%}"
+            )
+        self.console.print(table)
+        
+        # Create and return the results DataFrame
         results_df = pd.DataFrame([
             {
                 **result["parameters"],
                 **result["metrics"]
             }
-            for result in self.results
+            for result in sorted_results
         ])
         
-        return results_df.sort_values(by=self.metric, ascending=False)
+        return results_df
 
     def get_best_params(self) -> Dict[str, Any]:
         """Get the best parameters based on the specified metric."""
@@ -104,28 +141,28 @@ if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="BTC-USDT",
         initial_capital=10000.0,
-        chunks=5,
-        interval="5min",
-        age_days=10
+        chunks=15,
+        interval="1min",
+        age_days=0
     )
     
     backtest.fetch_data(kucoin=True)
     
     param_grid = {
-        "oversold": [20, 25, 30, 35],
-        "overbought": [65, 70, 75, 80]
+        "fastperiod": list(range(1, 100, 10)),
+        "slowperiod": list(range(1, 100, 10)),
+        "signalperiod": list(range(1, 100, 10))
     }
     
     grid_search = AlgorithmGridSearch(
         backtest=backtest,
-        strategy_func=backtest.rsi_strategy,
+        strategy_func=backtest.macd_strategy,
         param_grid=param_grid,
-        metric="Total Return"
+        metric="Alpha",
+        max_workers=24  # Adjust based on your system's capabilities
     )
     
     results = grid_search.run()
     
-    print("\nTop 5 Parameter Combinations:")
-    print(results.head())
-    
     grid_search.plot_best_performance(advanced=True)
+    print(grid_search.get_best_params())

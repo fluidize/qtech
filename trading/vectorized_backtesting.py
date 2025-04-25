@@ -48,7 +48,7 @@ class VectorizedBacktesting:
         backtesting_start_time = time.time()
         signals = strategy_func(self.data, **kwargs)
         backtesting_end_time = time.time()
-        print(f"[green]BACKTESTING DONE ({backtesting_end_time - backtesting_start_time:.2f} seconds)[/green]")
+        # print(f"[green]BACKTESTING DONE ({backtesting_end_time - backtesting_start_time:.2f} seconds)[/green]")
 
         self.data['Returns'] = self.data['Close'].pct_change()
 
@@ -396,17 +396,36 @@ class VectorizedBacktesting:
         return position
 
     def rsi_strategy(self, data: pd.DataFrame, oversold: int = 30, overbought: int = 70) -> pd.Series:
+        """RSI strategy implementation.
+        
+        Args:
+            data: DataFrame with price data
+            oversold: RSI threshold for oversold conditions (default: 30)
+            overbought: RSI threshold for overbought conditions (default: 70)
+            
+        Returns:
+            pd.Series: Position series (1 for long, 0 for flat)
+        """
+        if oversold >= overbought:
+            print(f"Warning: Invalid RSI thresholds - oversold ({oversold}) >= overbought ({overbought})")
+            return pd.Series(0, index=data.index)
+        
         position = pd.Series(0, index=data.index)
         rsi = ta.rsi(data['Close'])
         
-        position[rsi < oversold] = 1
-        position[rsi > overbought] = 0
+        # Buy when RSI is below oversold threshold
+        buy_conditions = (rsi < oversold)
+        # Sell when RSI is above overbought threshold
+        sell_conditions = (rsi > overbought)
+        
+        position[buy_conditions] = 1
+        position[sell_conditions] = 0
         
         return position
 
-    def macd_strategy(self, data: pd.DataFrame) -> pd.Series:
+    def macd_strategy(self, data: pd.DataFrame, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        macd, signal = ta.macd(data['Close'])
+        macd, signal = ta.macd(data['Close'], fastperiod=fastperiod, slowperiod=slowperiod, signalperiod=signalperiod)
         
         position[macd > signal] = 1
         position[macd < signal] = 0
@@ -511,13 +530,13 @@ if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="SOL-USDT",
         initial_capital=39.5,
-        chunks=1,
+        chunks=365,
         interval="1min",
         age_days=0
     )
     
     backtest.fetch_data(kucoin=True)
     
-    backtest.run_strategy(backtest.perfect_strategy)
+    backtest.run_strategy(backtest.macd_strategy, fastperiod=1, slowperiod=11, signalperiod=31)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=True)
