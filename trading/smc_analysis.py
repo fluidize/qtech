@@ -61,15 +61,52 @@ def support_resistance_levels(open: pd.Series, high: pd.Series, low: pd.Series, 
     
     return support, resistance
 
+def fvg(open: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, pct_threshold: float = 0.005) -> pd.DataFrame:
+    """
+    Calculate the Fair Value Gap from open, high, low, and close prices.
+    """
+    pct_threshold = pct_threshold / 100
+    fvg = pd.DataFrame(index=open.index, columns=["Lower_Range", "Upper_Range", "Direction"])
+    for i in range(2, len(high)):  # need at least 3 candles
+        # Bullish FVG: Candle3_low > Candle1_high
+        if low[i] > high[i-2]:
+            gap_size = low[i] - high[i-2]
+            if gap_size / high[i-2] >= pct_threshold:
+                fvg.loc[i, "Lower_Range"] = high[i-2]
+                fvg.loc[i, "Upper_Range"] = low[i]
+                fvg.loc[i, "Direction"] = "Bullish"
+
+        # Bearish FVG: Candle3_high < Candle1_low
+        if high[i] < low[i-2]:
+            gap_size = low[i-2] - high[i]
+            if gap_size / low[i-2] >= pct_threshold:
+                fvg.loc[i, "Lower_Range"] = high[i]
+                fvg.loc[i, "Upper_Range"] = low[i-2]
+                fvg.loc[i, "Direction"] = "Bearish"
+    return fvg
+
 if __name__ == "__main__":
     data = mt.fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True, use_cache=True)
     pivots = pivot_points(data["Open"], data["High"], data["Low"], data["Close"])
     support, resistance = support_resistance_levels(data["Open"], data["High"], data["Low"], data["Close"])
-    
+    fvg = fvg(data["Open"], data["High"], data["Low"], data["Close"])
+
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=data.index, open=data["Open"], high=data["High"], low=data["Low"], close=data["Close"], name="Close"))
-    # fig.add_trace(go.Scatter(x=pivot_points["Price_Index"][pivot_points["Type"] == "Swing_High"], y=pivot_points["Price"][pivot_points["Type"] == "Swing_High"], mode="markers", name="Swing High", marker=dict(color="red", size=10)))
-    # fig.add_trace(go.Scatter(x=pivot_points["Price_Index"][pivot_points["Type"] == "Swing_Low"], y=pivot_points["Price"][pivot_points["Type"] == "Swing_Low"], mode="markers", name="Swing Low", marker=dict(color="blue", size=10)))
-    fig.add_trace(go.Scatter(x=data.index, y=support, mode="lines", name="Support", line=dict(color="green", dash="dash")))
-    fig.add_trace(go.Scatter(x=data.index, y=resistance, mode="lines", name="Resistance", line=dict(color="red", dash="dash")))
+    print(fvg)
+    # # Add FVG boxes
+    # for idx, row in fvg.iterrows():
+    #     if pd.notna(row["Lower_Range"]):
+    #         fig.add_shape(
+    #             type="rect",
+    #             x0=idx,
+    #             x1=idx,
+    #             y0=row["Lower_Range"],
+    #             y1=row["Upper_Range"],
+    #             fillcolor="blue",
+    #             opacity=0.2,
+    #             line=dict(width=0),
+    #             layer="below"
+    #         )
+    
     fig.show()
