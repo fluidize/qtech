@@ -75,19 +75,17 @@ def plot_paths(df):
     plt.show()
 
 if __name__ == "__main__":
-    S0 = 100        # Initial stock price
-    mu = 0.05       # Drift (5% expected return)
-    sigma = 0.2     # Volatility (20%)
-    T = 1           # Time period (1 year)
-    dt = 1/252      # Time step (daily for 252 trading days)
+    S0 = 100 # Initial stock price
+    mu = 0.05 # Drift (5% expected return)
+    sigma = 0.2 # Volatility (20%)
+    T = 1 # Time period (1 year)
+    dt = 1/252 # Time step
     N = int(T / dt) # Number of time steps
 
     # Simulate stock price path
     simulated_prices = geometric_brownian_motion(S0, mu, sigma, N, time_unit=1)
 
     import matplotlib.pyplot as plt
-
-    # Plot the simulated stock price
     plt.figure(figsize=(10,6))
     plt.plot(simulated_prices)
     plt.title('Simulated Stock Price (Geometric Brownian Motion)')

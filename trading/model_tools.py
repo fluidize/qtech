@@ -161,30 +161,30 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
 
     df = data.copy()
 
-    df['Log_Return'] = techincal_analysis.log_returns(df['Close'])
+    df['Log_Return'] = ta.log_returns(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
-    df['MACD'], df['MACD_Signal'] = techincal_analysis.macd(df['Close'])
+    df['MACD'], df['MACD_Signal'] = ta.macd(df['Close'])
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = techincal_analysis.bbands(df['Close'])
+    df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = ta.bbands(df['Close'])
     df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Middle']
     
-    df['ATR'] = techincal_analysis.atr(df['High'], df['Low'], df['Close'])
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'])
     
-    df['STOCH_K'], df['STOCH_D'] = techincal_analysis.stoch(df['High'], df['Low'], df['Close'])
+    df['STOCH_K'], df['STOCH_D'] = ta.stoch(df['High'], df['Low'], df['Close'])
     
-    df['OBV'] = techincal_analysis.obv(df['Close'], df['Volume'])
+    df['OBV'] = ta.obv(df['Close'], df['Volume'])
     
-    df['ROC'] = techincal_analysis.roc(df['Close'])
+    df['ROC'] = ta.roc(df['Close'])
     
-    df['WillR'] = techincal_analysis.willr(df['High'], df['Low'], df['Close'])
+    df['WillR'] = ta.willr(df['High'], df['Low'], df['Close'])
     
-    df['CCI'] = techincal_analysis.cci(df['High'], df['Low'], df['Close'])
+    df['CCI'] = ta.cci(df['High'], df['Low'], df['Close'])
     
-    df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = techincal_analysis.adx(df['High'], df['Low'], df['Close'])
+    df['ADX'], df['PLUS_DI'], df['MINUS_DI'] = ta.adx(df['High'], df['Low'], df['Close'])
     
-    df['MFI'] = techincal_analysis.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
+    df['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
     
     lagged_features = []
     for col in df.columns:
@@ -196,12 +196,12 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     if lagged_features:
         df = pd.concat([df] + lagged_features, axis=1)
     
-    df['Close_ZScore'] = (df['Close'] - techincal_analysis.sma(df['Close'], timeperiod=100)) / techincal_analysis.stddev(df['Close'], timeperiod=100)
-    df['MA10'] = techincal_analysis.sma(df['Close'], timeperiod=10) / df['Close']
-    df['MA20'] = techincal_analysis.sma(df['Close'], timeperiod=20) / df['Close']
-    df['MA50'] = techincal_analysis.sma(df['Close'], timeperiod=50) / df['Close']
+    df['Close_ZScore'] = (df['Close'] - ta.sma(df['Close'], timeperiod=100)) / ta.stddev(df['Close'], timeperiod=100)
+    df['MA10'] = ta.sma(df['Close'], timeperiod=10) / df['Close']
+    df['MA20'] = ta.sma(df['Close'], timeperiod=20) / df['Close']
+    df['MA50'] = ta.sma(df['Close'], timeperiod=50) / df['Close']
     df['MA10_MA20_Cross'] = df['MA10'] - df['MA20']
-    df['RSI'] = techincal_analysis.rsi(df['Close'], timeperiod=14)
+    df['RSI'] = ta.rsi(df['Close'], timeperiod=14)
     
     df = df.bfill().ffill()
     df.dropna(inplace=True)
@@ -239,9 +239,7 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     
     return df, scalers
 
-def prepare_data_classifier(data, lagged_length=5, pct_threshold=0.05):
-    pct_threshold = pct_threshold / 100
-
+def prepare_data_classifier(data, lagged_length=5):
     scalers = {
         'price': MinMaxScaler(feature_range=(0, 1)),
         'volume': QuantileTransformer(output_distribution='normal'),
@@ -316,7 +314,7 @@ def prepare_data_classifier(data, lagged_length=5, pct_threshold=0.05):
                         if col not in (price_features + volume_features + bounded_features + 
                                         pattern_features + ['Datetime'])]
     
-    df[price_features] = scalers['price'].fit_transform(df[price_features])
+    # df[price_features] = scalers['price'].fit_transform(df[price_features])
     
     df[volume_features] = df[volume_features].replace([np.inf, -np.inf], np.nan)
     df[volume_features] = df[volume_features].fillna(df[volume_features].mean())
@@ -327,8 +325,8 @@ def prepare_data_classifier(data, lagged_length=5, pct_threshold=0.05):
 
     pct_change = df['Close'].pct_change()
     y = pd.Series(0, index=df.index)
-    y[pct_change > pct_threshold] = 2
-    y[pct_change < -pct_threshold] = 0
+    y[pct_change > 0] = 1
+    y[pct_change < 0] = 0
 
     X = df[:-1]
     y = y[:-1]

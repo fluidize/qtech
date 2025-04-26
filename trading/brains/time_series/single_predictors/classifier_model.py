@@ -101,13 +101,12 @@ class ClassifierModel(nn.Module):
         self.interval = interval
         self.age_days = age_days
         self.epochs = epochs
-        self.pct_threshold = pct_threshold
         self.feature_selector = None
         self.lagged_length = lagged_length
 
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
-            X, y = mt.prepare_data_classifier(self.data, pct_threshold=self.pct_threshold, lagged_length=lagged_length)
+            X, y = mt.prepare_data_classifier(self.data, lagged_length=lagged_length)
             feature_names = X.columns.tolist()
             
             if use_feature_selection:
@@ -187,7 +186,7 @@ class ClassifierModel(nn.Module):
                         nn.init.zeros_(param)
 
     def train_model(self, model, prompt_save=False, show_loss=False):
-        X, y = mt.prepare_data_classifier(self.data, pct_threshold=self.pct_threshold, lagged_length=self.lagged_length)
+        X, y = mt.prepare_data_classifier(self.data, lagged_length=self.lagged_length)
         print(X)
         
         if self.feature_selector and self.feature_selector.important_features:
@@ -227,7 +226,7 @@ class ClassifierModel(nn.Module):
         print("Class weights:", class_weights.cpu().numpy())
         
         batch_size = 128
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        criterion = nn.CrossEntropyLoss()
         
         base_lr = 1e-3
         
@@ -264,7 +263,6 @@ class ClassifierModel(nn.Module):
             train_correct = 0
             train_total = 0
             
-            print()
             progress_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch+1}/{model.epochs}")
             
             for X_batch, y_batch in train_loader:
@@ -341,7 +339,7 @@ class ClassifierModel(nn.Module):
             fig.show()
         
         if ((input("Save? y/n ").lower() == 'y') if prompt_save else False):
-            save_path = f"{self.ticker}_{self.interval}_{self.pct_threshold}_{self.lagged_length}.pth"
+            save_path = f"{self.ticker}_{self.interval}_{self.lagged_length}.pth"
             torch.save({
                 'model_state_dict': best_state_dict,
                 'selected_features': self.feature_selector.important_features if self.feature_selector else None  # Save selected features
@@ -492,9 +490,9 @@ def load_model(model_path: str, input_dim: int = None):
     return model #return raw class
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="BTC-USDT", chunks=1, interval="1min", age_days=0, epochs=50, pct_threshold=0.1, lagged_length=20, use_feature_selection=True)
+    model = ClassifierModel(ticker="BTC-USDT", chunks=1, interval="1min", age_days=0, epochs=50, lagged_length=20, use_feature_selection=True)
     model = model.train_model(model, prompt_save=True, show_loss=True)
     with torch.no_grad():
-        predictions = model(mt.prepare_data_classifier(model.data, pct_threshold=model.pct_threshold, lagged_length=model.lagged_length))
+        predictions = model(mt.prepare_data_classifier(model.data, lagged_length=model.lagged_length))
         
     model.prediction_plot(model.data, predictions)
