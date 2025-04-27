@@ -87,6 +87,323 @@ def log_returns(series) -> pd.Series:
     """Log Returns"""
     return np.log(series / series.shift(1))
 
+def dpo(series, timeperiod=20) -> pd.Series:
+    """Detrended Price Oscillator
+    A non-directional indicator that removes trend from price to identify cycles"""
+    return series - series.shift(int(timeperiod/2) + 1).rolling(window=timeperiod).mean()
+
+def dema(series, timeperiod=20) -> pd.Series:
+    """Double Exponential Moving Average
+    Reduces lag of traditional EMAs"""
+    ema1 = ema(series, timeperiod)
+    ema2 = ema(ema1, timeperiod)
+    return 2 * ema1 - ema2
+
+def tema(series, timeperiod=20) -> pd.Series:
+    """Triple Exponential Moving Average
+    Further reduces lag compared to DEMA"""
+    ema1 = ema(series, timeperiod)
+    ema2 = ema(ema1, timeperiod)
+    ema3 = ema(ema2, timeperiod)
+    return 3 * ema1 - 3 * ema2 + ema3
+
+def fisher_transform(series, timeperiod=10) -> pd.Series:
+    """Ehlers Fisher Transform
+    Converts prices to a Gaussian normal distribution"""
+    # Normalize price to range [-1, 1]
+    max_high = series.rolling(window=timeperiod).max()
+    min_low = series.rolling(window=timeperiod).min()
+    
+    # Avoid division by zero by adding small epsilon where high=low
+    price_range = (max_high - min_low)
+    # Replace zeros with a small number
+    price_range = price_range.replace(0, 1e-10)
+    
+    normalized = 2 * ((series - min_low) / price_range - 0.5)
+    
+    # Limit input to tanh domain to avoid log(0) errors
+    normalized = normalized.clip(-0.999, 0.999)
+    
+    # Apply Fisher Transform
+    fisher = np.log((1 + normalized) / (1 - normalized))
+    fisher.replace([np.inf, -np.inf], np.nan, inplace=True)
+    fisher = fisher.ffill().bfill()
+    
+    return fisher
+
+def aroon(high, low, timeperiod=14) -> tuple[pd.Series, pd.Series]:
+    """Aroon Indicator
+    Measures the strength of a trend by time from high/low"""
+    periods = np.arange(timeperiod)
+    
+    # Calculate Aroon Up
+    rolling_high = high.rolling(window=timeperiod)
+    aroon_up = 100 * rolling_high.apply(lambda x: (timeperiod - 1 - np.argmax(x)) / (timeperiod - 1), raw=True)
+    
+    # Calculate Aroon Down
+    rolling_low = low.rolling(window=timeperiod)
+    aroon_down = 100 * rolling_low.apply(lambda x: (timeperiod - 1 - np.argmin(x)) / (timeperiod - 1), raw=True)
+    
+    return aroon_up, aroon_down
+
+def awesome_oscillator(high, low, fast_period=5, slow_period=34) -> pd.Series:
+    """Awesome Oscillator (AO)
+    Measures market momentum"""
+    median_price = (high + low) / 2
+    ao = sma(median_price, fast_period) - sma(median_price, slow_period)
+    return ao
+
+def keltner_channels(high, low, close, timeperiod=20, atr_multiplier=2) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Keltner Channels
+    Volatility-based bands with EMA and ATR"""
+    middle = ema(close, timeperiod)
+    atr_val = atr(high, low, close, timeperiod)
+    
+    upper = middle + (atr_multiplier * atr_val)
+    lower = middle - (atr_multiplier * atr_val)
+    
+    return upper, middle, lower
+
+def pvt(close, volume) -> pd.Series:
+    """Price Volume Trend
+    Cumulation of volume weighted by relative price change"""
+    pct_change = close.pct_change()
+    pvt = (pct_change * volume).cumsum()
+    return pvt
+
+def vwap_bands(high, low, close, volume, timeperiod=20, stdev_multiplier=2) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """VWAP with Standard Deviation Bands
+    Adds upper and lower bands to VWAP based on standard deviation"""
+    typical_price = (high + low + close) / 3
+    vwap_data = vwap(high, low, close, volume)
+    
+    # Calculate standard deviation of price from VWAP
+    deviation = np.sqrt(((typical_price - vwap_data) ** 2).rolling(window=timeperiod).mean())
+    
+    upper_band = vwap_data + (deviation * stdev_multiplier)
+    lower_band = vwap_data - (deviation * stdev_multiplier)
+    
+    return upper_band, vwap_data, lower_band
+
+def elder_ray(high, low, close, timeperiod=13) -> tuple[pd.Series, pd.Series]:
+    """Elder Ray
+    Shows buying and selling pressure"""
+    ema_val = ema(close, timeperiod)
+    
+    bull_power = high - ema_val  # Buying pressure
+    bear_power = low - ema_val   # Selling pressure
+    
+    return bull_power, bear_power
+
+def rvi(open_price, high, low, close, timeperiod=10) -> pd.Series:
+    """Relative Vigor Index
+    Compares closing price to opening price to determine market vigor"""
+    # Calculate numerator: (close-open)
+    numerator = close - open_price
+    # Calculate denominator: (high-low)
+    denominator = high - low
+    
+    # Smooth using SMA
+    num_sma = numerator.rolling(window=timeperiod).sum()
+    den_sma = denominator.rolling(window=timeperiod).sum()
+    
+    # Avoid division by zero
+    den_sma = den_sma.replace(0, np.nan)
+    
+    # Calculate RVI
+    rvi_value = num_sma / den_sma
+    rvi_value = rvi_value.ffill().bfill()
+    
+    return rvi_value
+
+def choppiness_index(high, low, close, timeperiod=14) -> pd.Series:
+    """Choppiness Index
+    Determines if market is choppy (trading sideways) or trending"""
+    atr_sum = atr(high, low, close, 1).rolling(window=timeperiod).sum()
+    high_low_range = high.rolling(window=timeperiod).max() - low.rolling(window=timeperiod).min()
+    
+    ci = 100 * np.log10(atr_sum / high_low_range) / np.log10(timeperiod)
+    return ci
+
+def mass_index(high, low, timeperiod=25, ema_period=9) -> pd.Series:
+    """Mass Index
+    Identifies potential trend reversals by analyzing the narrowing and widening of trading ranges"""
+    high_low_range = high - low
+    
+    # Calculate single and double EMAs of the range
+    ema1 = ema(high_low_range, ema_period)
+    ema2 = ema(ema1, ema_period)
+    
+    # Calculate ratio of EMAs
+    ema_ratio = ema1 / ema2
+    
+    # Calculate Mass Index as sum of EMA ratios over period
+    mass = ema_ratio.rolling(window=timeperiod).sum()
+    
+    return mass
+
+def volume_zone_oscillator(close, volume, short_period=14, long_period=28) -> pd.Series:
+    """Volume Zone Oscillator (VZO)
+    Measures volume pressure with both price and volume data"""
+    # Calculate price change direction
+    price_change = close.diff()
+    
+    # Separate volume into positive and negative based on price change
+    positive_volume = volume.copy()
+    positive_volume[price_change <= 0] = 0
+    
+    negative_volume = volume.copy()
+    negative_volume[price_change >= 0] = 0
+    
+    # Calculate EMAs of positive and negative volume
+    pos_vol_ema_short = ema(positive_volume, short_period)
+    neg_vol_ema_short = ema(negative_volume, short_period)
+    
+    pos_vol_ema_long = ema(positive_volume, long_period)
+    neg_vol_ema_long = ema(negative_volume, long_period)
+    
+    # Calculate VZO
+    short_ratio = pos_vol_ema_short / (pos_vol_ema_short + neg_vol_ema_short)
+    long_ratio = pos_vol_ema_long / (pos_vol_ema_long + neg_vol_ema_long)
+    
+    # Replace NaN values with 0.5 (neutral)
+    short_ratio = short_ratio.fillna(0.5)
+    long_ratio = long_ratio.fillna(0.5)
+    
+    # Calculate VZO (normalized to -100 to +100 range)
+    vzo = 100 * (short_ratio - long_ratio)
+    
+    return vzo
+
+def volatility_ratio(high, low, close, roc_period=14, atr_period=14) -> pd.Series:
+    """Volatility Ratio
+    Compares price momentum to volatility to identify potential trend changes"""
+    # Calculate ROC (momentum)
+    roc_val = roc(close, roc_period)
+    
+    # Calculate ATR (volatility)
+    atr_val = atr(high, low, close, atr_period)
+    
+    # Calculate Volatility Ratio
+    vol_ratio = np.abs(roc_val) / (atr_val / close * 100)
+    
+    # Handle infinite or NaN values
+    vol_ratio = vol_ratio.replace([np.inf, -np.inf], np.nan).fillna(1)
+    
+    return vol_ratio
+
+def hurst_exponent(series, max_lag=20) -> pd.Series:
+    """Hurst Exponent
+    Measures the long-term memory of a time series and its tendency to mean revert or trend.
+    - H < 0.5: Mean-reverting series
+    - H = 0.5: Random walk
+    - H > 0.5: Trending series
+    """
+    lags = range(2, max_lag)
+    result = pd.Series(index=series.index)
+    
+    for i in range(len(series) - max_lag):
+        window = series.iloc[i:i+max_lag]
+        tau = []; lag_var = []
+        
+        for lag in lags:
+            # Calculate price difference with lag
+            pp = np.subtract(window[lag:].values, window[:-lag].values)
+            # Calculate variance - avoid zeros
+            var = np.var(pp)
+            if var > 0:  # Only include valid variances
+                tau.append(lag)
+                lag_var.append(var)
+        
+        # Linear fit on log-log plot - avoid empty arrays
+        if len(tau) > 1 and len(lag_var) > 1:
+            try:
+                m, _ = np.polyfit(np.log(tau), np.log(lag_var), 1)
+                # Convert to Hurst exponent
+                h = m / 2.0
+                
+                if i + max_lag < len(series):
+                    result.iloc[i + max_lag] = h
+            except:
+                # Skip in case of numerical issues
+                pass
+    
+    # Forward-fill to handle initial NaN values
+    return result.ffill()
+
+def z_score(series, timeperiod=20) -> pd.Series:
+    """Z-Score
+    Measures how many standard deviations a value is from the mean"""
+    mean = series.rolling(window=timeperiod).mean()
+    std = series.rolling(window=timeperiod).std()
+    z_score = (series - mean) / std
+    return z_score
+
+def percent_rank(series, timeperiod=14) -> pd.Series:
+    """Percent Rank
+    Ranks the current value within its recent history on a 0-100 scale"""
+    def percentile_rank(window):
+        if len(window) == 0:
+            return np.nan
+        return percentileofscore(window, window.iloc[-1]) 
+    
+    from scipy.stats import percentileofscore
+    return series.rolling(window=timeperiod).apply(percentile_rank, raw=False)
+
+def historical_volatility(close, timeperiod=20, annualization=252) -> pd.Series:
+    """Historical Volatility
+    Estimates future volatility based on past price movements (annualized)"""
+    # Calculate daily log returns
+    log_ret = np.log(close / close.shift(1))
+    
+    # Calculate standard deviation of log returns
+    hist_vol = log_ret.rolling(window=timeperiod).std() * np.sqrt(annualization)
+    
+    return hist_vol
+
+def fractal_indicator(high, low, n=2) -> tuple[pd.Series, pd.Series]:
+    """Williams Fractal Indicator
+    Identifies potential support and resistance points (local highs and lows)"""
+    # Initialize empty series for up and down fractals
+    up_fractals = pd.Series(index=high.index, data=False)
+    down_fractals = pd.Series(index=low.index, data=False)
+    
+    # Identify bearish (up) fractals: Center candle high is highest among 2n+1 candles
+    for i in range(n, len(high)-n):
+        if high.iloc[i] == high.iloc[i-n:i+n+1].max():
+            up_fractals.iloc[i] = True
+    
+    # Identify bullish (down) fractals: Center candle low is lowest among 2n+1 candles
+    for i in range(n, len(low)-n):
+        if low.iloc[i] == low.iloc[i-n:i+n+1].min():
+            down_fractals.iloc[i] = True
+    
+    return up_fractals, down_fractals
+
+def donchian_channel(high, low, timeperiod=20) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Donchian Channel
+    Shows the highest high and lowest low over a given period"""
+    upper = high.rolling(window=timeperiod).max()
+    lower = low.rolling(window=timeperiod).min()
+    middle = (upper + lower) / 2
+    
+    return upper, middle, lower
+
+def price_cycle(close, cycle_period=20) -> pd.Series:
+    """Price Cycle Oscillator
+    Attempts to isolate the cyclical component of price movements"""
+    from scipy import signal
+    
+    # Apply bandpass filter to isolate cyclical component
+    # Parameters tuned to the given cycle period
+    b, a = signal.butter(2, [0.5/cycle_period, 2.0/cycle_period], 'bandpass')
+    
+    # Apply filter to close prices - use ffill instead of deprecated method parameter
+    close_filled = close.ffill().bfill().values
+    cycle = signal.filtfilt(b, a, close_filled)
+    
+    return pd.Series(cycle, index=close.index)
+
 def stddev(series, timeperiod=20) -> pd.Series:
     """Standard Deviation"""
     return series.rolling(window=timeperiod).std()
@@ -129,7 +446,7 @@ def kama(series, er_period=10, fast_period=2, slow_period=30) -> pd.Series:
     volatility = np.abs(np.diff(values, prepend=values[0])).cumsum()
     
     # Efficiency Ratio
-    er = change / volatility
+    er = np.divide(change, volatility, out=np.zeros_like(change), where=volatility!=0)
     
     # Smoothing Constant
     fast_sc = 2 / (fast_period + 1)
@@ -229,29 +546,29 @@ def tsi(close, long_period=25, short_period=13, signal_period=13) -> tuple[pd.Se
     
     return tsi, signal
 
-def cmf(high, low, close, volume, period=20) -> pd.Series:
+def cmf(high, low, close, volume, timeperiod=20) -> pd.Series:
     """Chaikin Money Flow"""
     mfv = volume * ((close - low) - (high - close)) / (high - low)
-    cmf = mfv.rolling(window=period).sum() / volume.rolling(window=period).sum()
+    cmf = mfv.rolling(window=timeperiod).sum() / volume.rolling(window=timeperiod).sum()
     return cmf
 
-def hma(series, period=16) -> pd.Series:
+def hma(series, timeperiod=16) -> pd.Series:
     """Hull Moving Average"""
-    wma_half_period = wma(series, period=period//2)
-    wma_full_period = wma(series, period=period)
+    wma_half_period = wma(series, timeperiod=timeperiod//2)
+    wma_full_period = wma(series, timeperiod=timeperiod)
     
     # HMA = WMA(2*WMA(period/2) - WMA(period), sqrt(period))
-    sqrt_period = int(np.sqrt(period))
-    return wma(2 * wma_half_period - wma_full_period, period=sqrt_period)
+    sqrt_period = int(np.sqrt(timeperiod))
+    return wma(2 * wma_half_period - wma_full_period, timeperiod=sqrt_period)
 
-def wma(series, period=20) -> pd.Series:
+def wma(series, timeperiod=20) -> pd.Series:
     """Weighted Moving Average"""
-    weights = np.arange(1, period + 1)
+    weights = np.arange(1, timeperiod + 1)
     sum_weights = weights.sum()
     
     result = pd.Series(index=series.index)
-    for i in range(period - 1, len(series)):
-        result.iloc[i] = np.sum(series.iloc[i - period + 1:i + 1].values * weights) / sum_weights
+    for i in range(timeperiod - 1, len(series)):
+        result.iloc[i] = np.sum(series.iloc[i - timeperiod + 1:i + 1].values * weights) / sum_weights
     
     return result
 
