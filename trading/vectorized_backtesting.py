@@ -7,9 +7,11 @@ from rich import print
 import sys
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
+import torch.nn.functional as F
 
 import model_tools as mt
 import techincal_analysis as ta
+import smc_analysis as smc
 import vb_metrics as metrics
 
 import warnings
@@ -50,12 +52,12 @@ class VectorizedBacktesting:
         backtesting_end_time = time.time()
         # print(f"[green]BACKTESTING DONE ({backtesting_end_time - backtesting_start_time:.2f} seconds)[/green]")
 
-        self.data['Returns'] = self.data['Close'].pct_change()
+        self.data['Return'] = self.data['Close'].pct_change()
 
         self.data['Position'] = signals
         self.data['Position'] = self.data['Position'].replace(-1, 0)  # Set -1 signals to 0 (close position)
         
-        self.data['Strategy_Returns'] = self.data['Position'].shift(1) * self.data['Returns']
+        self.data['Strategy_Returns'] = self.data['Position'].shift(1) * self.data['Return']
 
         self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
@@ -94,16 +96,14 @@ class VectorizedBacktesting:
             fig = go.Figure()
             
             portfolio_value = self.data['Portfolio_Value'].values
-            returns = self.data['Returns'].values
-            asset_value = self.initial_capital * (1 + np.cumprod(1 + returns))
+            returns = self.data['Return'].values
+            asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
 
             fig.add_trace(go.Scatter(
                 x=self.data.index,
                 y=portfolio_value,
                 mode='lines',
                 name='Portfolio',
-                line=dict(color='green'),
-                fillcolor='rgba(60, 179, 113, 0.3)'
             ))
             
             fig.add_trace(go.Scatter(
@@ -138,7 +138,7 @@ class VectorizedBacktesting:
             ))
             
             fig.update_layout(
-                title=f'{self.symbol} {self.interval} {self.age_days}d old | TR: {summary["Total_Return"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | BE: {summary["Breakeven_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
+                title=f'{self.symbol} {self.chunks} days of {self.interval} | {self.age_days}d old | TR: {summary["Total_Return"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | BE: {summary["Breakeven_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis_title='Date',
                 yaxis_title='Value',
                 showlegend=True,
@@ -182,7 +182,7 @@ class VectorizedBacktesting:
                 row=1, col=1
             )
             
-            asset_value = self.initial_capital * (1 + self.data['Returns']).cumprod()
+            asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
@@ -449,6 +449,12 @@ class VectorizedBacktesting:
         position[data['Close'] < psar] = 0
         
         return position
+    
+    def smc_strategy(self, data: pd.DataFrame) -> pd.Series:
+        position = pd.Series(0, index=data.index)
+        ...
+        
+        return position
 
     def custom_scalper_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
@@ -465,19 +471,23 @@ class VectorizedBacktesting:
         return position
 
     def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64) -> pd.Series:
+        """
+        Neural network strategy implementation using one-by-one prediction to avoid any risk of data leakage.
+        This approach processes each data point individually, which is slower but guarantees no temporal mixing.
+        For a faster batch processing version (where shuffle=False should prevent leakage), see nn_strategy_batch.
+        """
         from brains.time_series.single_predictors.classifier_model import load_model
         import model_tools as mt
         
-        USE_BATCH = False
-        MODEL_PATH = r"trading\BTC-USDT_1min_0.1_20.pth"
+        MODEL_PATH = r"trading\BTC-USDT_15min_20_7features.pth"
         
         position = pd.Series(0, index=data.index)
         
-        model = load_model(MODEL_PATH, 30)
+        model = load_model(MODEL_PATH)
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.eval()
         
-        features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=20, pct_threshold=0.01)
+        features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=20)
         
         selected_features = model.selected_features
         
@@ -489,40 +499,80 @@ class VectorizedBacktesting:
         else:
             features_df = features_df[selected_features]
         
-        X = torch.tensor(features_df.values, dtype=torch.float32)
+        position_values = np.zeros(len(features_df))
         
-        if USE_BATCH:
-            dataset = TensorDataset(X)
-            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-            
-            all_predictions = []
-            
-            with torch.no_grad():
-                progress_bar = tqdm(range(len(dataloader)), desc="Processing predictions")
-                for batch in dataloader:
-                    batch_X = batch[0].to(model.DEVICE)
-                    outputs = model(batch_X)
-                    _, predicted = torch.max(outputs, 1)
-                    all_predictions.extend(predicted.cpu().numpy())
-                    progress_bar.update(1)
-                progress_bar.close()
-            for i, idx in enumerate(features_df.index):
-                if i < len(all_predictions):
-                    position[idx] = all_predictions[i]
+        with torch.no_grad():
+            for i in tqdm(range(len(features_df))):
+                x = torch.tensor(features_df.iloc[i].values, dtype=torch.float32).unsqueeze(0).to(model.DEVICE)
+                outputs = model(x)
+                
+                probs = F.softmax(outputs, dim=1)
+                
+                if probs[0, 1].item() > 0.85:
+                    position_values[i] = 1
+
+        position.iloc[len(data)-len(position_values):] = position_values
+        
+        position = position.ffill().fillna(0)
+        
+        return position
+        
+    def nn_strategy_batch(self, data: pd.DataFrame, batch_size: int = 1) -> pd.Series:
+        """
+        Neural network strategy implementation using batch processing for efficiency.
+        
+        Note: While this is faster, batching could theoretically introduce subtle data leakage in some cases.
+        The shuffle=False setting preserves temporal order in batches, but if you want to be absolutely certain
+        there's no leakage, use the nn_strategy method instead which processes one sample at a time.
+        """
+        from brains.time_series.single_predictors.classifier_model import load_model
+        import model_tools as mt
+        
+        MODEL_PATH = r"trading\BTC-USDT_15min_20_7features.pth"
+        
+        position = pd.Series(0, index=data.index)
+        
+        model = load_model(MODEL_PATH)
+        model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        model.eval()
+        
+        features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=20)
+        
+        selected_features = model.selected_features
+        
+        missing_features = [f for f in selected_features if f not in features_df.columns]
+        if missing_features:
+            print(f"Warning: Missing {len(missing_features)} features: {missing_features[:5]}...")
+            available_features = [f for f in selected_features if f in features_df.columns]
+            features_df = features_df[available_features]
         else:
-            with torch.no_grad():
-                progress_bar = tqdm(range(features_df.shape[0]), desc="Processing predictions")
-                for i, idx in enumerate(features_df.index):
-                    single_X = X[i:i+1].to(model.DEVICE)
-                    outputs = model(single_X)
-                    _, predicted = torch.max(outputs, 1)
-                    position[idx] = predicted.cpu().numpy()[0]
-                    progress_bar.update(1)
-                progress_bar.close()
+            features_df = features_df[selected_features]
         
-        # 2 = buy 1 = hold 0 = sell
-        position[position == 2] = 1
-        position[position == 0] = 0
+        X = torch.tensor(features_df.values, dtype=torch.float32).to(model.DEVICE)
+        dataset = TensorDataset(X)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        
+        predictions = []
+        probabilities = []        
+        with torch.no_grad():
+            for batch in dataloader:
+                batch_x = batch[0]
+                outputs = model(batch_x)
+                
+                probs = F.softmax(outputs, dim=1)
+                probabilities.extend(probs.cpu().numpy())
+
+                _, preds = torch.max(outputs, 1)
+                predictions.extend(preds.cpu().numpy())
+
+        probabilities = np.array(probabilities)
+        
+        position_values = np.zeros(len(features_df))
+        position_values[probabilities[:, 1] > 0.85] = 1
+
+        position.iloc[len(data)-len(position_values):] = position_values
+
+        position = position.ffill().fillna(0)
         
         return position
 
@@ -530,13 +580,13 @@ if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="SOL-USDT",
         initial_capital=39.5,
-        chunks=365,
-        interval="1min",
-        age_days=0
+        chunks=5,
+        interval="15min",
+        age_days=100
     )
     
     backtest.fetch_data(kucoin=True)
     
-    backtest.run_strategy(backtest.macd_strategy, fastperiod=1, slowperiod=11, signalperiod=31)
+    backtest.run_strategy(backtest.nn_strategy_batch)
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=True)
+    backtest.plot_performance(advanced=False)

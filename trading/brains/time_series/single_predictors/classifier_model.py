@@ -18,35 +18,45 @@ import model_tools as mt
 
 class FeatureSelectionCallback:
     """Callback for feature importance-based selection during training"""
-    def __init__(self, X_train, y_train, feature_names, top_n=20):
+    def __init__(self, X_train, y_train, feature_names, importance_threshold=5):
         self.X_train = X_train
         self.y_train = y_train
         self.feature_names = feature_names
-        self.top_n = top_n
+        self.importance_threshold = importance_threshold
         self.important_features = None
         
     def get_important_features(self):
         import lightgbm as lgb
         start_time = time.time()
         gbm = lgb.LGBMClassifier(
-            n_estimators=100,
-            learning_rate=0.1,
-            max_depth=3,
-            random_state=42,
-            force_col_wise=True,
-            verbose=-1
+            objective='binary',
+            metric='binary_logloss',
+            boosting_type='gbdt',
+            num_leaves=31,
+            max_depth=-1,
+            feature_fraction=0.8,
+            bagging_fraction=0.8,
+            bagging_freq=5,
+            min_child_samples=20,
+            lambda_l1=0.1,
+            lambda_l2=0.1,
+            verbose=-1,
+            random_state=42
         )
         gbm.fit(self.X_train, self.y_train)
         end_time = time.time()
         importances = gbm.feature_importances_
-        indices = np.argsort(importances)[::-1]
+        indices = np.argsort(importances)[::-1] #reverse order
 
-        self.important_features = [self.feature_names[i] for i in indices[:self.top_n]]
-        importance_values = [importances[i] for i in indices[:self.top_n]]
+        features = [self.feature_names[i] for i in indices]
+        importance_values = [importances[i] for i in indices]
+        
+        self.important_features = [f for f, imp in zip(features, importance_values) if imp >= self.importance_threshold]
+        filtered_importances = [imp for imp in importance_values if imp >= self.importance_threshold]
         
         print(f"Top features selected by importance ({end_time - start_time:.2f}s):")
-        for i, (feature, importance) in enumerate(zip(self.important_features, importance_values)):
-            print(f"{i+1}. {feature}: {importance:.2f}")
+        for i, (feature, importance) in enumerate(zip(self.important_features, filtered_importances)):
+            print(f"{i+1}. {feature}: {importance}")
             
         return self.important_features
 
@@ -92,7 +102,7 @@ class ResidualBlock(nn.Module):
         return out
 
 class ClassifierModel(nn.Module):
-    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, pct_threshold=0.01, lagged_length=10, input_dim=None, use_feature_selection: bool = True):
+    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, lagged_length=20, use_feature_selection: bool = True, input_dim=None):
         super().__init__()
 
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -101,8 +111,10 @@ class ClassifierModel(nn.Module):
         self.interval = interval
         self.age_days = age_days
         self.epochs = epochs
-        self.feature_selector = None
+        self.selected_features = None
         self.lagged_length = lagged_length
+        self.input_dim = input_dim  # Allow input_dim to be set directly
+        self.hidden_dim = 512
 
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
@@ -110,23 +122,34 @@ class ClassifierModel(nn.Module):
             feature_names = X.columns.tolist()
             
             if use_feature_selection:
-                self.feature_selector = FeatureSelectionCallback(X.values, y.values, feature_names, top_n=30)
-                important_feature_names = self.feature_selector.get_important_features()
-                X = X[important_feature_names]
+                self.feature_selector = FeatureSelectionCallback(X_train=X.values, y_train=y.values, feature_names=feature_names, importance_threshold=5)
+                self.selected_features = self.feature_selector.get_important_features()
+                X = X[self.selected_features]
             else:
                 print("Feature selection is skipped.")
             
             self.input_dim = X.shape[1]
+
+        # Only initialize layers if input_dim is known
+        if self.input_dim is not None:
+            self._build_model()
         else:
-            self.input_dim = input_dim
-            if self.input_dim is None:
-                raise ValueError("Input dimension must be provided if model is loaded.")
+            print("Warning: input_dim is None. Call set_input_dim() before using the model.")
+    
+    def set_input_dim(self, input_dim):
+        """Set the input dimension and build the model layers"""
+        self.input_dim = input_dim
+        self._build_model()
+        return self
         
-        self.hidden_dim = 512
-        
+    def _build_model(self):
+        """Build the model layers using the input_dim"""
+        # Use LayerNorm - batch independent and effective for time series data
+        self.normalizer = nn.BatchNorm1d(self.input_dim)
+
         # LSTM Layer
         self.lstm = nn.LSTM(
-            input_size=self.input_dim,  # Use input_dim as the input size
+            input_size=self.input_dim,
             hidden_size=self.hidden_dim,
             num_layers=2,
             bidirectional=True,
@@ -137,37 +160,25 @@ class ClassifierModel(nn.Module):
         self.attention = Attention(self.hidden_dim * 2)
         self.res_block1 = ResidualBlock(self.hidden_dim * 2, self.hidden_dim)
         self.res_block2 = ResidualBlock(self.hidden_dim, self.hidden_dim)
-        self.fc_out = nn.Linear(self.hidden_dim, self.hidden_dim)        
-        self.fc1 = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
+        self.fc1 = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.output = nn.Linear(self.hidden_dim, 3)
-        
-        self.layer_norm = nn.LayerNorm(self.input_dim)
-        self.batch_norm = nn.BatchNorm1d(self.input_dim)
-        self.instance_norm = nn.InstanceNorm1d(self.input_dim)
-
-        self.dropout = nn.Dropout(0.2)
+        self.output = nn.Linear(self.hidden_dim, 2)
         
         self._init_weights()
 
     def forward(self, x):
-        x = self.batch_norm(x)
-        # if len(x.shape) == 2:
-        #     x = x.unsqueeze(1)
-        
+        # Apply normalization
+        x = self.normalizer(x)
+
         lstm_out, _ = self.lstm(x)
         
-        # attention_weights = self.attention(lstm_out)
-        # context = torch.sum(attention_weights * lstm_out, dim=1)
-        
         x = self.res_block1(lstm_out)
-        # x = self.res_block2(x)
+        x = self.res_block2(x)
         
-        # x = F.leaky_relu(self.fc_out(x), 0.2)
-
-        x = self.fc1(lstm_out)
-        x = self.fc2(x)
-
+        # Use training=self.training to respect model mode
+        x = F.dropout(self.fc1(x), 0.1, training=self.training)
+        x = F.dropout(self.fc2(x), 0.1, training=self.training)
+            
         x = self.output(x)
         
         return x
@@ -187,20 +198,15 @@ class ClassifierModel(nn.Module):
 
     def train_model(self, model, prompt_save=False, show_loss=False):
         X, y = mt.prepare_data_classifier(self.data, lagged_length=self.lagged_length)
-        print(X)
         
         if self.feature_selector and self.feature_selector.important_features:
             X = X[self.feature_selector.important_features]
             self.input_dim = X.shape[1]
         
-        # Print class distribution
-        print("Class distribution: \n", y.value_counts())
         total_samples = len(y)
         for class_label, count in y.value_counts().items():
             percentage = (count/total_samples) * 100
             print(f"Class {class_label}: {count} samples ({percentage:.2f}%)")
-        
-        print(f"Feature count: {X.shape[1]}")
         
         train_size = int(0.8 * len(X))
         X_train, X_val = X[:train_size], X[train_size:]
@@ -225,8 +231,8 @@ class ClassifierModel(nn.Module):
         
         print("Class weights:", class_weights.cpu().numpy())
         
-        batch_size = 128
-        criterion = nn.CrossEntropyLoss()
+        batch_size = 1
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
         
         base_lr = 1e-3
         
@@ -263,7 +269,12 @@ class ClassifierModel(nn.Module):
             train_correct = 0
             train_total = 0
             
-            progress_bar = tqdm(total=len(train_loader), desc=f"Epoch {epoch+1}/{model.epochs}")
+            progress_bar = tqdm(total=len(train_loader), 
+                              desc=f"Epoch {epoch+1}/{model.epochs}",
+                              bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+                              leave=False,
+                              position=0,
+                              dynamic_ncols=True)
             
             for X_batch, y_batch in train_loader:
                 X_batch, y_batch = X_batch.to(self.DEVICE), y_batch.to(self.DEVICE)
@@ -272,7 +283,7 @@ class ClassifierModel(nn.Module):
                 
                 outputs = model(X_batch)
 
-                # L1 and L2 reg
+                # L1 and L2 regularization
                 l1_lambda = 1e-6
                 l2_lambda = 1e-6
 
@@ -294,8 +305,15 @@ class ClassifierModel(nn.Module):
                     train_total += y_batch.size(0)
                     train_correct += (predicted == y_batch).sum().item()
                 
+                train_acc = 100 * train_correct / train_total
+                avg_loss = total_train_loss / (progress_bar.n + 1)
+                progress_bar.set_postfix({
+                    'loss': f'{avg_loss:.4f}',
+                    'acc': f'{train_acc:.2f}%',
+                    'lr': f'{optimizer.param_groups[0]["lr"]:.6f}'
+                })
                 progress_bar.update(1)
-            
+            progress_bar.close()
             model.eval()
             total_val_loss = 0
             val_correct = 0
@@ -325,10 +343,7 @@ class ClassifierModel(nn.Module):
             val_loss_history.append(val_loss)
             val_acc_history.append(val_acc)
             
-            print(f"\nEpoch {epoch + 1}/{model.epochs}")
-            print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-            print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
-            print(f"LR: {optimizer.param_groups[0]['lr']:.6f}")
+            print(f"Epoch {epoch + 1}/{model.epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Train Acc: {train_acc:.2f}%, Val Acc: {val_acc:.2f}%, LR: {optimizer.param_groups[0]['lr']:.6f}")
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -339,10 +354,11 @@ class ClassifierModel(nn.Module):
             fig.show()
         
         if ((input("Save? y/n ").lower() == 'y') if prompt_save else False):
-            save_path = f"{self.ticker}_{self.interval}_{self.lagged_length}.pth"
+            save_path = f"{self.ticker}_{self.interval}_{self.lagged_length}_{len(self.selected_features)}features.pth"
             torch.save({
                 'model_state_dict': best_state_dict,
-                'selected_features': self.feature_selector.important_features if self.feature_selector else None  # Save selected features
+                'selected_features': self.selected_features if self.selected_features else None,  # Save selected features
+                'input_dim': self.input_dim
             }, save_path)
         
         return model
@@ -480,19 +496,27 @@ class ClassifierModel(nn.Module):
         
         return fig
 
-def load_model(model_path: str, input_dim: int = None):
-    model = ClassifierModel(train=False, input_dim=input_dim)  # Initialize the model
+def load_model(model_path: str, input_dim=None):
     checkpoint = torch.load(model_path)
     
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.selected_features = checkpoint['selected_features']  # Load selected features
+    checkpoint_input_dim = checkpoint.get('input_dim')
     
-    return model #return raw class
+    effective_input_dim = checkpoint_input_dim if checkpoint_input_dim is not None else input_dim
+    
+    if effective_input_dim is None:
+        raise ValueError("Input dimension could not be determined from checkpoint and wasn't provided. Please specify input_dim.")
+        
+    model = ClassifierModel(train=False, input_dim=effective_input_dim)
+    
+    model.selected_features = checkpoint.get('selected_features')
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    print(f"Model loaded with input_dim: {effective_input_dim}")
+    print(f"Selected features: {len(model.selected_features) if model.selected_features else 'None'}")
+    
+    return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="BTC-USDT", chunks=1, interval="1min", age_days=0, epochs=50, lagged_length=20, use_feature_selection=True)
-    model = model.train_model(model, prompt_save=True, show_loss=True)
-    with torch.no_grad():
-        predictions = model(mt.prepare_data_classifier(model.data, lagged_length=model.lagged_length))
-        
-    model.prediction_plot(model.data, predictions)
+    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="15min", age_days=0, epochs=50, lagged_length=20, use_feature_selection=True)
+    model = model.train_model(model, prompt_save=True, show_loss=False)
