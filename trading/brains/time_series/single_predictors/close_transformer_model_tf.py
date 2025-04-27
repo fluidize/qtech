@@ -10,12 +10,14 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.preprocessing import StandardScaler
 
-from trading.brains.time_series.single_predictors.price_data import fetch_data
+import sys
+sys.path.append("trading")
+from model_tools import fetch_data
 
 tf.config.threading.set_intra_op_parallelism_threads(8)
 
 class TransformerModel:
-    def __init__(self, epochs, ticker='BTC-USD', chunks=5, interval='5m', age_days=10):
+    def __init__(self, epochs, ticker='BTC-USDT', chunks=5, interval='5min', age_days=10):
         self.epochs = epochs
         self.sequence_length = 25 
         self.ticker = ticker
@@ -246,5 +248,5 @@ class TransformerModel:
         return model, model_data
 
 if __name__ == "__main__":
-    train = TransformerModel(epochs=10, ticker='SOL-USDT', chunks=10, interval='1m', age_days=0)
+    train = TransformerModel(epochs=10, ticker='SOL-USDT', chunks=10, interval='1min', age_days=0)
     model, model_data = train.run()
