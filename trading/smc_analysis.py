@@ -86,7 +86,7 @@ def fvg(open: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, pct_
     return fvg
 
 if __name__ == "__main__":
-    data = mt.fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True, use_cache=True)
+    data = mt.fetch_data("BTC-USDT", 1, "5min", 0, kucoin=True, use_cache=True)
     pivots = pivot_points(data["Open"], data["High"], data["Low"], data["Close"])
     support, resistance = support_resistance_levels(data["Open"], data["High"], data["Low"], data["Close"])
     fvg = fvg(data["Open"], data["High"], data["Low"], data["Close"])
@@ -95,18 +95,30 @@ if __name__ == "__main__":
     fig.add_trace(go.Candlestick(x=data.index, open=data["Open"], high=data["High"], low=data["Low"], close=data["Close"], name="Close"))
     print(fvg)
     # # Add FVG boxes
-    # for idx, row in fvg.iterrows():
-    #     if pd.notna(row["Lower_Range"]):
-    #         fig.add_shape(
-    #             type="rect",
-    #             x0=idx,
-    #             x1=idx,
-    #             y0=row["Lower_Range"],
-    #             y1=row["Upper_Range"],
-    #             fillcolor="blue",
-    #             opacity=0.2,
-    #             line=dict(width=0),
-    #             layer="below"
-    #         )
-    
+    for idx, row in fvg.iterrows():
+        if pd.notna(row["Lower_Range"]):
+            if row["Direction"] == "Bullish":
+                fig.add_shape(
+                    type="rect",
+                    x0=idx,
+                    x1=idx+5,
+                    y0=row["Lower_Range"],
+                    y1=row["Upper_Range"],
+                    fillcolor="blue",
+                    opacity=0.2,
+                    line=dict(width=0),
+                    layer="below"
+                )
+            elif row["Direction"] == "Bearish":
+                fig.add_shape(
+                    type="rect",
+                    x0=idx,
+                    x1=idx+5,
+                    y0=row["Upper_Range"],
+                    y1=row["Lower_Range"],
+                    fillcolor="red",
+                    opacity=0.2,
+                    line=dict(width=0),
+                    layer="below"
+                )
     fig.show()
