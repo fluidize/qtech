@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Run Manim Scene",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "manim",
+        "args": [
+          "-pql",                   // preview in low quality
+          "${file}",                // your script
+          "MyScene"                 // your scene class
+        ],
+        "console": "integratedTerminal"
+      }
+    ]
+  }
