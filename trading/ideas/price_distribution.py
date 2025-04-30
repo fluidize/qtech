@@ -4,8 +4,8 @@ import numpy as np
 import sys
 sys.path.append("trading")
 import model_tools as mt
-import pandas_indicators as ta
-import monte_carlo as mc
+import techincal_analysis as ta
+sys.path.append("trading/ideas/stochastics")
 from scipy.stats import ks_2samp
 
 data = mt.fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
