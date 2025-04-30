@@ -1,3 +1,4 @@
+import time
 from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 from datetime import datetime, timedelta
 import requests
@@ -81,7 +82,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
         data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         times = []
         
-        progress_bar = tqdm(total=chunks, desc="KUCOIN PROGRESS")
+        progress_bar = tqdm(total=chunks, desc="KUCOIN PROGRESS", ascii=">#")
         for x in range(chunks):
             chunksize = 1440  # 1d of 1m data
             end_time = datetime.now() - timedelta(minutes=chunksize*x) - timedelta(days=age_days)
@@ -239,8 +240,11 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     
     return df, scalers
 
-def prepare_data_classifier(data, lagged_length=5):
+def prepare_data_classifier(data, lagged_length=5, extra_features=False):
+    start_time = time.time()
     df = data.copy()
+    
+    section_times = {}
     
     if 'Datetime' in df.columns:
         df.drop(columns=['Datetime'], inplace=True)
@@ -248,153 +252,147 @@ def prepare_data_classifier(data, lagged_length=5):
     indicators = {}
     
     # ===== PRICE ACTION INDICATORS =====
+    section_start = time.time()
     # Basic price relationships
     indicators['Log_Return'] = ta.log_returns(df['Close'])
     indicators['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     indicators['Close_Open_Range'] = (df['Close'] - df['Open']) / df['Open']
+    section_times['Price Action'] = time.time() - section_start
     
     # ===== TREND INDICATORS =====
+    section_start = time.time()
     # Simple Moving Averages
-    indicators['SMA5'] = ta.sma(df['Close'], timeperiod=5) / df['Close']
-    indicators['SMA10'] = ta.sma(df['Close'], timeperiod=10) / df['Close'] 
-    indicators['SMA20'] = ta.sma(df['Close'], timeperiod=20) / df['Close']
-    indicators['SMA50'] = ta.sma(df['Close'], timeperiod=50) / df['Close']
-    indicators['SMA100'] = ta.sma(df['Close'], timeperiod=100) / df['Close']
+    # indicators['SMA5'] = ta.sma(df['Close'], timeperiod=5) / df['Close']
+    # indicators['SMA10'] = ta.sma(df['Close'], timeperiod=10) / df['Close'] 
+    # indicators['SMA20'] = ta.sma(df['Close'], timeperiod=20) / df['Close']
+    # indicators['SMA50'] = ta.sma(df['Close'], timeperiod=50) / df['Close']
+    # indicators['SMA100'] = ta.sma(df['Close'], timeperiod=100) / df['Close']
     
     # Exponential Moving Averages
-    indicators['EMA5'] = ta.ema(df['Close'], timeperiod=5) / df['Close']
-    indicators['EMA10'] = ta.ema(df['Close'], timeperiod=10) / df['Close']
-    indicators['EMA20'] = ta.ema(df['Close'], timeperiod=20) / df['Close']
-    indicators['EMA50'] = ta.ema(df['Close'], timeperiod=50) / df['Close']
+    # indicators['EMA5'] = ta.ema(df['Close'], timeperiod=5) / df['Close']
+    # indicators['EMA10'] = ta.ema(df['Close'], timeperiod=10) / df['Close']
+    # indicators['EMA20'] = ta.ema(df['Close'], timeperiod=20) / df['Close']
+    # indicators['EMA50'] = ta.ema(df['Close'], timeperiod=50) / df['Close']
     
     # Advanced Moving Averages
-    indicators['DEMA10'] = ta.dema(df['Close'], timeperiod=10) / df['Close']
-    indicators['DEMA20'] = ta.dema(df['Close'], timeperiod=20) / df['Close']
-    indicators['TEMA10'] = ta.tema(df['Close'], timeperiod=10) / df['Close']
-    indicators['TEMA20'] = ta.tema(df['Close'], timeperiod=20) / df['Close']
-    indicators['HMA10'] = ta.hma(df['Close'], timeperiod=10) / df['Close']
-    indicators['WMA10'] = ta.wma(df['Close'], timeperiod=10) / df['Close']
-    indicators['KAMA10'] = ta.kama(df['Close']) / df['Close']
+    # indicators['DEMA10'] = ta.dema(df['Close'], timeperiod=10) / df['Close']
+    # indicators['DEMA20'] = ta.dema(df['Close'], timeperiod=20) / df['Close']
+    # indicators['TEMA10'] = ta.tema(df['Close'], timeperiod=10) / df['Close']
+    # indicators['TEMA20'] = ta.tema(df['Close'], timeperiod=20) / df['Close']
+    # indicators['HMA10'] = ta.hma(df['Close'], timeperiod=10) / df['Close']
+    # indicators['WMA10'] = ta.wma(df['Close'], timeperiod=10) / df['Close']
+    # indicators['KAMA10'] = ta.kama(df['Close']) / df['Close']
     
     # Moving Average Crossovers
-    indicators['SMA5_SMA10'] = indicators['SMA5'] - indicators['SMA10']
-    indicators['SMA10_SMA20'] = indicators['SMA10'] - indicators['SMA20']
-    indicators['SMA20_SMA50'] = indicators['SMA20'] - indicators['SMA50']
-    indicators['EMA10_EMA20'] = indicators['EMA10'] - indicators['EMA20']
+    # indicators['SMA5_SMA10'] = indicators['SMA5'] - indicators['SMA10']
+    # indicators['SMA10_SMA20'] = indicators['SMA10'] - indicators['SMA20']
+    # indicators['SMA20_SMA50'] = indicators['SMA20'] - indicators['SMA50']
+    # indicators['EMA10_EMA20'] = indicators['EMA10'] - indicators['EMA20']
+    section_times['Moving Averages'] = time.time() - section_start
     
-    # MACD
+    section_start = time.time()
     indicators['MACD'], indicators['MACD_Signal'] = ta.macd(df['Close'])
     indicators['MACD_Hist'] = indicators['MACD'] - indicators['MACD_Signal']
     
-    # PPO
     indicators['PPO'], indicators['PPO_Signal'], indicators['PPO_Hist'] = ta.ppo(df['Close'])
     
-    # ADX (Trend Strength)
     indicators['ADX'], indicators['PLUS_DI'], indicators['MINUS_DI'] = ta.adx(df['High'], df['Low'], df['Close'])
     indicators['DI_Diff'] = indicators['PLUS_DI'] - indicators['MINUS_DI']
     
-    # Aroon
     indicators['AROON_UP'], indicators['AROON_DOWN'] = ta.aroon(df['High'], df['Low'])
     indicators['AROON_OSC'] = indicators['AROON_UP'] - indicators['AROON_DOWN']
     
-    # Other Trend Indicators
     indicators['AO'] = ta.awesome_oscillator(df['High'], df['Low'])
     indicators['DPO'] = ta.dpo(df['Close'], timeperiod=20) / df['Close']
+    section_times['Trend Indicators'] = time.time() - section_start
     
     # ===== MOMENTUM INDICATORS =====
-    # Basic Momentum
+    section_start = time.time()
     indicators['MOM5'] = ta.mom(df['Close'], timeperiod=5) / df['Close']
     indicators['MOM10'] = ta.mom(df['Close'], timeperiod=10) / df['Close']
     
-    # Rate of Change
     indicators['ROC5'] = ta.roc(df['Close'], timeperiod=5)
     indicators['ROC10'] = ta.roc(df['Close'], timeperiod=10)
     
-    # RSI
     indicators['RSI7'] = ta.rsi(df['Close'], timeperiod=7)
     indicators['RSI14'] = ta.rsi(df['Close'], timeperiod=14)
     indicators['RSI21'] = ta.rsi(df['Close'], timeperiod=21)
     
-    # Stochastic
     indicators['STOCH_K'], indicators['STOCH_D'] = ta.stoch(df['High'], df['Low'], df['Close'])
     indicators['STOCH_K_D'] = indicators['STOCH_K'] - indicators['STOCH_D']
     
-    # Other Momentum Indicators
     indicators['CCI'] = ta.cci(df['High'], df['Low'], df['Close'])
     indicators['WillR'] = ta.willr(df['High'], df['Low'], df['Close'])
     indicators['TSI'], indicators['TSI_Signal'] = ta.tsi(df['Close'])
     indicators['RVI'] = ta.rvi(df['Open'], df['High'], df['Low'], df['Close'])
+    section_times['Momentum Indicators'] = time.time() - section_start
     
     # ===== VOLATILITY INDICATORS =====
-    # Average True Range
+    section_start = time.time()
     indicators['ATR'] = ta.atr(df['High'], df['Low'], df['Close'])
     indicators['ATR_Pct'] = indicators['ATR'] / df['Close'] * 100
     
-    # Bollinger Bands
     indicators['BB_Upper'], indicators['BB_Middle'], indicators['BB_Lower'] = ta.bbands(df['Close'])
     indicators['BB_Width'] = (indicators['BB_Upper'] - indicators['BB_Lower']) / indicators['BB_Middle']
     indicators['BB_Pos'] = (df['Close'] - indicators['BB_Lower']) / (indicators['BB_Upper'] - indicators['BB_Lower'])
     
-    # Keltner Channels
     indicators['KC_Upper'], indicators['KC_Middle'], indicators['KC_Lower'] = ta.keltner_channels(df['High'], df['Low'], df['Close'])
     indicators['KC_Width'] = (indicators['KC_Upper'] - indicators['KC_Lower']) / indicators['KC_Middle']
     indicators['KC_Pos'] = (df['Close'] - indicators['KC_Lower']) / (indicators['KC_Upper'] - indicators['KC_Lower'])
     
-    # Other Volatility Indicators
     indicators['CHOP'] = ta.choppiness_index(df['High'], df['Low'], df['Close'])
     indicators['HIST_VOL'] = ta.historical_volatility(df['Close'])
     indicators['VOL_RATIO'] = ta.volatility_ratio(df['High'], df['Low'], df['Close'])
+    section_times['Volatility Indicators'] = time.time() - section_start
     
     # ===== VOLUME INDICATORS =====
+    section_start = time.time()
     if 'Volume' in df.columns:
-        # On-Balance Volume
         indicators['OBV'] = ta.obv(df['Close'], df['Volume'])
-        indicators['OBV_ROC'] = ta.roc(indicators['OBV'], timeperiod=10)
+        # indicators['OBV_ROC'] = ta.roc(indicators['OBV'], timeperiod=10)
         
-        # Advanced Volume Indicators
         indicators['MFI'] = ta.mfi(df['High'], df['Low'], df['Close'], df['Volume'])
         indicators['CMF'] = ta.cmf(df['High'], df['Low'], df['Close'], df['Volume'])
         indicators['PVT'] = ta.pvt(df['Close'], df['Volume'])
         indicators['VZO'] = ta.volume_zone_oscillator(df['Close'], df['Volume'])
         
-        # VWAP
         indicators['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume']) / df['Close']
         indicators['VWAP_Upper'], _, indicators['VWAP_Lower'] = ta.vwap_bands(df['High'], df['Low'], df['Close'], df['Volume'])
         indicators['VWAP_Upper'] = indicators['VWAP_Upper'] / df['Close']
         indicators['VWAP_Lower'] = indicators['VWAP_Lower'] / df['Close']
+    section_times['Volume Indicators'] = time.time() - section_start
     
     # ===== SUPPORT & RESISTANCE =====
-    # Donchian Channels
+    section_start = time.time()
     indicators['DC_Upper'], indicators['DC_Middle'], indicators['DC_Lower'] = ta.donchian_channel(df['High'], df['Low'])
     indicators['DC_Width'] = (indicators['DC_Upper'] - indicators['DC_Lower']) / indicators['DC_Middle']
     
-    # SuperTrend
     indicators['SuperTrend'], indicators['SuperTrend_Line'] = ta.supertrend(df['High'], df['Low'], df['Close'])
     indicators['SuperTrend_Diff'] = (df['Close'] - indicators['SuperTrend_Line']) / df['Close']
     
-    # PSAR
     try:
         indicators['PSAR'] = ta.psar(df['High'].values, df['Low'].values)
         indicators['PSAR_Diff'] = (df['Close'] - indicators['PSAR']) / df['Close']
     except:
         pass
+    section_times['Support & Resistance'] = time.time() - section_start
     
     # ===== PRICE PATTERNS =====
-    # Ichimoku Cloud
+    section_start = time.time()
     indicators['Ichimoku_Tenkan'], indicators['Ichimoku_Kijun'], indicators['Ichimoku_Senkou_A'], indicators['Ichimoku_Senkou_B'], _ = ta.ichimoku(df['High'], df['Low'], df['Close'])
     indicators['Cloud_Diff'] = indicators['Ichimoku_Senkou_A'] - indicators['Ichimoku_Senkou_B']
     
-    # Elder Ray
     indicators['Bull_Power'], indicators['Bear_Power'] = ta.elder_ray(df['High'], df['Low'], df['Close'])
     
-    # Fractals
-    try:
-        indicators['Fractal_Up'], indicators['Fractal_Down'] = ta.fractal_indicator(df['High'], df['Low'])
-    except:
-        pass
+    if extra_features:
+        try:
+            indicators['Fractal_Up'], indicators['Fractal_Down'] = ta.fractal_indicator(df['High'], df['Low'])
+        except:
+            pass
+    section_times['Price Patterns'] = time.time() - section_start
     
     # ===== STATISTICAL INDICATORS =====
-    # Z-Score
+    section_start = time.time()
     indicators['Z_Score10'] = ta.z_score(df['Close'], timeperiod=10)
     indicators['Z_Score20'] = ta.z_score(df['Close'], timeperiod=20)
     
@@ -402,41 +400,58 @@ def prepare_data_classifier(data, lagged_length=5):
     indicators['Fisher10'] = ta.fisher_transform(df['Close'], timeperiod=10)
     
     # ===== CYCLE INDICATORS =====
-    # Price Cycle
     try:
         indicators['Price_Cycle20'] = ta.price_cycle(df['Close'], cycle_period=20)
     except:
         pass
     
-    # Mass Index for reversal identification
     indicators['Mass_Index'] = ta.mass_index(df['High'], df['Low'])
+
+    if extra_features:
+        try:
+            indicators['Hurst'] = ta.hurst_exponent(df['Close'])
+        except:
+            pass
+        try:
+            indicators['Percent_Rank'] = ta.percent_rank(df['Close'])
+        except:
+            pass
+    section_times['Statistical & Cycle'] = time.time() - section_start
     
-    # Try to compute Hurst exponent if data length permits
-    try:
-        indicators['Hurst'] = ta.hurst_exponent(df['Close'])
-    except:
-        pass
-    
-    # Add lagged features
+    section_start = time.time()
+    pct_change = df['Close'].pct_change()
     lagged_features = {}
     for col in df.columns:
         for i in range(1, lagged_length):
             lagged_features[f'Prev{i}_{col}'] = df[col].shift(i)
+    section_times['Lagged Features'] = time.time() - section_start
     
+    section_start = time.time()
     df = pd.concat([df, pd.DataFrame(indicators), pd.DataFrame(lagged_features)], axis=1)
     
-    # Handle missing values
     df = df.bfill().ffill()
     df.dropna(inplace=True)
+    section_times['Data Cleaning'] = time.time() - section_start
 
-    # Create target variable (binary classification)
-    pct_change = df['Close'].pct_change()
+    section_start = time.time()
     y = pd.Series(0, index=df.index)
     y[pct_change > 0] = 1
     y[pct_change < 0] = 0
 
     X = df[:-1]
     y = y[:-1]
+    section_times['Target Creation'] = time.time() - section_start
+    
+    end_time = time.time()
+    total_time = end_time - start_time
+    print(f"Data preparation done. ({len(X)} rows, {X.shape[1]} features) {total_time:.2f} seconds")
+    
+    # Sort and print section times
+    sorted_times = sorted(section_times.items(), key=lambda x: x[1], reverse=True)
+    print("\nSection execution times (slowest to fastest):")
+    for section, exec_time in sorted_times:
+        percentage = (exec_time / total_time) * 100
+        print(f"{section}: {exec_time:.4f} seconds ({percentage:.1f}%)")
     
     return X, y
 
@@ -461,5 +476,8 @@ def loss_plot(loss_history):
     return fig
 
 if __name__ == "__main__":
-    data = fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
-
+    data = fetch_data("BTC-USDT", 365, "5min", 0, kucoin=True)
+    X, y = prepare_data_classifier(data, lagged_length=20)
+    for col in X.columns:
+        if np.isinf(X[col]).sum() > 0:
+            print(col)
