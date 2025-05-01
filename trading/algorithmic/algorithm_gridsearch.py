@@ -5,8 +5,7 @@ from rich import print
 from rich.table import Table
 from rich.console import Console
 from tqdm import tqdm
-import concurrent.futures
-from functools import partial
+import numpy as np
 
 import sys, os
 sys.path.append("trading")
@@ -19,7 +18,6 @@ class AlgorithmGridSearch:
         strategy_func: Callable,
         param_grid: Dict[str, List[Any]],
         metric: str = "Total Return",
-        max_workers: int = None
     ):
         """
         Initialize the grid search framework.
@@ -29,7 +27,6 @@ class AlgorithmGridSearch:
             strategy_func: The strategy function to optimize
             param_grid: Dictionary of parameters to search
             metric: Performance metric to optimize (default: Total Return)
-            max_workers: Maximum number of parallel workers (default: None, uses system's default)
         """
         self.backtest = backtest
         self.strategy_func = strategy_func
@@ -37,7 +34,6 @@ class AlgorithmGridSearch:
         self.metric = metric
         self.results = []
         self.console = Console()
-        self.max_workers = max_workers
 
     def _generate_param_combinations(self) -> List[Dict[str, Any]]:
         """Generate all possible combinations of parameters."""
@@ -55,11 +51,34 @@ class AlgorithmGridSearch:
                 param for param in combinations 
                 if param["fastperiod"] < param["slowperiod"]
             ]
+        else:
+            valid_combinations = combinations
         
         return valid_combinations
 
     def _run_single_combination(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Run a single parameter combination and return the results."""
+        # Reset the backtest to ensure a clean environment
+        self.backtest.reset_backtest() if hasattr(self.backtest, 'reset_backtest') else None
+        
+        # Alternatively, recreate the entire backtest with the same settings
+        if not hasattr(self.backtest, 'reset_backtest'):
+            # Store original settings
+            symbol = self.backtest.symbol
+            initial_capital = self.backtest.initial_capital
+            data = self.backtest.data  # Assuming data is stored in the backtest
+            
+            # Create a fresh backtest instance with the same data
+            temp_backtest = VectorizedBacktesting(
+                symbol=symbol, 
+                initial_capital=initial_capital
+            )
+            # If data is already fetched, reuse it instead of fetching again
+            if hasattr(self.backtest, 'data') and self.backtest.data is not None:
+                temp_backtest.data = self.backtest.data.copy()
+                self.backtest = temp_backtest
+        
+        # Run the strategy with the current parameters
         self.backtest.run_strategy(self.strategy_func, **params)
         metrics = self.backtest.get_performance_metrics()
         return {
@@ -67,44 +86,34 @@ class AlgorithmGridSearch:
             "metrics": metrics
         }
 
-    def run(self, multiprocessing: bool = False) -> pd.DataFrame:
-        """Run the grid search in parallel and return results sorted by the specified metric."""
+    def run(self) -> pd.DataFrame:
+        """Run the grid search sequentially and return results sorted by the specified metric."""
         param_combinations = self._generate_param_combinations()
         total_combinations = len(param_combinations)
         
         table = Table(title="Grid Search Results")
         table.add_column("Parameters", style="cyan")
-        table.add_column("Performance", style="green")
+        table.add_column("Metric", style="green")
+        table.add_column("Alpha", style="blue")
         
-        progress_bar = tqdm(total=total_combinations, desc="Grid Search Progress")
+        self.results = []
         
-        def update_progress(future):
-            result = future.result()
-            self.results.append(result)
-            progress_bar.update(1)
+        with tqdm(total=total_combinations, desc="Grid Search Progress") as progress_bar:
+            for params in param_combinations:
+                result = self._run_single_combination(params)
+                self.results.append(result)
+                progress_bar.update(1)
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [executor.submit(self._run_single_combination, params) for params in param_combinations]
-            
-            for future in futures:
-                future.add_done_callback(update_progress)
-            
-            concurrent.futures.wait(futures)
-        
-        progress_bar.close()
-        
-        # Sort results by metric in descending order
         sorted_results = sorted(self.results, key=lambda x: x["metrics"][self.metric], reverse=True)
         
-        # Print the results table
         for i, result in enumerate(sorted_results, 1):
             table.add_row(
                 str(result["parameters"]),
-                f"{result['metrics'][self.metric]:.2%}"
+                f"{result['metrics'][self.metric]:.2%}",
+                f"{result['metrics']['Alpha']:.2%}"
             )
         self.console.print(table)
         
-        # Create and return the results DataFrame
         results_df = pd.DataFrame([
             {
                 **result["parameters"],
@@ -141,25 +150,22 @@ if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         symbol="BTC-USDT",
         initial_capital=10000.0,
-        chunks=15,
-        interval="1min",
+        chunks=365,
+        interval="5min",
         age_days=0
     )
     
     backtest.fetch_data(kucoin=True)
     
     param_grid = {
-        "fastperiod": list(range(1, 100, 10)),
-        "slowperiod": list(range(1, 100, 10)),
-        "signalperiod": list(range(1, 100, 10))
+        "confidence_threshold": np.arange(0, 100, 1)/100
     }
     
     grid_search = AlgorithmGridSearch(
         backtest=backtest,
-        strategy_func=backtest.macd_strategy,
+        strategy_func=backtest.nn_strategy_batch,
         param_grid=param_grid,
-        metric="Alpha",
-        max_workers=24  # Adjust based on your system's capabilities
+        metric="PT_Ratio",
     )
     
     results = grid_search.run()

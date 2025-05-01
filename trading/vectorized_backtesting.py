@@ -75,6 +75,7 @@ class VectorizedBacktesting:
             'Total_Return': metrics.get_total_return(self.data['Position'], self.data['Close']),
             'Alpha': metrics.get_alpha(self.data['Position'], self.data['Close']),
             'Beta': metrics.get_beta(self.data['Position'], self.data['Close']),
+            'Excess_Returns': metrics.get_excess_returns(self.data['Position'], self.data['Close']),
             'Max_Drawdown': metrics.get_max_drawdown(self.data['Position'], self.data['Close'], self.initial_capital),
             'Sharpe_Ratio': metrics.get_sharpe_ratio(self.data['Position'], self.data['Close']),
             'Sortino_Ratio': metrics.get_sortino_ratio(self.data['Position'], self.data['Close']),
@@ -117,9 +118,8 @@ class VectorizedBacktesting:
             buy_signals = self.data.index[np.where(position_changes > 0)[0] + 1]
             sell_signals = self.data.index[np.where(position_changes < 0)[0] + 1]
 
-            offset = self.initial_capital * 0.0005
-            buy_asset_values = asset_value[np.where(position_changes > 0)[0] + 1] - offset
-            sell_asset_values = asset_value[np.where(position_changes < 0)[0] + 1] + offset
+            buy_asset_values = asset_value[np.where(position_changes > 0)[0] + 1]
+            sell_asset_values = asset_value[np.where(position_changes < 0)[0] + 1]
 
             fig.add_trace(go.Scatter(
                 x=buy_signals,
@@ -377,7 +377,12 @@ class VectorizedBacktesting:
         
         return fig
 
+    def hodl_strategy(self, data: pd.DataFrame) -> pd.Series:
+        """Hodl strategy implementation. Use for debugging/benchmarking."""
+        return pd.Series(1, index=data.index)
+
     def perfect_strategy(self, data: pd.DataFrame) -> pd.Series:
+        """Perfect strategy implementation. Use for debugging/benchmarking."""
         future_returns = data['Close'].shift(-1) / data['Close'] - 1
         return (future_returns > 0).astype(int)
 
@@ -423,9 +428,9 @@ class VectorizedBacktesting:
         
         return position
 
-    def macd_strategy(self, data: pd.DataFrame, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> pd.Series:
+    def macd_strategy(self, data: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        macd, signal = ta.macd(data['Close'], fastperiod=fastperiod, slowperiod=slowperiod, signalperiod=signalperiod)
+        macd, signal = ta.macd(data['Close'], fastperiod=fast_period, slowperiod=slow_period, signalperiod=signal_period)
         
         position[macd > signal] = 1
         position[macd < signal] = 0
@@ -517,7 +522,7 @@ class VectorizedBacktesting:
         
         return position
         
-    def nn_strategy_batch(self, data: pd.DataFrame, batch_size: int = 1) -> pd.Series:
+    def nn_strategy_batch(self, data: pd.DataFrame, batch_size: int = 64, confidence_threshold: float = 0.1) -> pd.Series:
         """
         Neural network strategy implementation using batch processing for efficiency.
         
@@ -528,17 +533,17 @@ class VectorizedBacktesting:
         from brains.time_series.single_predictors.classifier_model import load_model
         import model_tools as mt
         
-        MODEL_PATH = r"trading\BTC-USDT_15min_20_7features.pth"
+        MODEL_PATH = r"trading\BTC-USDT_5min_20_10features.pth"
         
         position = pd.Series(0, index=data.index)
         
         model = load_model(MODEL_PATH)
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.eval()
+
+        selected_features = model.selected_features
         
         features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=20)
-        
-        selected_features = model.selected_features
         
         missing_features = [f for f in selected_features if f not in features_df.columns]
         if missing_features:
@@ -553,9 +558,10 @@ class VectorizedBacktesting:
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         
         predictions = []
-        probabilities = []        
+        probabilities = []
+        tqdm_dataloader = tqdm(dataloader, desc="Processing Batches")
         with torch.no_grad():
-            for batch in dataloader:
+            for batch in tqdm_dataloader:
                 batch_x = batch[0]
                 outputs = model(batch_x)
                 
@@ -568,7 +574,10 @@ class VectorizedBacktesting:
         probabilities = np.array(probabilities)
         
         position_values = np.zeros(len(features_df))
-        position_values[probabilities[:, 1] > 0.85] = 1
+        buy_probability = probabilities[:, 1]
+        sell_probability = probabilities[:, 0]
+        probability_difference = buy_probability - sell_probability #positive = more confident buy | negative = more confident sell
+        position_values[probability_difference > confidence_threshold] = 1
 
         position.iloc[len(data)-len(position_values):] = position_values
 
@@ -578,15 +587,15 @@ class VectorizedBacktesting:
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
-        symbol="SOL-USDT",
+        symbol="BTC-USDT",
         initial_capital=39.5,
-        chunks=5,
-        interval="15min",
-        age_days=100
+        chunks=365,
+        interval="5min",
+        age_days=365
     )
     
     backtest.fetch_data(kucoin=True)
     
     backtest.run_strategy(backtest.nn_strategy_batch)
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=False)
+    backtest.plot_performance(advanced=True)

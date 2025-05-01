@@ -41,10 +41,34 @@ def get_alpha(position: pd.Series, close_prices: pd.Series) -> float:
 
 def get_beta(position: pd.Series, close_prices: pd.Series) -> float:
     """Calculate beta from position and close prices."""
-    returns = get_returns(position, close_prices)
-    benchmark_returns = get_benchmark_returns(close_prices)
-    beta = returns.cov(benchmark_returns) / benchmark_returns.var() #beta > 1 more volatile than benchmark
+    # Get strategy returns (these are already aligned with position)
+    strategy_returns = get_returns(position, close_prices)
+    
+    # Get market returns (not cumulative, just the daily percentage changes)
+    market_returns = close_prices.pct_change()
+    
+    # Make sure both return series have the same index
+    common_index = strategy_returns.dropna().index.intersection(market_returns.dropna().index)
+    
+    # Align both returns to the common timeframe
+    aligned_strategy_returns = strategy_returns.loc[common_index]
+    aligned_market_returns = market_returns.loc[common_index]
+    
+    # Calculate beta using covariance/variance
+    covariance = aligned_strategy_returns.cov(aligned_market_returns)
+    variance = aligned_market_returns.var()
+    
+    if variance == 0:
+        return 0  # Avoid division by zero
+        
+    beta = covariance / variance
     return beta
+
+def get_excess_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
+    """Calculate excess returns of strategy compared to benchmark."""
+    returns = get_total_return(position, close_prices)
+    benchmark_returns = get_benchmark_total_return(close_prices)
+    return returns - benchmark_returns
 
 def get_drawdown(position: pd.Series, close_prices: pd.Series, initial_capital: float) -> pd.Series:
     """Calculate drawdown from position, close prices, and initial capital."""

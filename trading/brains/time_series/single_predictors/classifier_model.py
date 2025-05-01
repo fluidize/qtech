@@ -16,18 +16,25 @@ import sys
 sys.path.append(r"trading")
 import model_tools as mt
 
-class FeatureSelectionCallback:
+class FeatureSelector:
     """Callback for feature importance-based selection during training"""
-    def __init__(self, X_train, y_train, feature_names, importance_threshold=5):
+    def __init__(self, X_train, y_train, feature_names, importance_threshold=5, max_features=None):
         self.X_train = X_train
         self.y_train = y_train
         self.feature_names = feature_names
         self.importance_threshold = importance_threshold
+        self.max_features = max_features
         self.important_features = None
         
     def get_important_features(self):
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.model_selection import cross_val_score
+        from sklearn.preprocessing import StandardScaler
         import lightgbm as lgb
+        import numpy as np
         start_time = time.time()
+
+        # Train LightGBM for its feature importance
         gbm = lgb.LGBMClassifier(
             objective='binary',
             metric='binary_logloss',
@@ -44,35 +51,104 @@ class FeatureSelectionCallback:
             random_state=42
         )
         gbm.fit(self.X_train, self.y_train)
-        end_time = time.time()
-        importances = gbm.feature_importances_
-        indices = np.argsort(importances)[::-1] #reverse order
+        lgb_importances = gbm.feature_importances_
+
+        # Train RandomForest for its feature importance
+        RFClassifier = RandomForestClassifier(
+            n_estimators=100,
+            random_state=42
+        )
+        RFClassifier.fit(self.X_train, self.y_train)
+        rf_importances = RFClassifier.feature_importances_
+
+        combined_importances = (np.array(rf_importances) + np.array(lgb_importances)) / 2
+        indices = np.argsort(combined_importances)[::-1]  # reverse order
 
         features = [self.feature_names[i] for i in indices]
-        importance_values = [importances[i] for i in indices]
+        importance_values = [combined_importances[i] for i in indices]
         
-        self.important_features = [f for f, imp in zip(features, importance_values) if imp >= self.importance_threshold]
-        filtered_importances = [imp for imp in importance_values if imp >= self.importance_threshold]
+        candidate_features = [f for f, imp in zip(features, importance_values) if imp >= self.importance_threshold]
+        if self.max_features and len(candidate_features) > self.max_features:
+            candidate_features = candidate_features[:self.max_features]
+            
+        # Check for harmful feature correlations
+        X_candidates = self.X_train[candidate_features]
+        correlation_matrix = X_candidates.corr().abs()
         
-        print(f"Top features selected by importance ({end_time - start_time:.2f}s):")
+        # Remove highly correlated features (>0.95)
+        to_drop = set()
+        for i in range(len(correlation_matrix.columns)):
+            for j in range(i):
+                if correlation_matrix.iloc[i, j] > 0.95:
+                    colname = correlation_matrix.columns[i]
+                    to_drop.add(colname)
+        
+        candidate_features = [f for f in candidate_features if f not in to_drop]
+        print(f"Removed {len(to_drop)} highly correlated features")
+        
+        # Incremental feature validation
+        final_features = []
+        best_score = 0
+        scaler = StandardScaler()
+        
+        # First, evaluate baseline model with most important feature
+        X_scaled = scaler.fit_transform(self.X_train[[candidate_features[0]]])
+        baseline_model = lgb.LGBMClassifier(random_state=42)
+        baseline_score = cross_val_score(baseline_model, X_scaled, self.y_train, cv=3, scoring='accuracy').mean()
+        final_features = [candidate_features[0]]
+        best_score = baseline_score
+        
+        print(f"Starting with feature: {candidate_features[0]}, baseline score: {baseline_score:.4f}")
+        
+        # Now test adding each feature incrementally
+        for feature in candidate_features[1:]:
+            current_features = final_features + [feature]
+            X_scaled = scaler.fit_transform(self.X_train[current_features])
+            
+            model = lgb.LGBMClassifier(random_state=42)
+            score = cross_val_score(model, X_scaled, self.y_train, cv=3, scoring='accuracy').mean()
+            
+            # Only keep features that improve or maintain performance 
+            # (allowing small degradation of up to 0.5% to avoid overfitting)
+            if score >= best_score - 0.005:
+                final_features.append(feature)
+                if score > best_score:
+                    best_score = score
+                print(f"Added feature: {feature}, new score: {score:.4f}")
+            else:
+                print(f"Rejected feature: {feature}, score: {score:.4f} vs best: {best_score:.4f}")
+                
+        end_time = time.time()
+        self.important_features = final_features
+        
+        # Print final features with their importance values
+        filtered_importances = []
+        for feature in self.important_features:
+            idx = features.index(feature)
+            imp = importance_values[idx]
+            filtered_importances.append(imp)
+        
+        print(f"\nFinal features selected ({end_time - start_time:.2f}s):")
         for i, (feature, importance) in enumerate(zip(self.important_features, filtered_importances)):
+            feature_idx = self.feature_names.index(feature)
+            feature_max_value = max(self.X_train.iloc[:, feature_idx])
+            feature_min_value = min(self.X_train.iloc[:, feature_idx])
             print(f"{i+1}. {feature}: {importance}")
             
         return self.important_features
 
-class Attention(nn.Module):
-    def __init__(self, hidden_dim):
-        super().__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, 1)
+class NormalizationBlock(nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dim=128):
+        super().__init__() 
+        self.normalizer = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim, output_dim),
         )
         
     def forward(self, x):
-        attention_weights = self.attention(x)
-        attention_weights = torch.softmax(attention_weights, dim=1)
-        return attention_weights
+        x = self.normalizer(x)
+        return x
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_features, out_features):
@@ -102,7 +178,7 @@ class ResidualBlock(nn.Module):
         return out
 
 class ClassifierModel(nn.Module):
-    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, lagged_length=20, use_feature_selection: bool = True, input_dim=None):
+    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, lagged_length=20, use_feature_selection: bool = True, importance_threshold: int = 30, max_features: int = 50, input_dim=None):
         super().__init__()
 
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -113,8 +189,11 @@ class ClassifierModel(nn.Module):
         self.epochs = epochs
         self.selected_features = None
         self.lagged_length = lagged_length
+        self.importance_threshold = importance_threshold
+        self.max_features = max_features
         self.input_dim = input_dim  # Allow input_dim to be set directly
-        self.hidden_dim = 512
+        self.hidden_dim = 256
+        
 
         if train:
             self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
@@ -122,7 +201,8 @@ class ClassifierModel(nn.Module):
             feature_names = X.columns.tolist()
             
             if use_feature_selection:
-                self.feature_selector = FeatureSelectionCallback(X_train=X.values, y_train=y.values, feature_names=feature_names, importance_threshold=5)
+                self.feature_selector = FeatureSelector(X_train=X, y_train=y, feature_names=feature_names, 
+                                                      importance_threshold=importance_threshold, max_features=max_features)
                 self.selected_features = self.feature_selector.get_important_features()
                 X = X[self.selected_features]
             else:
@@ -134,21 +214,14 @@ class ClassifierModel(nn.Module):
         if self.input_dim is not None:
             self._build_model()
         else:
-            print("Warning: input_dim is None. Call set_input_dim() before using the model.")
+            print("Warning: input_dim is None. Model layers will not be initialized.")
     
-    def set_input_dim(self, input_dim):
-        """Set the input dimension and build the model layers"""
-        self.input_dim = input_dim
-        self._build_model()
-        return self
-        
     def _build_model(self):
         """Build the model layers using the input_dim"""
         # Use LayerNorm - batch independent and effective for time series data
-        self.normalizer = nn.BatchNorm1d(self.input_dim)
+        self.normalization_block = NormalizationBlock(self.input_dim, self.input_dim, hidden_dim=128)
 
-        # LSTM Layer
-        self.lstm = nn.LSTM(
+        self.lstm = nn.GRU(
             input_size=self.input_dim,
             hidden_size=self.hidden_dim,
             num_layers=2,
@@ -157,7 +230,6 @@ class ClassifierModel(nn.Module):
             batch_first=True
         )
         
-        self.attention = Attention(self.hidden_dim * 2)
         self.res_block1 = ResidualBlock(self.hidden_dim * 2, self.hidden_dim)
         self.res_block2 = ResidualBlock(self.hidden_dim, self.hidden_dim)
         self.fc1 = nn.Linear(self.hidden_dim, self.hidden_dim)
@@ -167,10 +239,9 @@ class ClassifierModel(nn.Module):
         self._init_weights()
 
     def forward(self, x):
-        # Apply normalization
-        x = self.normalizer(x)
+        x_norm = self.normalization_block(x)
 
-        lstm_out, _ = self.lstm(x)
+        lstm_out, _ = self.lstm(x_norm)
         
         x = self.res_block1(lstm_out)
         x = self.res_block2(x)
@@ -231,7 +302,7 @@ class ClassifierModel(nn.Module):
         
         print("Class weights:", class_weights.cpu().numpy())
         
-        batch_size = 1
+        batch_size = 64
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         
         base_lr = 1e-3
@@ -348,18 +419,34 @@ class ClassifierModel(nn.Module):
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_state_dict = model.state_dict()
+                best_train_acc = train_acc
+                best_val_acc = val_acc
 
         if show_loss:
             fig = self.loss_plot(train_loss_history, train_acc_history, val_loss_history, val_acc_history)
             fig.show()
         
-        if ((input("Save? y/n ").lower() == 'y') if prompt_save else False):
+        if prompt_save:
+            save_prompt = input(f"Save? y/n [Best val loss: {best_val_loss:.4f}, Val acc: {best_val_acc:.2f}%] ")
+            should_save = save_prompt.lower() == 'y'
+        else:
+            should_save = True
+        
+        if should_save:
             save_path = f"{self.ticker}_{self.interval}_{self.lagged_length}_{len(self.selected_features)}features.pth"
             torch.save({
                 'model_state_dict': best_state_dict,
-                'selected_features': self.selected_features if self.selected_features else None,  # Save selected features
-                'input_dim': self.input_dim
+                'selected_features': self.selected_features if self.selected_features else None,
+                'input_dim': self.input_dim,
+                'val_loss': best_val_loss,
+                'val_acc': best_val_acc,
+                'train_acc': best_train_acc,
+                'feature_selection_params': {
+                    'importance_threshold': self.importance_threshold,
+                    'max_features': self.max_features
+                }
             }, save_path)
+            print(f"Model saved to {save_path}")
         
         return model
     
@@ -496,7 +583,7 @@ class ClassifierModel(nn.Module):
         
         return fig
 
-def load_model(model_path: str, input_dim=None):
+def load_model(model_path: str, input_dim=None, verbose: bool = False):
     checkpoint = torch.load(model_path)
     
     checkpoint_input_dim = checkpoint.get('input_dim')
@@ -505,18 +592,34 @@ def load_model(model_path: str, input_dim=None):
     
     if effective_input_dim is None:
         raise ValueError("Input dimension could not be determined from checkpoint and wasn't provided. Please specify input_dim.")
-        
-    model = ClassifierModel(train=False, input_dim=effective_input_dim)
+    
+    # If we have feature selection params, use them
+    feature_selection_params = checkpoint.get('feature_selection_params', {})
+    importance_threshold = feature_selection_params.get('importance_threshold', 10)
+    max_features = feature_selection_params.get('max_features', 50)
+    
+    model = ClassifierModel(
+        train=False, 
+        input_dim=effective_input_dim,
+        importance_threshold=importance_threshold,
+        max_features=max_features
+    )
     
     model.selected_features = checkpoint.get('selected_features')
     
     model.load_state_dict(checkpoint['model_state_dict'])
     
-    print(f"Model loaded with input_dim: {effective_input_dim}")
-    print(f"Selected features: {len(model.selected_features) if model.selected_features else 'None'}")
+    if verbose:
+        print(f"Model loaded with input_dim: {effective_input_dim}")
+        print(f"Selected features: {len(model.selected_features) if model.selected_features else 'None'}")
+        
+        if 'val_loss' in checkpoint:
+            print(f"Validation loss: {checkpoint['val_loss']:.4f}")
+            if 'val_acc' in checkpoint:
+                print(f"Validation accuracy: {checkpoint['val_acc']:.2f}%")
     
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="15min", age_days=0, epochs=50, lagged_length=20, use_feature_selection=True)
+    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="5min", age_days=0, epochs=50, lagged_length=20, use_feature_selection=True)
     model = model.train_model(model, prompt_save=True, show_loss=False)
