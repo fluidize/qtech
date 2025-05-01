@@ -302,13 +302,16 @@ def hurst_exponent(series, max_lag=20) -> pd.Series:
     lags = range(2, max_lag)
     result = pd.Series(index=series.index)
     
-    for i in range(len(series) - max_lag):
-        window = series.iloc[i:i+max_lag]
+    # Convert to numpy array for faster processing
+    series_values = series.values
+    
+    for i in range(len(series_values) - max_lag):
+        window = series_values[i:i+max_lag]
         tau = []; lag_var = []
         
         for lag in lags:
             # Calculate price difference with lag
-            pp = np.subtract(window[lag:].values, window[:-lag].values)
+            pp = np.subtract(window[lag:], window[:-lag])
             # Calculate variance - avoid zeros
             var = np.var(pp)
             if var > 0:  # Only include valid variances
@@ -322,7 +325,7 @@ def hurst_exponent(series, max_lag=20) -> pd.Series:
                 # Convert to Hurst exponent
                 h = m / 2.0
                 
-                if i + max_lag < len(series):
+                if i + max_lag < len(series_values):
                     result.iloc[i + max_lag] = h
             except:
                 # Skip in case of numerical issues
@@ -368,14 +371,18 @@ def fractal_indicator(high, low, n=2) -> tuple[pd.Series, pd.Series]:
     up_fractals = pd.Series(index=high.index, data=False)
     down_fractals = pd.Series(index=low.index, data=False)
     
+    # Convert to numpy arrays for faster processing in loops
+    high_values = high.values
+    low_values = low.values
+    
     # Identify bearish (up) fractals: Center candle high is highest among 2n+1 candles
-    for i in range(n, len(high)-n):
-        if high.iloc[i] == high.iloc[i-n:i+n+1].max():
+    for i in range(n, len(high_values)-n):
+        if high_values[i] == np.max(high_values[i-n:i+n+1]):
             up_fractals.iloc[i] = True
     
     # Identify bullish (down) fractals: Center candle low is lowest among 2n+1 candles
-    for i in range(n, len(low)-n):
-        if low.iloc[i] == low.iloc[i-n:i+n+1].min():
+    for i in range(n, len(low_values)-n):
+        if low_values[i] == np.min(low_values[i-n:i+n+1]):
             down_fractals.iloc[i] = True
     
     return up_fractals, down_fractals
@@ -566,9 +573,16 @@ def wma(series, timeperiod=20) -> pd.Series:
     weights = np.arange(1, timeperiod + 1)
     sum_weights = weights.sum()
     
-    result = pd.Series(index=series.index)
-    for i in range(timeperiod - 1, len(series)):
-        result.iloc[i] = np.sum(series.iloc[i - timeperiod + 1:i + 1].values * weights) / sum_weights
+    # Pre-allocate the result array with NaNs
+    result = pd.Series(np.nan, index=series.index)
+    
+    # Convert to numpy array for faster processing
+    series_values = series.values
+    
+    for i in range(timeperiod - 1, len(series_values)):
+        # Directly use numpy array slicing instead of Series.iloc
+        window_vals = series_values[i - timeperiod + 1:i + 1]
+        result.iloc[i] = np.sum(window_vals * weights) / sum_weights
     
     return result
 
@@ -775,57 +789,58 @@ def get_candlestick_patterns(df, patterns: list[str] = None) -> pd.DataFrame:
     return pattern_df
 
 if __name__ == "__main__":
-    # data = mt.fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
-    # data['SMA'] = sma(data['Close'])
-    # data['EMA'] = ema(data['Close'])
-    # data['RSI'] = rsi(data['Close'])
-    # data['MACD'], data['MACD_Signal'] = macd(data['Close'])
-    # data['BBands_Upper'], data['BBands_Middle'], data['BBands_Lower'] = bbands(data['Close'])
-    # data['Stoch_K'], data['Stoch_D'] = stoch(data['High'], data['Low'], data['Close'])
-    # data['ATR'] = atr(data['High'], data['Low'], data['Close'])
-    # data['OBV'], data['OBV_Signal'] = aobv(data['Close'], data['Volume'])
-    # data['CCI'] = cci(data['High'], data['Low'], data['Close'])
-    # data['ADX'], data['ADX_Pos'], data['ADX_Neg'] = adx(data['High'], data['Low'], data['Close'])
-    # data['Log_Returns'] = log_returns(data['Close'])
-    # data['StdDev'] = stddev(data['Close'])
-    # data['ROC'] = roc(data['Close'])
-    # data['Momentum'] = mom(data['Close'])
-    # data['WilliamsR'] = willr(data['High'], data['Low'], data['Close'])
-    # data['MFI'] = mfi(data['High'], data['Low'], data['Close'], data['Volume'])
-    # data['KAMA'] = kama(data['Close'])
-    # data['VWAP'] = vwap(data['High'], data['Low'], data['Close'], data['Volume'])
-    # data['SuperTrend'], data['SuperTrend_Upper'], data['SuperTrend_Lower'] = supertrend(data['High'], data['Low'], data['Close'])
-    # data['TSI'], data['TSI_Signal'] = tsi(data['Close'])
-    # data['CMF'] = cmf(data['High'], data['Low'], data['Close'], data['Volume'])
-    # data['HMA'] = hma(data['Close'])
-    # data['WMA'] = wma(data['Close'])
-    # data['Ichimoku_Tenkan'], data['Ichimoku_Kijun'], data['Ichimoku_Senkou_A'], data['Ichimoku_Senkou_B'], data['Ichimoku_Chikou'] = ichimoku(data['High'], data['Low'], data['Close'])
-    # data['PPO'], data['PPO_Signal'], data['PPO_Histogram'] = ppo(data['Close'])
-    # data['AOBV'], data['AOBV_Signal'] = aobv(data['Close'], data['Volume'])
+    import sys
+    sys.path.append(r"trading")
+    import model_tools as mt
     
-    # start_time = time.time()
-    # data['Doji'], data['Hammer'], data['Shooting_Star'], data['Engulfing'], data['Harami'], data['Morning_Star'], data['Evening_Star'], data['Three_White_Soldiers'], data['Three_Black_Crows'], data['Dark_Cloud_Cover'], data['Piercing_Line'] = get_candlestick_patterns(df=data, patterns=['doji', 'hammer', 'shooting_star', 'engulfing', 'harami', 'morning_star', 'evening_star', 'three_white_soldiers', 'three_black_crows', 'dark_cloud_cover', 'piercing_line'])
-    # end_time = time.time()
-    # print(f"Time taken: {end_time - start_time} seconds")
-
-    # start_time = time.time()
-    # data['PSAR'] = psar(data['High'].values, data['Low'].values)
-    # end_time = time.time()
-    # print(f"Time taken: {end_time - start_time} seconds")
-    # fig = go.Figure()
-    # fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close']))
-    # fig.add_trace(go.Scatter(x=data.index, y=data['PSAR'], mode='markers', name='PSAR'))
-    # fig.show()
-
+    print("Benchmarking technical indicators...")
+    data = mt.fetch_data("BTC-USDT", 365, "5min", 0, kucoin=True)
+    
+    # Dictionary to store execution times
+    execution_times = {}
+    
+    # First test prepare_data_classifier to see which sections are slowest
+    print("\nBenchmarking prepare_data_classifier sections...")
     start_time = time.time()
-    data['SuperTrend'], data['SuperTrend_Line'] = supertrend(data['High'], data['Low'], data['Close'])
-    end_time = time.time()
-    print(f"Time taken: {end_time - start_time} seconds")
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close']))
-    fig.add_trace(go.Scatter(x=data.index, y=data['SuperTrend_Line'], mode='lines', name='SuperTrend'))
-    fig.show()
+    X, y = mt.prepare_data_classifier(data, lagged_length=20)
+    print(f"Total prepare_data_classifier time: {time.time() - start_time:.4f} seconds")
     
+    print("\nBenchmarking individual indicator functions...")
+    # Test individual complex indicators that might be slow
+    functions_to_test = [
+        ("hurst_exponent", lambda: hurst_exponent(data['Close'])),
+        ("fractal_indicator", lambda: fractal_indicator(data['High'], data['Low'])),
+        ("ichimoku", lambda: ichimoku(data['High'], data['Low'], data['Close'])),
+        ("psar", lambda: psar(data['High'].values, data['Low'].values)),
+        ("supertrend", lambda: supertrend(data['High'], data['Low'], data['Close'])),
+        ("kama", lambda: kama(data['Close'])),
+        ("wma", lambda: wma(data['Close'])),
+        ("price_cycle", lambda: price_cycle(data['Close'])),
+        ("percent_rank", lambda: percent_rank(data['Close'])),
+        ("adx", lambda: adx(data['High'], data['Low'], data['Close'])),
+        ("identify_candlestick_patterns", lambda: identify_candlestick_patterns(
+            data['Open'].values, data['High'].values, data['Low'].values, data['Close'].values
+        ))
+    ]
+    
+    # Run benchmarks for individual functions
+    for name, func in functions_to_test:
+        start_time = time.time()
+        result = func()
+        end_time = time.time()
+        execution_time = end_time - start_time
+        execution_times[name] = execution_time
+        print(f"{name}: {execution_time:.4f} seconds")
+    
+    # Find slowest function
+    slowest_func = max(execution_times.items(), key=lambda x: x[1])
+    print(f"\nSLOWEST FUNCTION: {slowest_func[0]} took {slowest_func[1]:.4f} seconds")
+    
+    # Sort functions by execution time
+    print("\nAll functions sorted by execution time (slowest to fastest):")
+    sorted_funcs = sorted(execution_times.items(), key=lambda x: x[1], reverse=True)
+    for name, time_taken in sorted_funcs:
+        print(f"{name}: {time_taken:.4f} seconds")
     
     
     
