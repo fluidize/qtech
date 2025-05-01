@@ -419,7 +419,6 @@ def prepare_data_classifier(data, lagged_length=5, extra_features=False):
     section_times['Statistical & Cycle'] = time.time() - section_start
     
     section_start = time.time()
-    pct_change = df['Close'].pct_change()
     lagged_features = {}
     for col in df.columns:
         for i in range(1, lagged_length):
@@ -428,12 +427,12 @@ def prepare_data_classifier(data, lagged_length=5, extra_features=False):
     
     section_start = time.time()
     df = pd.concat([df, pd.DataFrame(indicators), pd.DataFrame(lagged_features)], axis=1)
-    
-    df = df.bfill().ffill()
+    df = df.ffill()
     df.dropna(inplace=True)
     section_times['Data Cleaning'] = time.time() - section_start
 
     section_start = time.time()
+    pct_change = df['Close'].pct_change().shift(-1)
     y = pd.Series(0, index=df.index)
     y[pct_change > 0] = 1
     y[pct_change < 0] = 0
@@ -447,11 +446,11 @@ def prepare_data_classifier(data, lagged_length=5, extra_features=False):
     print(f"Data preparation done. ({len(X)} rows, {X.shape[1]} features) {total_time:.2f} seconds")
     
     # Sort and print section times
-    sorted_times = sorted(section_times.items(), key=lambda x: x[1], reverse=True)
-    print("\nSection execution times (slowest to fastest):")
-    for section, exec_time in sorted_times:
-        percentage = (exec_time / total_time) * 100
-        print(f"{section}: {exec_time:.4f} seconds ({percentage:.1f}%)")
+    # sorted_times = sorted(section_times.items(), key=lambda x: x[1], reverse=True)
+    # print("\nSection execution times (slowest to fastest):")
+    # for section, exec_time in sorted_times:
+    #     percentage = (exec_time / total_time) * 100
+    #     print(f"{section}: {exec_time:.4f} seconds ({percentage:.1f}%)")
     
     return X, y
 
