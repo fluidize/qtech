@@ -240,7 +240,7 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
     
     return df, scalers
 
-def prepare_data_classifier(data, lagged_length=5, extra_features=False):
+def prepare_data_classifier(data, lagged_length=5, extra_features=False, elapsed_time=False):
     start_time = time.time()
     df = data.copy()
     
@@ -420,6 +420,7 @@ def prepare_data_classifier(data, lagged_length=5, extra_features=False):
     
     section_start = time.time()
     lagged_features = {}
+    df.drop(columns=['Volume'], inplace=True)
     for col in df.columns:
         for i in range(1, lagged_length):
             lagged_features[f'Prev{i}_{col}'] = df[col].shift(i)
@@ -443,7 +444,8 @@ def prepare_data_classifier(data, lagged_length=5, extra_features=False):
     
     end_time = time.time()
     total_time = end_time - start_time
-    print(f"Data preparation done. ({len(X)} rows, {X.shape[1]} features) {total_time:.2f} seconds")
+    if elapsed_time:
+        print(f"Data preparation done. ({len(X)} rows, {X.shape[1]} features) {total_time:.2f} seconds")
     
     # Sort and print section times
     # sorted_times = sorted(section_times.items(), key=lambda x: x[1], reverse=True)
