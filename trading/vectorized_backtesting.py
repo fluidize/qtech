@@ -522,7 +522,7 @@ class VectorizedBacktesting:
         
         return position
         
-    def nn_strategy_batch(self, data: pd.DataFrame, batch_size: int = 64, confidence_threshold: float = 0.1) -> pd.Series:
+    def nn_strategy_batch(self, data: pd.DataFrame, batch_size: int = 64, confidence_threshold: float = 0.99) -> pd.Series:
         """
         Neural network strategy implementation using batch processing for efficiency.
         
@@ -591,7 +591,7 @@ if __name__ == "__main__":
         initial_capital=39.5,
         chunks=365,
         interval="5min",
-        age_days=365
+        age_days=0
     )
     
     backtest.fetch_data(kucoin=True)
