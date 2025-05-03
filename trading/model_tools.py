@@ -82,7 +82,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
         data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         times = []
         
-        progress_bar = tqdm(total=chunks, desc="KUCOIN PROGRESS", ascii=">#")
+        progress_bar = tqdm(total=chunks, desc="KUCOIN PROGRESS", ascii="#>")
         for x in range(chunks):
             chunksize = 1440  # 1d of 1m data
             end_time = datetime.now() - timedelta(minutes=chunksize*x) - timedelta(days=age_days)
@@ -99,7 +99,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
             try:
                 request_data = request["data"]  # list of lists
             except:
-                raise Exception(f"Error fetching Kucoin. Check request parameters.")
+                raise Exception(f"Error fetching Kucoin. Check request parameters. {request}")
             
             records = []
             for dochltv in request_data:
