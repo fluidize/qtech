@@ -11,131 +11,12 @@ import plotly.graph_objects as go
 import time
 from rich import print
 from tqdm import tqdm
+from typing import List, Optional
 
 import sys
 sys.path.append(r"trading")
 import model_tools as mt
-
-class FeatureSelector:
-    """Callback for feature importance-based selection during training"""
-    def __init__(self, X_train, y_train, feature_names, importance_threshold=5, max_features=None):
-        self.X_train = X_train
-        self.y_train = y_train
-        self.feature_names = feature_names
-        self.importance_threshold = importance_threshold
-        self.max_features = max_features
-        self.important_features = None
-        
-    def get_important_features(self):
-        from sklearn.ensemble import RandomForestClassifier
-        from sklearn.model_selection import cross_val_score
-        from sklearn.preprocessing import StandardScaler
-        import lightgbm as lgb
-        import numpy as np
-        start_time = time.time()
-
-        # Train LightGBM for its feature importance
-        gbm = lgb.LGBMClassifier(
-            objective='binary',
-            metric='binary_logloss',
-            boosting_type='gbdt',
-            num_leaves=31,
-            max_depth=-1,
-            feature_fraction=0.8,
-            bagging_fraction=0.8,
-            bagging_freq=5,
-            min_child_samples=20,
-            lambda_l1=0.1,
-            lambda_l2=0.1,
-            verbose=-1,
-            random_state=42
-        )
-        gbm.fit(self.X_train, self.y_train)
-        lgb_importances = gbm.feature_importances_
-
-        # Train RandomForest for its feature importance
-        RFClassifier = RandomForestClassifier(
-            n_estimators=100,
-            random_state=42
-        )
-        RFClassifier.fit(self.X_train, self.y_train)
-        rf_importances = RFClassifier.feature_importances_
-
-        combined_importances = (np.array(rf_importances) + np.array(lgb_importances)) / 2
-        indices = np.argsort(combined_importances)[::-1]  # reverse order
-
-        features = [self.feature_names[i] for i in indices]
-        importance_values = [combined_importances[i] for i in indices]
-        
-        candidate_features = [f for f, imp in zip(features, importance_values) if imp >= self.importance_threshold]
-        if self.max_features and len(candidate_features) > self.max_features:
-            candidate_features = candidate_features[:self.max_features]
-            
-        # Check for harmful feature correlations
-        X_candidates = self.X_train[candidate_features]
-        correlation_matrix = X_candidates.corr().abs()
-        
-        # Remove highly correlated features (>0.95)
-        to_drop = set()
-        for i in range(len(correlation_matrix.columns)):
-            for j in range(i):
-                if correlation_matrix.iloc[i, j] > 0.95:
-                    colname = correlation_matrix.columns[i]
-                    to_drop.add(colname)
-        
-        candidate_features = [f for f in candidate_features if f not in to_drop]
-        print(f"Removed {len(to_drop)} highly correlated features")
-        
-        # Incremental feature validation
-        final_features = []
-        best_score = 0
-        scaler = StandardScaler()
-        
-        # First, evaluate baseline model with most important feature
-        X_scaled = scaler.fit_transform(self.X_train[[candidate_features[0]]])
-        baseline_model = lgb.LGBMClassifier(random_state=42)
-        baseline_score = cross_val_score(baseline_model, X_scaled, self.y_train, cv=3, scoring='accuracy').mean()
-        final_features = [candidate_features[0]]
-        best_score = baseline_score
-        
-        print(f"Starting with feature: {candidate_features[0]}, baseline score: {baseline_score:.4f}")
-        
-        # Now test adding each feature incrementally
-        for feature in candidate_features[1:]:
-            current_features = final_features + [feature]
-            X_scaled = scaler.fit_transform(self.X_train[current_features])
-            
-            model = lgb.LGBMClassifier(random_state=42)
-            score = cross_val_score(model, X_scaled, self.y_train, cv=3, scoring='accuracy').mean()
-            
-            # Only keep features that improve or maintain performance 
-            # (allowing small degradation of up to 0.5% to avoid overfitting)
-            if score >= best_score - 0.005:
-                final_features.append(feature)
-                if score > best_score:
-                    best_score = score
-                print(f"Added feature: {feature}, new score: {score:.4f}")
-            else:
-                print(f"Rejected feature: {feature}, score: {score:.4f} vs best: {best_score:.4f}")
-                
-        end_time = time.time()
-        self.important_features = final_features
-        
-        # Print final features with their importance values
-        filtered_importances = []
-        for feature in self.important_features:
-            idx = features.index(feature)
-            imp = importance_values[idx]
-            filtered_importances.append(imp)
-        
-        print(f"\nFinal features selected ({end_time - start_time:.2f}s):")
-        for i, (feature, importance) in enumerate(zip(self.important_features, filtered_importances)):
-            feature_idx = self.feature_names.index(feature)
-            feature_max_value = max(self.X_train.iloc[:, feature_idx])
-            feature_min_value = min(self.X_train.iloc[:, feature_idx])
-            print(f"{i+1}. {feature}: {importance}")
-            
-        return self.important_features
+from brains.gbm.feature_selector import FeatureSelector
 
 class NormalizationBlock(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=128):
@@ -204,7 +85,7 @@ class ClassifierModel(nn.Module):
                 self.feature_selector = FeatureSelector(X_train=X, y_train=y, feature_names=feature_names, 
                                                       importance_threshold=importance_threshold, max_features=max_features)
                 self.selected_features = self.feature_selector.get_important_features()
-                X = X[self.selected_features]
+                X = self.feature_selector.transform(X)
             else:
                 print("Feature selection is skipped.")
             
@@ -271,7 +152,7 @@ class ClassifierModel(nn.Module):
         X, y = mt.prepare_data_classifier(self.data, lagged_length=self.lagged_length)
         
         if self.feature_selector and self.feature_selector.important_features:
-            X = X[self.feature_selector.important_features]
+            X = self.feature_selector.transform(X)
             self.input_dim = X.shape[1]
         
         total_samples = len(y)
@@ -621,5 +502,5 @@ def load_model(model_path: str, input_dim=None, verbose: bool = False):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="5min", age_days=0, epochs=50, lagged_length=20, use_feature_selection=True)
+    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="5min", age_days=0, epochs=50, lagged_length=5, use_feature_selection=True)
     model = model.train_model(model, prompt_save=True, show_loss=False)
