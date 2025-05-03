@@ -1,8 +1,12 @@
 import pandas as pd
 import numpy as np
 import time
+import os
 from rich import print
 from typing import List, Optional
+
+# Set environment variable to suppress joblib/loky warning about CPU count
+os.environ["LOKY_MAX_CPU_COUNT"] = "24"
 
 class FeatureSelector:
     """
@@ -12,12 +16,7 @@ class FeatureSelector:
     feature importance and select the most relevant features
     for model training.
     """
-    def __init__(self, 
-                X_train: pd.DataFrame, 
-                y_train: pd.Series, 
-                feature_names: List[str], 
-                importance_threshold: float = 5, 
-                max_features: Optional[int] = None):
+    def __init__(self, X_train: pd.DataFrame, y_train: pd.Series, feature_names: List[str], importance_threshold: float = 5, max_features: Optional[int] = -1):
         """
         Initialize the feature selector
         
@@ -25,8 +24,8 @@ class FeatureSelector:
             X_train: Training features dataframe
             y_train: Target variable
             feature_names: List of feature names
-            importance_threshold: Minimum importance score to keep a feature
-            max_features: Maximum number of features to select (None = no limit)
+            importance_threshold: Minimum importance score to keep a feature (filters features below this value)
+            max_features: Maximum number of features to select (-1 = no limit, only use importance threshold)
         """
         self.X_train = X_train
         self.y_train = y_train
@@ -83,10 +82,17 @@ class FeatureSelector:
         features = [self.feature_names[i] for i in indices]
         importance_values = [combined_importances[i] for i in indices]
         
-        # Filter by importance threshold
+        # First filter by importance threshold
         candidate_features = [f for f, imp in zip(features, importance_values) if imp >= self.importance_threshold]
-        if self.max_features and len(candidate_features) > self.max_features:
+        
+        # Print threshold-based filtering results
+        initial_feature_count = len(candidate_features)
+        print(f"Features above threshold {self.importance_threshold}: {initial_feature_count} of {len(features)}")
+        
+        # Then apply max_features limit if it's not -1 (no limit)
+        if self.max_features != -1 and len(candidate_features) > self.max_features:
             candidate_features = candidate_features[:self.max_features]
+            print(f"Limited to top {self.max_features} features")
             
         # Check for harmful feature correlations
         X_candidates = self.X_train[candidate_features]
@@ -101,7 +107,7 @@ class FeatureSelector:
                     to_drop.add(colname)
         
         candidate_features = [f for f in candidate_features if f not in to_drop]
-        print(f"Removed {len(to_drop)} highly correlated features")
+        print(f"Removed {len(to_drop)} highly correlated features, {len(candidate_features)} remaining")
         
         # Incremental feature validation
         final_features = []
@@ -172,6 +178,14 @@ class FeatureSelector:
             feature_min_value = min(self.X_train.iloc[:, feature_idx])
             print(f"{i+1}. {feature}: {importance}")
             
+        # Print summary with max feature settings
+        selection_method = f"importance threshold ({self.importance_threshold})"
+        if self.max_features != -1:
+            selection_method += f" and max features limit ({self.max_features})"
+            
+        print(f"\nSelection criteria: {selection_method}")
+        print(f"Selected {len(self.important_features)} features from original {len(self.feature_names)}")
+            
         return self.important_features
     
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
@@ -204,4 +218,13 @@ class FeatureSelector:
         self.y_train = y
         self.feature_names = X.columns.tolist()
         self.get_important_features()
-        return self.transform(X) 
+        return self.transform(X)
+    
+if __name__ == "__main__":
+    import sys
+    sys.path.append("trading")
+    import model_tools as mt
+    X, y = mt.prepare_data_classifier(mt.fetch_data(ticker="BTC-USDT", chunks=1, interval="1min", age_days=60, kucoin=True), lagged_length=5, extra_features=False, elapsed_time=False)
+    selector = FeatureSelector(X, y, X.columns.tolist())
+    important_features = selector.get_important_features()
+    print(important_features)
