@@ -1,0 +1,16 @@
+{
+  "name": "solana-mnemonic-generator",
+  "version": "1.0.0",
+  "description": "Generate Solana addresses from mnemonic combinations",
+  "main": "crack.js",
+  "scripts": {
+    "start": "node crack.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.2",
+    "bip39": "^3.1.0",
+    "bs58": "^5.0.0",
+    "cli-progress": "^3.12.0",
+    "ed25519-hd-key": "^1.3.0"
+  }
+}

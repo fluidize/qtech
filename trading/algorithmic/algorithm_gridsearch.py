@@ -152,7 +152,7 @@ if __name__ == "__main__":
         initial_capital=10000.0,
         chunks=365,
         interval="5min",
-        age_days=0
+        age_days=365
     )
     
     backtest.fetch_data(kucoin=True)
