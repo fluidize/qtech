@@ -16,17 +16,20 @@ class DQNNetwork(nn.Module):
         super(DQNNetwork, self).__init__()
         
         # Simple feedforward network with two hidden layers
-        self.model = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
-        )
+        self.layer1 = nn.Linear(input_dim, hidden_dim)
+        self.layer2 = nn.Linear(hidden_dim, hidden_dim)
+        self.layer3 = nn.Linear(hidden_dim, output_dim)
+        print(input_dim, hidden_dim, output_dim)
     
     def forward(self, x):
         """Forward pass through the network."""
-        return self.model(x)
+        print(x.shape)
+        x = self.layer1(x)
+        x = torch.relu(x)
+        x = self.layer2(x)
+        x = torch.relu(x)
+        x = self.layer3(x)
+        return x
 
 class ReplayBuffer:
     """
@@ -79,8 +82,8 @@ class DQNAgent:
         self.update_counter = 0
         
         # Initialize Q-networks (main and target)
-        self.q_network = DQNNetwork(state_dim, output_dim=action_dim)
-        self.target_network = DQNNetwork(state_dim, output_dim=action_dim)
+        self.q_network = DQNNetwork(input_dim=state_dim, hidden_dim=64, output_dim=action_dim)
+        self.target_network = DQNNetwork(input_dim=state_dim, hidden_dim=64, output_dim=action_dim)
         self.target_network.load_state_dict(self.q_network.state_dict())
         
         # Set up optimizer
@@ -104,7 +107,7 @@ class DQNAgent:
             return random.randint(0, self.action_dim - 1)
         
         # Convert state to tensor
-        if isinstance(state, dict):
+        if isinstance(state, Dict):
             # Process dictionary observation from environment
             market_data = state['market_data']
             position = state['position']
@@ -113,9 +116,29 @@ class DQNAgent:
             market_data_flat = market_data.flatten().astype(np.float32)  # Ensure float32 type
             position_flat = position.flatten().astype(np.float32)
             
-            state_tensor = torch.FloatTensor(np.concatenate([market_data_flat, position_flat]))
+            # Ensure the state has the correct dimension
+            combined = np.concatenate([market_data_flat, position_flat])
+            if len(combined) != self.state_dim:
+                # Pad or truncate to match expected dimension
+                if len(combined) < self.state_dim:
+                    combined = np.pad(combined, (0, self.state_dim - len(combined)))
+                else:
+                    combined = combined[:self.state_dim]
+                    
+            state_tensor = torch.FloatTensor(combined)
         else:
-            state_tensor = torch.FloatTensor(state.astype(np.float32))  # Ensure float32 type
+            state_array = np.array(state, dtype=np.float32)
+            # Ensure the state has the correct dimension
+            if len(state_array) != self.state_dim:
+                if len(state_array) < self.state_dim:
+                    state_array = np.pad(state_array, (0, self.state_dim - len(state_array)))
+                else:
+                    state_array = state_array[:self.state_dim]
+            
+            state_tensor = torch.FloatTensor(state_array)
+        
+        # Add batch dimension for the network
+        state_tensor = state_tensor.unsqueeze(0)
         
         # Get Q-values and select best action (exploit)
         with torch.no_grad():
@@ -137,7 +160,7 @@ class DQNAgent:
             state, action, reward, next_state, done = transition
             
             # Process dictionary observation from environment
-            if isinstance(state, dict):
+            if isinstance(state, Dict):
                 market_data = state['market_data']
                 position = state['position']
                 
@@ -145,7 +168,13 @@ class DQNAgent:
                 market_data_flat = market_data.flatten().astype(np.float32)
                 position_flat = position.flatten().astype(np.float32)
                 
-                state = np.concatenate([market_data_flat, position_flat])
+                state_array = np.concatenate([market_data_flat, position_flat])
+                # Ensure the state has the correct dimension
+                if len(state_array) != self.state_dim:
+                    if len(state_array) < self.state_dim:
+                        state_array = np.pad(state_array, (0, self.state_dim - len(state_array)))
+                    else:
+                        state_array = state_array[:self.state_dim]
                 
                 # Do the same for next_state
                 next_market_data = next_state['market_data']
@@ -154,7 +183,16 @@ class DQNAgent:
                 next_market_data_flat = next_market_data.flatten().astype(np.float32)
                 next_position_flat = next_position.flatten().astype(np.float32)
                 
-                next_state = np.concatenate([next_market_data_flat, next_position_flat])
+                next_state_array = np.concatenate([next_market_data_flat, next_position_flat])
+                # Ensure the next_state has the correct dimension
+                if len(next_state_array) != self.state_dim:
+                    if len(next_state_array) < self.state_dim:
+                        next_state_array = np.pad(next_state_array, (0, self.state_dim - len(next_state_array)))
+                    else:
+                        next_state_array = next_state_array[:self.state_dim]
+                        
+                state = state_array
+                next_state = next_state_array
             
             states.append(state)
             actions.append(action)

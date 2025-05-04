@@ -137,17 +137,21 @@ if __name__ == "__main__":
     # Create environment
     env = TradingEnv(symbol="BTC-USDT", initial_balance=10000.0, window_size=10)
     
-    # Download and prepare data
-    env.fetch_data(chunks=1, age_days=0, interval="1min")
+    # Download and prepare data - now returns price_data and feature_data
+    price_data, feature_data = env.fetch_data(chunks=1, age_days=0, interval="1min")
     
     # Initialize the agent
     # Calculate input dimensions based on market data and position info
     state = env.reset()
     market_data_shape = state['market_data'].shape
     position_shape = state['position'].shape
-    state_dim = market_data_shape[0] * market_data_shape[1] + position_shape[0]
     
-    print(f"State dimension: {state_dim} (market data: {market_data_shape}, position: {position_shape})")
+    # Calculate total state dimension - flatten all dimensions
+    market_data_size = np.prod(market_data_shape)
+    position_size = np.prod(position_shape)
+    state_dim = int(market_data_size + position_size)
+    
+    print(f"State dimension: {state_dim}")
     
     agent = DQNAgent(
         state_dim=state_dim,

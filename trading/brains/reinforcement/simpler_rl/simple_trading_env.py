@@ -3,15 +3,10 @@ import numpy as np
 import sys
 import os
 
-# Add trading directory to path to import model_tools
-current_dir = os.path.dirname(os.path.abspath(__file__))
-trading_dir = os.path.abspath(os.path.join(current_dir, '../../../'))
-sys.path.append(trading_dir)
-
-# Import from trading directory
+sys.path.append("trading")
 import model_tools
 from typing import Dict, List, Tuple
-from datetime import datetime, timedelta
+import brains.gbm.feature_selector as fs
 
 class TradingEnv:
     """
@@ -38,7 +33,10 @@ class TradingEnv:
         # Trading state
         self.position = 0  # How much of the asset we own
         self.current_step = 0
-        self.data = None
+        
+        # Two separate datasets
+        self.price_data = None  # Raw price data for the environment
+        self.feature_data = None  # Processed feature data for observations
         
         # Action space: 0 = Hold, 1 = Buy, 2 = Sell
         self.action_space = 3
@@ -48,7 +46,8 @@ class TradingEnv:
         self.portfolio_values = []
     
     def fetch_data(self, chunks=1, age_days=60, interval="1h"):
-        self.data = model_tools.fetch_data(
+        # Fetch raw price data
+        self.price_data = model_tools.fetch_data(
             ticker=self.symbol,
             chunks=chunks,
             interval=interval,
@@ -56,63 +55,43 @@ class TradingEnv:
             kucoin=True
         )
         
-        # Save the original datetime column
-        date_col_name = 'Datetime' if 'Datetime' in self.data.columns else 'Date'
-        datetime_col = self.data[date_col_name].copy() if date_col_name in self.data.columns else None
+        # Process and add indicators for feature data
+        X, y = model_tools.prepare_data_classifier(
+            self.price_data, 
+            lagged_length=5, 
+            extra_features=False, 
+            elapsed_time=False
+        )
         
-        # Process and add indicators
-        self._add_indicators()
+        # Select important features
+        feature_selector = fs.FeatureSelector(X, y, X.columns.tolist())
+        important_features = feature_selector.get_important_features()
         
-        # Make sure we have the date column for rendering
-        if datetime_col is not None and date_col_name not in self.data.columns:
-            self.data[date_col_name] = datetime_col
+        # Create feature dataset with only important features
+        self.feature_data = X[important_features]
         
-        print(f"Processed data: {len(self.data)} bars with {len(self.data.columns)} features")
-        return self.data
-    
-    def _add_indicators(self):
-        """Use model_tools to prepare data with indicators."""
-        # Use model_tools prepare_data_classifier which returns X, y
-        # We only need X (the feature dataframe)
-        processed_data, _ = model_tools.prepare_data_classifier(self.data,  lagged_length=5, extra_features=False, elapsed_time=False)
-        self.data = processed_data
+        print(f"Processed price data: {len(self.price_data)} bars")
+        print(f"Processed feature data: {len(self.feature_data)} bars with {len(self.feature_data.columns)} features")
         
-        print(f"Data shape after adding indicators: {self.data.shape}")
+        return self.price_data, self.feature_data
     
     def reset(self):
         """Reset the environment to initial state."""
         self.balance = self.initial_balance
         self.position = 0
         
-        # Store datetime column before preprocessing if it exists
-        datetime_col = None
-        date_col_name = 'Datetime' if 'Datetime' in self.data.columns else 'Date'
-        if date_col_name in self.data.columns:
-            datetime_col = self.data[date_col_name].copy()
-            
         # Make sure we don't start at the beginning but after window_size
         # to have enough history for the observation window
         self.current_step = self.window_size
         self.trades = []
         self.portfolio_values = []
         
-        # Check if we saved the datetime column and add it back if needed
-        if datetime_col is not None and date_col_name not in self.data.columns:
-            self.data[date_col_name] = datetime_col
-        
         return self._get_observation()
     
     def _get_observation(self):
-        """Return the current state observation for the agent."""
-        # Get date column name
-        date_col_name = 'Datetime' if 'Datetime' in self.data.columns else 'Date'
-        
+        """Return the current state observation for the agent using post-processed data."""
         # Get a window of data up to the current step
-        obs_data = self.data.iloc[self.current_step - self.window_size:self.current_step]
-        
-        # Drop date column if it exists
-        if date_col_name in obs_data.columns:
-            obs_data = obs_data.drop(columns=[date_col_name])
+        obs_data = self.feature_data.iloc[self.current_step - self.window_size:self.current_step]
         
         # Convert to numpy array
         obs = obs_data.values
@@ -138,8 +117,8 @@ class TradingEnv:
             done: Whether the episode is complete
             info: Additional information
         """
-        # Get current price
-        current_price = self.data.iloc[self.current_step]['Close']
+        # Get current price from price_data
+        current_price = self.price_data.iloc[self.current_step]['Close']
         
         # Initialize reward
         reward = 0
@@ -200,7 +179,7 @@ class TradingEnv:
         
         # Move to next step
         self.current_step += 1
-        done = self.current_step >= len(self.data) - 1
+        done = self.current_step >= len(self.price_data) - 1
         
         # If no trades were made, give a small negative reward to encourage action
         if not self.trades and self.current_step % 10 == 0:
@@ -208,7 +187,7 @@ class TradingEnv:
             
         # If we're holding a position and price went up, give a small reward
         if self.position > 0:
-            prev_price = self.data.iloc[self.current_step - 1]['Close']
+            prev_price = self.price_data.iloc[self.current_step - 1]['Close']
             price_change_pct = (current_price - prev_price) / prev_price
             reward += price_change_pct
             
@@ -226,15 +205,13 @@ class TradingEnv:
         """Print current environment state."""
         print(f"\nStep: {self.current_step}")
         
-        # Handle both 'Date' and 'Datetime' column names
-        date_col = 'Datetime' if 'Datetime' in self.data.columns else 'Date'
-        if date_col in self.data.columns:
-            print(f"Date: {self.data.iloc[self.current_step][date_col]}")
+        if 'Datetime' in self.price_data.columns:
+            print(f"Date: {self.price_data.iloc[self.current_step]['Datetime']}")
         
-        print(f"Price: ${self.data.iloc[self.current_step]['Close']:.2f}")
+        print(f"Price: ${self.price_data.iloc[self.current_step]['Close']:.2f}")
         print(f"Balance: ${self.balance:.2f}")
         print(f"Position: {self.position:.6f}")
-        print(f"Portfolio Value: ${self.balance + (self.position * self.data.iloc[self.current_step]['Close']):.2f}")
+        print(f"Portfolio Value: ${self.balance + (self.position * self.price_data.iloc[self.current_step]['Close']):.2f}")
         print(f"Trades: {len(self.trades)}")
         
     def get_performance_summary(self):
