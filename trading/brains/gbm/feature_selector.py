@@ -86,8 +86,8 @@ class FeatureSelector:
         candidate_features = [f for f, imp in zip(features, importance_values) if imp >= self.importance_threshold]
         
         # Print threshold-based filtering results
-        initial_feature_count = len(candidate_features)
-        print(f"Features above threshold {self.importance_threshold}: {initial_feature_count} of {len(features)}")
+        initial_feature_count_after_threshold = len(candidate_features)
+        print(f"Features above threshold {self.importance_threshold}: {initial_feature_count_after_threshold} of {len(features)}")
         
         # Then apply max_features limit if it's not -1 (no limit)
         if self.max_features != -1 and len(candidate_features) > self.max_features:
