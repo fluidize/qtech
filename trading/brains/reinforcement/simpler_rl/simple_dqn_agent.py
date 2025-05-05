@@ -5,6 +5,34 @@ import torch.optim as optim
 import random
 from collections import deque
 from typing import Dict, List, Tuple
+import torch.nn.functional as F
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.lin1 = nn.Linear(in_features, out_features)
+        self.bn1 = nn.LayerNorm(out_features)
+        self.lin2 = nn.Linear(out_features, out_features)
+        self.bn2 = nn.LayerNorm(out_features)
+        
+        self.shortcut = nn.Identity()
+        if in_features != out_features:
+            self.shortcut = nn.Linear(in_features, out_features)
+    
+    def forward(self, x):
+        residual = x
+        
+        out = self.lin1(x)
+        out = self.bn1(out)
+        out = F.leaky_relu(out, 0.2)
+        
+        out = self.lin2(out)
+        out = self.bn2(out)
+        
+        out += self.shortcut(residual)
+        out = F.leaky_relu(out, 0.2)
+        
+        return out
 
 class DQNNetwork(nn.Module):
     """
@@ -16,19 +44,15 @@ class DQNNetwork(nn.Module):
         super(DQNNetwork, self).__init__()
         
         # Simple feedforward network with two hidden layers
-        self.layer1 = nn.Linear(input_dim, hidden_dim)
-        self.layer2 = nn.Linear(hidden_dim, hidden_dim)
-        self.layer3 = nn.Linear(hidden_dim, output_dim)
-        print(input_dim, hidden_dim, output_dim)
+        self.res1 = ResidualBlock(input_dim, hidden_dim)
+        self.res2 = ResidualBlock(hidden_dim, hidden_dim)
+        self.res3 = ResidualBlock(hidden_dim, output_dim)
     
     def forward(self, x):
         """Forward pass through the network."""
-        print(x.shape)
-        x = self.layer1(x)
-        x = torch.relu(x)
-        x = self.layer2(x)
-        x = torch.relu(x)
-        x = self.layer3(x)
+        x = self.res1(x)
+        x = self.res2(x)
+        x = self.res3(x)
         return x
 
 class ReplayBuffer:
@@ -87,7 +111,12 @@ class DQNAgent:
         self.target_network.load_state_dict(self.q_network.state_dict())
         
         # Set up optimizer
-        self.optimizer = optim.Adam(self.q_network.parameters(), lr=learning_rate)
+        self.optimizer = optim.AdamW(
+            self.q_network.parameters(),
+            lr=learning_rate,
+            amsgrad=True,
+            weight_decay=1e-6
+        )
         
         # Initialize replay buffer
         self.replay_buffer = ReplayBuffer(buffer_size)
@@ -138,7 +167,7 @@ class DQNAgent:
             state_tensor = torch.FloatTensor(state_array)
         
         # Add batch dimension for the network
-        state_tensor = state_tensor.unsqueeze(0)
+        # state_tensor = state_tensor.unsqueeze(0)
         
         # Get Q-values and select best action (exploit)
         with torch.no_grad():
