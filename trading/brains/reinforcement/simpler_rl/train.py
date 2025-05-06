@@ -6,7 +6,7 @@ import torch
 from simple_trading_env import TradingEnv
 from simple_dqn_agent import DQNAgent
 
-def train_agent(env, agent, episodes=100, max_steps=None, eval_frequency=10):
+def train_agent(env, agent, episodes=100, max_steps=None, eval_frequency=10, save_frequency=None):
     """Train the DQN agent on the trading environment."""
     
     # Track performance for visualization
@@ -22,7 +22,7 @@ def train_agent(env, agent, episodes=100, max_steps=None, eval_frequency=10):
         steps = 0
         
         # Training loop for this episode
-        with tqdm(desc=f"Episode {episode}/{episodes}", unit="step") as pbar:
+        with tqdm(desc=f"Episode {episode}/{episodes}", unit="step") as progress_bar:
             while not done:
                 # Select action
                 action = agent.select_action(state)
@@ -49,8 +49,8 @@ def train_agent(env, agent, episodes=100, max_steps=None, eval_frequency=10):
                 if max_steps and steps >= max_steps:
                     done = True
                 
-                pbar.update(1)
-                pbar.set_postfix({
+                progress_bar.update(1)
+                progress_bar.set_postfix({
                     "reward": f"{total_reward:.2f}", 
                     "portfolio": f"${info['portfolio_value']:.2f}",
                     "epsilon": f"{agent.epsilon:.2f}"
@@ -64,14 +64,13 @@ def train_agent(env, agent, episodes=100, max_steps=None, eval_frequency=10):
         if episode % eval_frequency == 0:
             eval_return = evaluate_agent(env, agent)
             evaluation_returns.append(eval_return)
-            print(f"\nEvaluation after episode {episode}: Return = {eval_return:.2f}")
+            print(f"\nEvaluation after episode {episode}: Return = {eval_return:.2f} | Trades = {env.get_performance_summary()['trade_count']}")
         
-        # Save the model periodically
-        if episode % 20 == 0:
+        if (save_frequency) and (episode % save_frequency == 0):
             agent.save(f"trading_dqn_model_ep{episode}.pt")
     
-    # Save final model
-    agent.save("trading_dqn_model_final.pt")
+    if save_frequency:
+        agent.save(f"trading_dqn_model_final.pt")
     
     # Plot training results
     plot_results(episode_rewards, portfolio_values, evaluation_returns, eval_frequency)
@@ -130,23 +129,19 @@ def plot_results(rewards, portfolio_values, eval_returns, eval_frequency):
     ax3.set_ylabel('Average Return')
     
     plt.tight_layout()
-    plt.savefig('training_results.png')
+    # plt.savefig('training_results.png')
     plt.show()
 
 if __name__ == "__main__":
     # Create environment
     env = TradingEnv(symbol="BTC-USDT", initial_balance=10000.0, window_size=10)
     
-    # Download and prepare data - now returns price_data and feature_data
-    price_data, feature_data = env.fetch_data(chunks=1, age_days=0, interval="1min")
+    price_data, feature_data = env.fetch_data(chunks=1, age_days=0, interval="5min")
     
-    # Initialize the agent
-    # Calculate input dimensions based on market data and position info
     state = env.reset()
     market_data_shape = state['market_data'].shape
     position_shape = state['position'].shape
     
-    # Calculate total state dimension - flatten all dimensions
     market_data_size = np.prod(market_data_shape)
     position_size = np.prod(position_shape)
     state_dim = int(market_data_size + position_size)
@@ -160,10 +155,10 @@ if __name__ == "__main__":
         gamma=0.99,
         epsilon_start=1.0,
         epsilon_end=0.01,
-        epsilon_decay=0.995,
+        epsilon_decay=1-(1/100000),
         buffer_size=50000,
         batch_size=32,
-        target_update_freq=10
+        target_update_freq=1
     )
     
     # Train the agent
