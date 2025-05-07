@@ -22,37 +22,58 @@ class ResidualBlock(nn.Module):
     def forward(self, x):
         residual = x
         
-        out = self.lin1(x)
-        out = self.bn1(out)
-        out = F.leaky_relu(out, 0.2)
+        x = self.lin1(x)
+        x = self.bn1(x)
+        x = F.leaky_relu(x, 0.2)
         
-        out = self.lin2(out)
-        out = self.bn2(out)
+        x = self.lin2(x)
+        x = self.bn2(x)
         
-        out += self.shortcut(residual)
-        out = F.leaky_relu(out, 0.2)
+        x += self.shortcut(residual)
+        x = F.leaky_relu(x, 0.2)
         
-        return out
+        return x
 
 class DQNNetwork(nn.Module):
     """
-    Simple Deep Q-Network for the trading agent.
+    Deep Q-Network for the trading agent with GRU layer.
     Maps state observations to Q-values for each action.
     """
     
-    def __init__(self, input_dim: int, hidden_dim: int = 64, output_dim: int = 3):
-        super(DQNNetwork, self).__init__()
+    def __init__(self, input_dim: int, hidden_dim: int = 64, output_dim: int = 3, lstm_layers: int = 1):
+        super().__init__()
         
-        # Simple feedforward network with two hidden layers
-        self.res1 = ResidualBlock(input_dim, hidden_dim)
+        # GRU layer for processing sequential data
+        self.lstm = nn.LSTM(
+            input_size=input_dim,
+            hidden_size=hidden_dim,
+            num_layers=lstm_layers,
+            batch_first=True
+        )
+        
+        # Residual blocks for further processing
+        self.res1 = ResidualBlock(hidden_dim, hidden_dim)
         self.res2 = ResidualBlock(hidden_dim, hidden_dim)
-        self.res3 = ResidualBlock(hidden_dim, output_dim)
+        self.output_layer = nn.Linear(hidden_dim, output_dim)
     
     def forward(self, x):
-        """Forward pass through the network."""
+        """Forward pass through the network with GRU processing."""
+        # Reshape input for GRU (batch_size, sequence_length, features)
+        # For a single input, add batch and sequence dimensions
+        if x.dim() == 1:
+            x = x.unsqueeze(0).unsqueeze(0)  # Add batch and sequence dims
+        elif x.dim() == 2:
+            x = x.unsqueeze(1)  # Add sequence dimension
+            
+        x, _ = self.lstm(x)
+        
+        # Get the output from the last time step
+        x = x[:, -1, :]
+        
         x = self.res1(x)
         x = self.res2(x)
-        x = self.res3(x)
+        x = self.output_layer(x)
+        
         return x
 
 class ReplayBuffer:
@@ -72,6 +93,10 @@ class ReplayBuffer:
         """Sample a batch of transitions randomly."""
         return random.sample(self.buffer, min(batch_size, len(self.buffer)))
     
+    def sample_all(self) -> List:
+        """Sample all transitions."""
+        return list(self.buffer)
+    
     def __len__(self) -> int:
         """Return the current size of the buffer."""
         return len(self.buffer)
@@ -81,6 +106,9 @@ class DQNAgent:
     DQN Agent that learns to trade through Q-learning.
     
     Uses epsilon-greedy exploration and target networks for stability.
+    The underlying neural network uses GRU (Gated Recurrent Unit) layers
+    to better capture sequential patterns and time dependencies in the
+    market data, which can improve prediction performance for time series data.
     """
     
     def __init__(self, 
@@ -145,10 +173,8 @@ class DQNAgent:
             market_data_flat = market_data.flatten().astype(np.float32)  # Ensure float32 type
             position_flat = position.flatten().astype(np.float32)
             
-            # Ensure the state has the correct dimension
             combined = np.concatenate([market_data_flat, position_flat])
             if len(combined) != self.state_dim:
-                # Pad or truncate to match expected dimension
                 if len(combined) < self.state_dim:
                     combined = np.pad(combined, (0, self.state_dim - len(combined)))
                 else:
@@ -165,9 +191,6 @@ class DQNAgent:
                     state_array = state_array[:self.state_dim]
             
             state_tensor = torch.FloatTensor(state_array)
-        
-        # Add batch dimension for the network
-        # state_tensor = state_tensor.unsqueeze(0)
         
         # Get Q-values and select best action (exploit)
         with torch.no_grad():
