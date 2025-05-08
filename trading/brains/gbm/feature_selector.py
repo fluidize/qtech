@@ -43,12 +43,11 @@ class FeatureSelector:
         """
         from sklearn.ensemble import RandomForestClassifier
         from sklearn.model_selection import cross_val_score
-        from sklearn.preprocessing import StandardScaler
+        from sklearn.preprocessing import MinMaxScaler
         import lightgbm as lgb
         import numpy as np
         start_time = time.time()
 
-        # Train LightGBM for its feature importance
         gbm = lgb.LGBMClassifier(
             objective='binary',
             metric='binary_logloss',
@@ -67,7 +66,6 @@ class FeatureSelector:
         gbm.fit(self.X_train, self.y_train)
         lgb_importances = gbm.feature_importances_
 
-        # Train RandomForest for its feature importance
         RFClassifier = RandomForestClassifier(
             n_estimators=100,
             random_state=42
@@ -75,26 +73,21 @@ class FeatureSelector:
         RFClassifier.fit(self.X_train, self.y_train)
         rf_importances = RFClassifier.feature_importances_
 
-        # Combine importances from both models
         combined_importances = (np.array(rf_importances) + np.array(lgb_importances)) / 2
         indices = np.argsort(combined_importances)[::-1]  # reverse order
 
         features = [self.feature_names[i] for i in indices]
         importance_values = [combined_importances[i] for i in indices]
         
-        # First filter by importance threshold
         candidate_features = [f for f, imp in zip(features, importance_values) if imp >= self.importance_threshold]
         
-        # Print threshold-based filtering results
         initial_feature_count_after_threshold = len(candidate_features)
         print(f"Features above threshold {self.importance_threshold}: {initial_feature_count_after_threshold} of {len(features)}")
         
-        # Then apply max_features limit if it's not -1 (no limit)
         if self.max_features != -1 and len(candidate_features) > self.max_features:
             candidate_features = candidate_features[:self.max_features]
             print(f"Limited to top {self.max_features} features")
             
-        # Check for harmful feature correlations
         X_candidates = self.X_train[candidate_features]
         correlation_matrix = X_candidates.corr().abs()
         
@@ -103,39 +96,18 @@ class FeatureSelector:
         for i in range(len(correlation_matrix.columns)):
             for j in range(i):
                 if correlation_matrix.iloc[i, j] > 0.95:
-                    colname = correlation_matrix.columns[i]
-                    to_drop.add(colname)
+                    to_drop.add(correlation_matrix.columns[i])
         
         candidate_features = [f for f in candidate_features if f not in to_drop]
         print(f"Removed {len(to_drop)} highly correlated features, {len(candidate_features)} remaining")
         
-        # Incremental feature validation
         final_features = []
         best_score = 0
-        scaler = StandardScaler()
+        scaler = MinMaxScaler()
         
-        # First, evaluate baseline model with most important feature
-        # Create a transformer class to handle feature names correctly
-        class FeaturePreserver:
-            def __init__(self, scaler):
-                self.scaler = scaler
-                
-            def fit_transform(self, X):
-                # Keep track of feature names and indices
-                self.feature_names = X.columns.tolist()
-                # Scale the data
-                scaled_data = self.scaler.fit_transform(X)
-                # Return DataFrame with original column names
-                return pd.DataFrame(scaled_data, columns=self.feature_names, index=X.index)
-                
-            def transform(self, X):
-                scaled_data = self.scaler.transform(X)
-                return pd.DataFrame(scaled_data, columns=self.feature_names, index=X.index)
+        X_scaled_array = scaler.fit_transform(self.X_train[[candidate_features[0]]])
+        X_scaled = pd.DataFrame(X_scaled_array, columns=[candidate_features[0]], index=self.X_train.index)
         
-        feature_preserver = FeaturePreserver(scaler)
-        
-        # Get the baseline score using only the first feature
-        X_scaled = feature_preserver.fit_transform(self.X_train[[candidate_features[0]]])
         baseline_model = lgb.LGBMClassifier(random_state=42)
         baseline_score = cross_val_score(baseline_model, X_scaled, self.y_train, cv=3, scoring='accuracy').mean()
         final_features = [candidate_features[0]]
@@ -143,17 +115,15 @@ class FeatureSelector:
         
         print(f"Starting with feature: {candidate_features[0]}, baseline score: {baseline_score:.4f}")
         
-        # Now test adding each feature incrementally
         for feature in candidate_features[1:]:
             current_features = final_features + [feature]
-            X_scaled = feature_preserver.fit_transform(self.X_train[current_features])
+            X_scaled_array = scaler.fit_transform(self.X_train[current_features])
+            X_scaled = pd.DataFrame(X_scaled_array, columns=current_features, index=self.X_train.index)
             
             model = lgb.LGBMClassifier(random_state=42)
             score = cross_val_score(model, X_scaled, self.y_train, cv=3, scoring='accuracy').mean()
             
-            # Only keep features that improve or maintain performance 
-            # (allowing small degradation of up to 0.5% to avoid overfitting)
-            if score >= best_score - 0.005:
+            if score >= best_score - (0.005 * best_score): # Only keep features that improve or maintain performance (allowing small degradation of up to 0.5% to avoid overfitting)
                 final_features.append(feature)
                 if score > best_score:
                     best_score = score
@@ -164,7 +134,6 @@ class FeatureSelector:
         end_time = time.time()
         self.important_features = final_features
         
-        # Print final features with their importance values
         filtered_importances = []
         for feature in self.important_features:
             idx = features.index(feature)
@@ -178,7 +147,6 @@ class FeatureSelector:
             feature_min_value = min(self.X_train.iloc[:, feature_idx])
             print(f"{i+1}. {feature}: {importance}")
             
-        # Print summary with max feature settings
         selection_method = f"importance threshold ({self.importance_threshold})"
         if self.max_features != -1:
             selection_method += f" and max features limit ({self.max_features})"
@@ -224,7 +192,7 @@ if __name__ == "__main__":
     import sys
     sys.path.append("trading")
     import model_tools as mt
-    X, y = mt.prepare_data_classifier(mt.fetch_data(ticker="BTC-USDT", chunks=1, interval="1min", age_days=60, kucoin=True), lagged_length=5, extra_features=False, elapsed_time=False)
+    X, y = mt.prepare_data_classifier(mt.fetch_data(ticker="BTC-USDT", chunks=5, interval="1min", age_days=60, kucoin=True), lagged_length=5, extra_features=False, elapsed_time=False)
     selector = FeatureSelector(X, y, X.columns.tolist())
     important_features = selector.get_important_features()
     print(important_features)
