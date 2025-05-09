@@ -56,19 +56,29 @@ class TradingEnv:
         )
         
         # Process and add indicators for feature data
-        X, y = model_tools.prepare_data_classifier(
+        indicator_states = model_tools.prepare_data_reinforcement(
             self.price_data, 
-            lagged_length=5, 
+            lagged_length=0,
             extra_features=False, 
             elapsed_time=False
         )
-        
-        # Select important features
-        feature_selector = fs.FeatureSelector(X, y, X.columns.tolist())
+        print(indicator_states.index)
+        print(self.price_data.index)
+
+        y = np.zeros(len(indicator_states))
+        y[indicator_states['Close'] > indicator_states['Close'].shift(1)] = 1
+        feature_selector = fs.FeatureSelector(indicator_states,
+                                               y,
+                                               indicator_states.columns.tolist(),
+                                               importance_threshold=5,
+                                               max_features=-1
+                                            )
         important_features = feature_selector.get_important_features()
         
-        # Create feature dataset with only important features
-        self.feature_data = X[important_features]
+        self.feature_data = indicator_states[important_features]
+        length_diff = len(self.price_data) - len(self.feature_data)
+        if length_diff > 0:
+            self.feature_data = self.feature_data.iloc[length_diff:]
         
         print(f"Processed price data: {len(self.price_data)} bars")
         print(f"Processed feature data: {len(self.feature_data)} bars with {len(self.feature_data.columns)} features")
@@ -90,14 +100,11 @@ class TradingEnv:
     
     def _get_observation(self):
         """Return the current state observation for the agent using post-processed data."""
-        # Get a window of data up to the current step
         obs_data = self.feature_data.iloc[self.current_step - self.window_size:self.current_step]
         
-        # Convert to numpy array
         obs = obs_data.values
         
-        # Add position information
-        position = np.array([[self.position]])
+        position = np.array([self.position])
         
         return {
             'market_data': obs,
@@ -117,47 +124,36 @@ class TradingEnv:
             done: Whether the episode is complete
             info: Additional information
         """
-        # Get current price from price_data
         current_price = self.price_data.iloc[self.current_step]['Close']
-        
-        # Initialize reward
+
         reward = 0
-        
-        # Process the action
         if action == 1:  # Buy
             if self.position == 0 and self.balance > 0:
-                # Calculate amount to buy (all available balance)
-                amount = self.balance / current_price
-                # Apply commission
-                amount *= (1 - self.commission)
+                buy_amount = self.balance / current_price
+                buy_amount *= (1 - self.commission)
                 
-                self.position = amount
-                cost = amount * current_price
+                self.position = buy_amount
+                cost = buy_amount * current_price
                 self.balance -= cost
                 
                 self.trades.append({
                     'type': 'buy',
                     'step': self.current_step,
                     'price': current_price,
-                    'amount': amount,
+                    'amount': buy_amount,
                     'cost': cost
                 })
                 
-                # Small penalty to discourage excessive trading
-                reward = -self.commission
+                # reward = -self.commission
                 
         elif action == 2:  # Sell
             if self.position > 0:
-                # Calculate sale value
                 sale_value = self.position * current_price
-                # Apply commission
                 sale_value *= (1 - self.commission)
                 
-                # Calculate profit/loss
                 cost_basis = sum([t['cost'] for t in self.trades if t['type'] == 'buy'])
                 profit = sale_value - cost_basis
                 
-                # Update balance and position
                 self.balance += sale_value
                 self.position = 0
                 
@@ -170,8 +166,7 @@ class TradingEnv:
                     'profit': profit
                 })
                 
-                # Reward is proportional to profit percentage
-                reward = profit / cost_basis if cost_basis > 0 else 0
+                reward = (profit / cost_basis) if cost_basis > 0 else 0
         
         # Calculate portfolio value (cash + assets)
         portfolio_value = self.balance + (self.position * current_price)
@@ -185,7 +180,6 @@ class TradingEnv:
         if not self.trades and self.current_step % 10 == 0:
             reward -= 0.001
             
-        # If we're holding a position and price went up, give a small reward
         if self.position > 0:
             prev_price = self.price_data.iloc[self.current_step - 1]['Close']
             price_change_pct = (current_price - prev_price) / prev_price
