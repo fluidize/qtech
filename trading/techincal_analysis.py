@@ -83,7 +83,7 @@ def adx(high, low, close, timeperiod=14) -> tuple[pd.Series, pd.Series, pd.Serie
     
     return adx, plus_di, minus_di
 
-def log_returns(series) -> pd.Series:
+def log_return(series) -> pd.Series:
     """Log Returns"""
     return np.log(series / series.shift(1))
 

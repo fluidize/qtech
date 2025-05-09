@@ -463,7 +463,7 @@ def prepare_data_reinforcement(data, lagged_length=5, extra_features=False, elap
     
     indicators = {}
     
-    indicators['Log_Return'] = ta.log_returns(df['Close'])
+    indicators['Log_Return'] = ta.log_return(df['Close'])
     indicators['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     indicators['Close_Open_Range'] = (df['Close'] - df['Open']) / df['Open']
     
