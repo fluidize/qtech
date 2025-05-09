@@ -159,31 +159,35 @@ class DQNAgent:
         During training, we explore with probability epsilon.
         During evaluation, we always exploit.
         """
-        if training and random.random() < self.epsilon:
-            # Random action (explore)
+        if training and random.random() < self.epsilon: #randomly select an action / explore
             return random.randint(0, self.action_dim - 1)
         
-        # Convert state to tensor
         if isinstance(state, Dict):
-            # Process dictionary observation from environment
             market_data = state['market_data']
             position = state['position']
             
-            # Flatten market data and combine with position
-            market_data_flat = market_data.flatten().astype(np.float32)  # Ensure float32 type
+            # Handle 2D market data properly
+            if len(market_data.shape) == 2:
+                market_data_flat = market_data.flatten().astype(np.float32)
+            else:
+                market_data_flat = market_data.astype(np.float32)
+                
             position_flat = position.flatten().astype(np.float32)
             
             combined = np.concatenate([market_data_flat, position_flat])
+            
+            # Ensure state dimensions match what the network expects
             if len(combined) != self.state_dim:
                 if len(combined) < self.state_dim:
-                    combined = np.pad(combined, (0, self.state_dim - len(combined)))
+                    # Pad if too short
+                    combined = np.pad(combined, (0, self.state_dim - len(combined)), 'constant')
                 else:
+                    # Truncate if too long
                     combined = combined[:self.state_dim]
                     
             state_tensor = torch.FloatTensor(combined)
         else:
             state_array = np.array(state, dtype=np.float32)
-            # Ensure the state has the correct dimension
             if len(state_array) != self.state_dim:
                 if len(state_array) < self.state_dim:
                     state_array = np.pad(state_array, (0, self.state_dim - len(state_array)))
@@ -191,8 +195,7 @@ class DQNAgent:
                     state_array = state_array[:self.state_dim]
             
             state_tensor = torch.FloatTensor(state_array)
-        
-        # Get Q-values and select best action (exploit)
+
         with torch.no_grad():
             q_values = self.q_network(state_tensor)
             return torch.argmax(q_values).item()
@@ -216,15 +219,19 @@ class DQNAgent:
                 market_data = state['market_data']
                 position = state['position']
                 
-                # Flatten market data and combine with position, ensuring float type
-                market_data_flat = market_data.flatten().astype(np.float32)
+                # Handle 2D market data properly
+                if len(market_data.shape) == 2:
+                    market_data_flat = market_data.flatten().astype(np.float32)
+                else:
+                    market_data_flat = market_data.astype(np.float32)
+                    
                 position_flat = position.flatten().astype(np.float32)
                 
                 state_array = np.concatenate([market_data_flat, position_flat])
                 # Ensure the state has the correct dimension
                 if len(state_array) != self.state_dim:
                     if len(state_array) < self.state_dim:
-                        state_array = np.pad(state_array, (0, self.state_dim - len(state_array)))
+                        state_array = np.pad(state_array, (0, self.state_dim - len(state_array)), 'constant')
                     else:
                         state_array = state_array[:self.state_dim]
                 
@@ -232,14 +239,19 @@ class DQNAgent:
                 next_market_data = next_state['market_data']
                 next_position = next_state['position']
                 
-                next_market_data_flat = next_market_data.flatten().astype(np.float32)
+                # Handle 2D market data properly
+                if len(next_market_data.shape) == 2:
+                    next_market_data_flat = next_market_data.flatten().astype(np.float32)
+                else:
+                    next_market_data_flat = next_market_data.astype(np.float32)
+                
                 next_position_flat = next_position.flatten().astype(np.float32)
                 
                 next_state_array = np.concatenate([next_market_data_flat, next_position_flat])
                 # Ensure the next_state has the correct dimension
                 if len(next_state_array) != self.state_dim:
                     if len(next_state_array) < self.state_dim:
-                        next_state_array = np.pad(next_state_array, (0, self.state_dim - len(next_state_array)))
+                        next_state_array = np.pad(next_state_array, (0, self.state_dim - len(next_state_array)), 'constant')
                     else:
                         next_state_array = next_state_array[:self.state_dim]
                         
