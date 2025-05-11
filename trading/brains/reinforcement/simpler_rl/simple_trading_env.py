@@ -62,9 +62,6 @@ class TradingEnv:
             extra_features=False, 
             elapsed_time=False
         )
-        print(indicator_states.index)
-        print(self.price_data.index)
-
         y = np.zeros(len(indicator_states))
         y[indicator_states['Close'] > indicator_states['Close'].shift(1)] = 1
         feature_selector = fs.FeatureSelector(indicator_states,
@@ -78,7 +75,7 @@ class TradingEnv:
         self.feature_data = indicator_states[important_features]
         length_diff = len(self.price_data) - len(self.feature_data)
         if length_diff > 0:
-            self.feature_data = self.feature_data.iloc[length_diff:]
+            self.price_data = self.price_data.iloc[length_diff:]
         
         print(f"Processed price data: {len(self.price_data)} bars")
         print(f"Processed feature data: {len(self.feature_data)} bars with {len(self.feature_data.columns)} features")
@@ -100,7 +97,7 @@ class TradingEnv:
     
     def _get_observation(self):
         """Return the current state observation for the agent using post-processed data."""
-        obs_data = self.feature_data.iloc[self.current_step - self.window_size:self.current_step]
+        obs_data = self.price_data.iloc[self.current_step - self.window_size:self.current_step].drop(columns=['Datetime'])
         
         obs = obs_data.values
         
@@ -125,10 +122,19 @@ class TradingEnv:
             info: Additional information
         """
         current_price = self.price_data.iloc[self.current_step]['Close']
-
+        prev_price = self.price_data.iloc[self.current_step - 1]['Close'] if self.current_step > 0 else current_price
+        price_change_pct = (current_price - prev_price) / prev_price
+        
+        # Calculate portfolio value before action
+        prev_portfolio_value = self.balance + (self.position * prev_price)
+        
         reward = 0
         if action == 1:  # Buy
-            if self.position == 0 and self.balance > 0:
+            if self.position > 0:
+                # Penalty for redundant buy when already holding
+                reward = -1.0
+            elif self.balance > 0:
+                # Execute buy
                 buy_amount = self.balance / current_price
                 buy_amount *= (1 - self.commission)
                 
@@ -144,15 +150,25 @@ class TradingEnv:
                     'cost': cost
                 })
                 
-                # reward = -self.commission
+                # Small cost for transaction
+                reward = -self.commission * 2
+                
+                # Reward for buying during uptrend, penalize for buying during downtrend
+                reward += price_change_pct * 2
                 
         elif action == 2:  # Sell
-            if self.position > 0:
+            if self.position == 0:
+                # Penalty for redundant sell when not holding
+                reward = -1.0
+            else:
+                # Execute sell
                 sale_value = self.position * current_price
                 sale_value *= (1 - self.commission)
                 
+                # Get cost basis of current position
                 cost_basis = sum([t['cost'] for t in self.trades if t['type'] == 'buy'])
                 profit = sale_value - cost_basis
+                profit_pct = profit / cost_basis if cost_basis > 0 else 0
                 
                 self.balance += sale_value
                 self.position = 0
@@ -166,25 +182,33 @@ class TradingEnv:
                     'profit': profit
                 })
                 
-                reward = (profit / cost_basis) if cost_basis > 0 else 0
+                # Reward based on profit percentage, scaled for better learning
+                reward = profit_pct * 5
+                
+                # Additional reward for selling during downtrend, penalty for selling during uptrend
+                reward -= price_change_pct * 2
+                
+        else:  # Hold
+            # For holding, give small reward/penalty based on price movement relative to position
+            if self.position > 0:  # If holding asset
+                reward = price_change_pct * 3  # Reward for holding during uptrend
+            else:  # If holding cash
+                reward = -price_change_pct * 1.5  # Penalty for holding cash during uptrend (opportunity cost)
         
-        # Calculate portfolio value (cash + assets)
+        # Calculate new portfolio value
         portfolio_value = self.balance + (self.position * current_price)
         self.portfolio_values.append(portfolio_value)
         
-        # Move to next step
+        # Add portfolio change component to reward
+        portfolio_change_pct = (portfolio_value - prev_portfolio_value) / prev_portfolio_value if prev_portfolio_value > 0 else 0
+        reward += portfolio_change_pct * 2
+        
+        # Normalize rewards to a more consistent scale
+        reward = np.clip(reward, -2.0, 2.0)
+        
         self.current_step += 1
         done = self.current_step >= len(self.price_data) - 1
         
-        # If no trades were made, give a small negative reward to encourage action
-        if not self.trades and self.current_step % 10 == 0:
-            reward -= 0.001
-            
-        if self.position > 0:
-            prev_price = self.price_data.iloc[self.current_step - 1]['Close']
-            price_change_pct = (current_price - prev_price) / prev_price
-            reward += price_change_pct
-            
         observation = self._get_observation()
         info = {
             'portfolio_value': portfolio_value,

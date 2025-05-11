@@ -40,21 +40,47 @@ class DQNNetwork(nn.Module):
     Maps state observations to Q-values for each action.
     """
     
-    def __init__(self, input_dim: int, hidden_dim: int = 64, output_dim: int = 3, lstm_layers: int = 1):
+    def __init__(self, input_dim: int, hidden_dim: int = 128, output_dim: int = 3, lstm_layers: int = 2):
         super().__init__()
+        
+        # Increase hidden dimension and number of layers
+        self.hidden_dim = hidden_dim
         
         # GRU layer for processing sequential data
         self.gru = nn.GRU(
             input_size=input_dim,
             hidden_size=hidden_dim,
             num_layers=lstm_layers,
-            batch_first=True
+            batch_first=True,
+            dropout=0.2 if lstm_layers > 1 else 0
         )
+        
+        # Dropout for regularization
+        self.dropout = nn.Dropout(0.2)
         
         # Residual blocks for further processing
         self.res1 = ResidualBlock(hidden_dim, hidden_dim)
         self.res2 = ResidualBlock(hidden_dim, hidden_dim)
-        self.output_layer = nn.Linear(hidden_dim, output_dim)
+        
+        # Attention mechanism
+        self.attention = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim // 2, 1)
+        )
+        
+        # Output layer with advantage and value streams (Dueling DQN architecture)
+        self.value_stream = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim // 2, 1)
+        )
+        
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LeakyReLU(0.2),
+            nn.Linear(hidden_dim // 2, output_dim)
+        )
     
     def forward(self, x):
         """Forward pass through the network with GRU processing."""
@@ -70,11 +96,22 @@ class DQNNetwork(nn.Module):
         # Get the output from the last time step
         x = x[:, -1, :]
         
+        # Apply dropout
+        x = self.dropout(x)
+        
+        # Apply residual blocks
         x = self.res1(x)
         x = self.res2(x)
-        x = self.output_layer(x)
         
-        return x
+        # Dueling DQN: split into value and advantage streams
+        value = self.value_stream(x)
+        advantage = self.advantage_stream(x)
+        
+        # Combine value and advantage to get Q-values
+        # Q(s,a) = V(s) + (A(s,a) - mean(A(s,a')))
+        q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
+        
+        return q_values
 
 class ReplayBuffer:
     """
@@ -114,14 +151,14 @@ class DQNAgent:
     def __init__(self, 
                  state_dim: int,
                  action_dim: int = 3,
-                 learning_rate: float = 0.001,
-                 gamma: float = 0.99,  # Discount factor
+                 learning_rate: float = 0.0005,
+                 gamma: float = 0.97,  # Discount factor
                  epsilon_start: float = 1.0,
-                 epsilon_end: float = 0.1,
+                 epsilon_end: float = 0.05,
                  epsilon_decay: float = 0.995,
-                 buffer_size: int = 10000,
+                 buffer_size: int = 50000,
                  batch_size: int = 64,
-                 target_update_freq: int = 10):
+                 target_update_freq: int = 5):
         
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -133,15 +170,25 @@ class DQNAgent:
         self.target_update_freq = target_update_freq
         self.update_counter = 0
         
-        self.q_network = DQNNetwork(input_dim=state_dim, hidden_dim=64, output_dim=action_dim)
-        self.target_network = DQNNetwork(input_dim=state_dim, hidden_dim=64, output_dim=action_dim)
+        # Larger hidden dimension for better representation
+        self.q_network = DQNNetwork(input_dim=state_dim, hidden_dim=128, output_dim=action_dim)
+        self.target_network = DQNNetwork(input_dim=state_dim, hidden_dim=128, output_dim=action_dim)
         self.target_network.load_state_dict(self.q_network.state_dict())
         
         self.optimizer = optim.AdamW(
             self.q_network.parameters(),
             lr=learning_rate,
             amsgrad=True,
-            weight_decay=1e-6
+            weight_decay=1e-4  # Increased regularization
+        )
+        
+        # Learning rate scheduler for adaptive learning
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer, 
+            mode='min', 
+            factor=0.5, 
+            patience=5,
+            verbose=True
         )
         
         self.replay_buffer = ReplayBuffer(buffer_size)
@@ -223,14 +270,24 @@ class DQNAgent:
         current_q_values = self.q_network(states).gather(1, actions) #q-values for chosen actions
         
         with torch.no_grad():
-            max_next_q_values = self.target_network(next_states).max(1)[0].unsqueeze(1)
-            target_q_values = rewards + (1 - dones) * self.gamma * max_next_q_values
+            # Double DQN: use online network to select actions, target network to evaluate
+            next_actions = self.q_network(next_states).argmax(1, keepdim=True)
+            next_q_values = self.target_network(next_states).gather(1, next_actions)
+            target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
         
-        loss = nn.MSELoss()(current_q_values, target_q_values)
+        # Huber loss is more robust to outliers than MSE
+        loss = F.smooth_l1_loss(current_q_values, target_q_values)
         self.losses.append(loss.item())
+        
+        # Update learning rate based on loss
+        self.scheduler.step(loss)
         
         self.optimizer.zero_grad()
         loss.backward()
+        
+        # Gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0)
+        
         self.optimizer.step()
         
         self.update_counter += 1

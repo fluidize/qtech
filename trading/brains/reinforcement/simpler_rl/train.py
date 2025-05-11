@@ -9,43 +9,34 @@ from simple_dqn_agent import DQNAgent
 def train_agent(env, agent, episodes=100, max_steps=None, eval_frequency=10, save_frequency=None):
     """Train the DQN agent on the trading environment."""
     
-    # Track performance for visualization
     episode_rewards = []
     portfolio_values = []
     evaluation_returns = []
     
     for episode in range(1, episodes + 1):
-        # Reset environment
         state = env.reset()
         done = False
         total_reward = 0
+        total_buys = 0
+        total_sells = 0
         steps = 0
         
-        # Training loop for this episode
         with tqdm(desc=f"Episode {episode}/{episodes}", unit="step") as progress_bar:
             while not done:
-                # Select action
                 action = agent.select_action(state)
                 
-                # Take action in environment
-                next_state, reward, done, info = env.step(action)
+                next_state, reward, done, info = env.step(action) # Take action in environment
                 
-                # Handle any NaN rewards
-                if np.isnan(reward):
-                    reward = 0.0
-                
-                # Store transition in replay buffer
                 agent.replay_buffer.add(state, action, reward, next_state, done)
                 
-                # Update agent
                 agent.update()
-                
-                # Update state and metrics
+                    
                 state = next_state
                 total_reward += reward
                 steps += 1
-                
-                # Check if we've reached max steps
+                total_buys += 1 if action == 1 else 0
+                total_sells += 1 if action == 2 else 0
+
                 if max_steps and steps >= max_steps:
                     done = True
                 
@@ -53,10 +44,11 @@ def train_agent(env, agent, episodes=100, max_steps=None, eval_frequency=10, sav
                 progress_bar.set_postfix({
                     "reward": f"{total_reward:.2f}", 
                     "portfolio": f"${info['portfolio_value']:.2f}",
-                    "epsilon": f"{agent.epsilon:.2f}"
+                    "epsilon": f"{agent.epsilon:.2f}",
+                    "buy_signals": f"{total_buys}",
+                    "sell_signals": f"{total_sells}"
                 })
         
-        # Track metrics
         episode_rewards.append(total_reward)
         portfolio_values.append(env.portfolio_values[-1] if env.portfolio_values else env.initial_balance)
         
@@ -72,7 +64,6 @@ def train_agent(env, agent, episodes=100, max_steps=None, eval_frequency=10, sav
     if save_frequency:
         agent.save(f"trading_dqn_model_final.pt")
     
-    # Plot training results
     plot_results(episode_rewards, portfolio_values, evaluation_returns, eval_frequency)
     
     return agent
@@ -87,17 +78,10 @@ def evaluate_agent(env, agent, episodes=5):
         total_reward = 0
         
         while not done:
-            # Select action (without exploration)
             action = agent.select_action(state, training=False)
             
-            # Take action in environment
-            next_state, reward, done, _ = env.step(action)
+            next_state, reward, done, info = env.step(action)
             
-            # Handle any NaN rewards
-            if np.isnan(reward):
-                reward = 0.0
-            
-            # Update state and metrics
             state = next_state
             total_reward += reward
         
@@ -133,11 +117,15 @@ def plot_results(rewards, portfolio_values, eval_returns, eval_frequency):
     plt.show()
 
 if __name__ == "__main__":
-    # Create environment
-    env = TradingEnv(symbol="BTC-USDT", initial_balance=10000.0, window_size=10)
+    env = TradingEnv(symbol="BTC-USDT", 
+                     initial_balance=10000.0, 
+                     window_size=10,
+                     commission=0.001
+    )
     
     price_data, feature_data = env.fetch_data(chunks=1, age_days=0, interval="5min")
     
+    # Initial state to determine dimensions
     state = env.reset()
     market_data_shape = state['market_data'].shape
     position_shape = state['position'].shape
@@ -146,31 +134,43 @@ if __name__ == "__main__":
     position_size = np.prod(position_shape)
     state_dim = int(market_data_size + position_size)
     
-    print(f"State dimension: {state_dim}")
+    if len(feature_data.columns) * env.window_size != market_data_size:
+        print(f"WARNING: Feature dimensions mismatch. Expected {len(feature_data.columns) * env.window_size}, got {market_data_size}")
+    
+    print(f"Market data shape: {market_data_shape}")
+    print(f"Position shape: {position_shape}")
+    print(f"Feature count: {len(feature_data.columns)}")
+    print(f"Window size: {env.window_size}")
+    print(f"Total state dimension: {state_dim}")
+    
+    market_data_flat = state['market_data'].flatten()
+    position_flat = state['position'].flatten()
+    combined = np.concatenate([market_data_flat, position_flat])
+    
+    print(f"Combined state vector length: {len(combined)}")
+    print(f"State vector and calculated dimensions match: {len(combined) == state_dim}")
     
     agent = DQNAgent(
         state_dim=state_dim,
         action_dim=3,  # hold, buy, sell
-        learning_rate=0.0001,  # Lower learning rate for unscaled data
-        gamma=0.99,
+        learning_rate=0.0005,  # Adjusted learning rate for better stability
+        gamma=0.97,  # Slightly lower discount factor for more immediate rewards
         epsilon_start=1.0,
-        epsilon_end=0.01,
-        epsilon_decay=1-(1/100000),
-        buffer_size=50000,
-        batch_size=32,
-        target_update_freq=1
+        epsilon_end=0.05,  # Lower end epsilon for more exploitation in later stages
+        epsilon_decay=1-(1/2000),  # Slower decay for better exploration
+        buffer_size=100000,  # Larger buffer size
+        batch_size=128,  # Larger batch size for better gradient estimates
+        target_update_freq=5  # More frequent target updates
     )
     
-    # Train the agent
     trained_agent = train_agent(
         env=env,
         agent=agent,
-        episodes=50,
+        episodes=100,  # More episodes for better learning
         max_steps=None,  # Set to None to run until end of data
-        eval_frequency=5
+        eval_frequency=5,
     )
     
-    # Get final performance summary
     summary = env.get_performance_summary()
     print("\nTraining Complete!")
     print(f"Initial Portfolio Value: ${summary['initial_balance']:.2f}")
