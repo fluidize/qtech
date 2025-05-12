@@ -36,87 +36,28 @@ class ResidualBlock(nn.Module):
 
 class DQNNetwork(nn.Module):
     """
-    Deep Q-Network for the trading agent with GRU layer.
-    Maps state observations to Q-values for each action.
+    Simple perceptron architecture for the trading agent.
     """
     
-    def __init__(self, input_dim: int, hidden_dim: int = 128, output_dim: int = 3, lstm_layers: int = 2):
+    def __init__(self, input_dim: int, hidden_dim: int = 64, output_dim: int = 3):
         super().__init__()
         
-        # Increase hidden dimension and number of layers
-        self.hidden_dim = hidden_dim
-        
-        # GRU layer for processing sequential data
-        self.gru = nn.GRU(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=lstm_layers,
-            batch_first=True,
-            dropout=0.2 if lstm_layers > 1 else 0
-        )
-        
-        # Dropout for regularization
-        self.dropout = nn.Dropout(0.2)
-        
-        # Residual blocks for further processing
-        self.res1 = ResidualBlock(hidden_dim, hidden_dim)
-        self.res2 = ResidualBlock(hidden_dim, hidden_dim)
-        
-        # Attention mechanism
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.LeakyReLU(0.2),
-            nn.Linear(hidden_dim // 2, 1)
-        )
-        
-        # Output layer with advantage and value streams (Dueling DQN architecture)
-        self.value_stream = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.LeakyReLU(0.2),
-            nn.Linear(hidden_dim // 2, 1)
-        )
-        
-        self.advantage_stream = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.LeakyReLU(0.2),
-            nn.Linear(hidden_dim // 2, output_dim)
+        # Simple feedforward network
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
         )
     
     def forward(self, x):
-        """Forward pass through the network with GRU processing."""
-        # Reshape input for GRU (batch_size, sequence_length, features)
-        # For a single input, add batch and sequence dimensions
-        if x.dim() == 1:
-            x = x.unsqueeze(0).unsqueeze(0)  # Add batch and sequence dims
-        elif x.dim() == 2:
-            x = x.unsqueeze(1)  # Add sequence dimension
-            
-        x, _ = self.gru(x)
-        
-        # Get the output from the last time step
-        x = x[:, -1, :]
-        
-        # Apply dropout
-        x = self.dropout(x)
-        
-        # Apply residual blocks
-        x = self.res1(x)
-        x = self.res2(x)
-        
-        # Dueling DQN: split into value and advantage streams
-        value = self.value_stream(x)
-        advantage = self.advantage_stream(x)
-        
-        # Combine value and advantage to get Q-values
-        # Q(s,a) = V(s) + (A(s,a) - mean(A(s,a')))
-        q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
-        
-        return q_values
+        """Forward pass through the network."""
+        return self.model(x)
 
 class ReplayBuffer:
     """
     Experience replay buffer to store and sample transitions.
-    Helps break correlation between consecutive samples.
     """
     
     def __init__(self, capacity: int = 10000):
@@ -127,8 +68,10 @@ class ReplayBuffer:
         self.buffer.append((state, action, reward, next_state, done))
     
     def sample(self, batch_size: int) -> List:
-        """Sample a batch of transitions randomly."""
-        return random.sample(self.buffer, min(batch_size, len(self.buffer)))
+        """Sample a batch of transitions randomly with priority to recent experiences."""
+        if len(self.buffer) <= batch_size:
+            return list(self.buffer)
+        return random.sample(self.buffer, batch_size)
     
     def sample_all(self) -> List:
         """Sample all transitions."""
@@ -140,19 +83,14 @@ class ReplayBuffer:
 
 class DQNAgent:
     """
-    DQN Agent that learns to trade through Q-learning.
-    
-    Uses epsilon-greedy exploration and target networks for stability.
-    The underlying neural network uses GRU (Gated Recurrent Unit) layers
-    to better capture sequential patterns and time dependencies in the
-    market data, which can improve prediction performance for time series data.
+    Simple DQN Agent that learns to trade through Q-learning.
     """
     
     def __init__(self, 
                  state_dim: int,
                  action_dim: int = 3,
-                 learning_rate: float = 0.0005,
-                 gamma: float = 0.97,  # Discount factor
+                 learning_rate: float = 0.001,
+                 gamma: float = 0.95,
                  epsilon_start: float = 1.0,
                  epsilon_end: float = 0.05,
                  epsilon_decay: float = 0.995,
@@ -170,29 +108,18 @@ class DQNAgent:
         self.target_update_freq = target_update_freq
         self.update_counter = 0
         
-        # Larger hidden dimension for better representation
-        self.q_network = DQNNetwork(input_dim=state_dim, hidden_dim=128, output_dim=action_dim)
-        self.target_network = DQNNetwork(input_dim=state_dim, hidden_dim=128, output_dim=action_dim)
+        # Initialize the Q-network and target network
+        self.q_network = DQNNetwork(input_dim=state_dim, hidden_dim=64, output_dim=action_dim)
+        self.target_network = DQNNetwork(input_dim=state_dim, hidden_dim=64, output_dim=action_dim)
         self.target_network.load_state_dict(self.q_network.state_dict())
         
-        self.optimizer = optim.AdamW(
+        # Optimizer with simpler settings
+        self.optimizer = optim.Adam(
             self.q_network.parameters(),
-            lr=learning_rate,
-            amsgrad=True,
-            weight_decay=1e-4  # Increased regularization
-        )
-        
-        # Learning rate scheduler for adaptive learning
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, 
-            mode='min', 
-            factor=0.5, 
-            patience=5,
-            verbose=True
+            lr=learning_rate
         )
         
         self.replay_buffer = ReplayBuffer(buffer_size)
-        
         self.losses = []
 
     def state_to_tensor(self, state: Dict) -> torch.Tensor:
@@ -269,31 +196,26 @@ class DQNAgent:
         
         current_q_values = self.q_network(states).gather(1, actions) #q-values for chosen actions
         
+        # Get next Q-values (standard Q-learning)
         with torch.no_grad():
-            # Double DQN: use online network to select actions, target network to evaluate
-            next_actions = self.q_network(next_states).argmax(1, keepdim=True)
-            next_q_values = self.target_network(next_states).gather(1, next_actions)
+            next_q_values = self.target_network(next_states).max(1)[0].unsqueeze(1)
             target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
         
-        # Huber loss is more robust to outliers than MSE
-        loss = F.smooth_l1_loss(current_q_values, target_q_values)
+        # Calculate loss
+        loss = F.mse_loss(current_q_values, target_q_values)
         self.losses.append(loss.item())
         
-        # Update learning rate based on loss
-        self.scheduler.step(loss)
-        
+        # Update network
         self.optimizer.zero_grad()
         loss.backward()
-        
-        # Gradient clipping to prevent exploding gradients
-        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0)
-        
         self.optimizer.step()
         
+        # Update target network periodically
         self.update_counter += 1
         if self.update_counter % self.target_update_freq == 0:
             self.target_network.load_state_dict(self.q_network.state_dict())
             
+        # Decay epsilon
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
     
     def save(self, path: str = "trading_dqn_model.pt"):
