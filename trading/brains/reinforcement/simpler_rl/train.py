@@ -123,9 +123,8 @@ if __name__ == "__main__":
                      commission=0.001
     )
     
-    price_data, feature_data = env.fetch_data(chunks=1, age_days=0, interval="5min")
+    price_data, feature_data = env.fetch_data(chunks=30, age_days=0, interval="15min")
     
-    # Initial state to determine dimensions
     state = env.reset()
     market_data_shape = state['market_data'].shape
     position_shape = state['position'].shape
@@ -137,38 +136,32 @@ if __name__ == "__main__":
     if len(feature_data.columns) * env.window_size != market_data_size:
         print(f"WARNING: Feature dimensions mismatch. Expected {len(feature_data.columns) * env.window_size}, got {market_data_size}")
     
-    print(f"Market data shape: {market_data_shape}")
-    print(f"Position shape: {position_shape}")
-    print(f"Feature count: {len(feature_data.columns)}")
-    print(f"Window size: {env.window_size}")
-    print(f"Total state dimension: {state_dim}")
-    
     market_data_flat = state['market_data'].flatten()
     position_flat = state['position'].flatten()
     combined = np.concatenate([market_data_flat, position_flat])
     
-    print(f"Combined state vector length: {len(combined)}")
-    print(f"State vector and calculated dimensions match: {len(combined) == state_dim}")
-    
     agent = DQNAgent(
         state_dim=state_dim,
-        action_dim=3,  # hold, buy, sell
-        learning_rate=0.0005,  # Adjusted learning rate for better stability
-        gamma=0.97,  # Slightly lower discount factor for more immediate rewards
+        action_dim=3,
+        learning_rate=0.001,    # Increased for faster learning with simple model
+        gamma=0.90,             # Lower gamma for more immediate rewards
         epsilon_start=1.0,
-        epsilon_end=0.05,  # Lower end epsilon for more exploitation in later stages
-        epsilon_decay=1-(1/2000),  # Slower decay for better exploration
-        buffer_size=100000,  # Larger buffer size
-        batch_size=128,  # Larger batch size for better gradient estimates
-        target_update_freq=5  # More frequent target updates
+        epsilon_end=0.0,
+        epsilon_decay=1-(1/100),     # Slightly faster decay for more exploitation
+        buffer_size=50000,
+        batch_size=64,
+        target_update_freq=10
     )
+    
+    print("Starting training...")
     
     trained_agent = train_agent(
         env=env,
         agent=agent,
-        episodes=100,  # More episodes for better learning
-        max_steps=None,  # Set to None to run until end of data
-        eval_frequency=5,
+        episodes=200,           # More episodes for better learning with simpler model
+        max_steps=None,
+        eval_frequency=10,
+        save_frequency=50       # Save model less frequently
     )
     
     summary = env.get_performance_summary()
