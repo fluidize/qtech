@@ -3,26 +3,58 @@ import numpy as np
 import matplotlib.pyplot as plt
 import yfinance as yf
 from scipy.optimize import minimize
-
-def get_data(tickers: list, start_date: str, end_date: str):
-    data = yf.download(tickers, start=start_date, end=end_date, progress=False)
-    return data
+from typing import List, Dict, Tuple
+from rich.console import Console
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.panel import Panel
+from rich import print as rprint
 
 class PortfolioOptimizer:
-    def __init__(self, price_df: pd.DataFrame):
-        self.price_df = price_df
-        self.returns = price_df.pct_change().dropna()
+    """
+    Optimizes a stock-based portfolio based on a specified objective.
+    """
+    @staticmethod
+    def fetch_data(tickers: List[str], start_date: str, end_date: str) -> pd.DataFrame:
+        console = Console()
+        with console.status(f"[bold blue]Fetching data for {len(tickers)} assets...") as status:
+            data = yf.download(tickers, start=start_date, end=end_date, progress=False)
+            prices = data['Close']
+            prices = prices.dropna(axis=1)
+            
+            console.print(Panel(f"""
+[green]Data Loading Complete[/green]
+• Using [bold]{len(prices.columns)}[/bold] assets after filtering
+• Loaded [bold]{len(prices)}[/bold] rows
+• Date Range: [bold]{prices.index[0].strftime('%Y-%m-%d')}[/bold] to [bold]{prices.index[-1].strftime('%Y-%m-%d')}[/bold]
+"""))
+            return prices
+
+    def __init__(self, price_df: pd.DataFrame = None, tickers: List[str] = None, 
+                 start_date: str = None, end_date: str = None):
+        """Initialize optimizer with either price data or ticker information."""
+        self.console = Console()
+        
+        if price_df is not None:
+            self.price_df = price_df
+        elif all(x is not None for x in [tickers, start_date, end_date]):
+            self.price_df = self.fetch_data(tickers, start_date, end_date)
+        else:
+            raise ValueError("Must provide either price_df or (tickers, start_date, end_date)")
+
+        self.returns = self.price_df.pct_change().dropna()
         self.mean_returns = self.returns.mean()
         self.cov_matrix = self.returns.cov()
+        self.assets = list(self.mean_returns.index)
 
-    def portfolio_performance(self, weights, risk_free_rate=0.0):
+    def portfolio_performance(self, weights, risk_free_rate=0.0) -> Tuple[float, float, float]:
         weights = np.array(weights)
-        port_return = np.sum(self.mean_returns * weights) * 252  # annualized
-        port_vol = np.sqrt(np.dot(weights.T, np.dot(self.cov_matrix * 252, weights)))
-        sharpe = (port_return - risk_free_rate) / port_vol if port_vol > 0 else 0
-        return port_return, port_vol, sharpe
+        portfolio_return = np.sum(self.mean_returns * weights) * 252  # annualized
+        portfolio_vol = np.sqrt(np.dot(weights.T, np.dot(self.cov_matrix * 252, weights)))
+        sharpe = (portfolio_return - risk_free_rate) / portfolio_vol if portfolio_vol > 0 else 0
+        return portfolio_return, portfolio_vol, sharpe
 
-    def optimize(self, objective='sharpe', risk_free_rate=0.0):
+    def optimize(self, objective='sharpe', risk_free_rate=0.0) -> np.ndarray:
         num_assets = len(self.mean_returns)
         args = (risk_free_rate,)
         constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
@@ -35,7 +67,7 @@ class PortfolioOptimizer:
             result = minimize(neg_sharpe, x0, args=args, method='SLSQP', bounds=bounds, constraints=constraints)
         elif objective == 'volatility':
             def port_vol(weights, _):
-                return self.portfolio_performance(weights)[1]
+                return self.portfolio_performance(weights, risk_free_rate)[1]
             result = minimize(port_vol, x0, args=args, method='SLSQP', bounds=bounds, constraints=constraints)
         else:
             raise ValueError(f"Unknown objective: {objective}")
@@ -44,113 +76,137 @@ class PortfolioOptimizer:
             raise RuntimeError("Optimization failed: " + result.message)
         return result.x
 
-    def summary(self, weights, risk_free_rate=0.0):
-        port_return, port_vol, sharpe = self.portfolio_performance(weights, risk_free_rate)
+    def summary(self, weights, risk_free_rate=0.0) -> Dict:
+        portfolio_return, portfolio_vol, sharpe = self.portfolio_performance(weights, risk_free_rate)
         return {
             'weights': weights,
-            'annual_return': port_return,
-            'annual_volatility': port_vol,
+            'annual_return': portfolio_return,
+            'annual_volatility': portfolio_vol,
             'sharpe_ratio': sharpe
         }
 
-if __name__ == "__main__":
-    # Define assets and date range
-    assets = ['AAPL']
-    start_date = '2020-01-01'
-    end_date = '2023-12-31'
-    
-    # Fetch historical data using get_data function
-    print(f"Fetching historical data for {len(assets)} assets...")
-    data = get_data(assets, start_date, end_date)
-    
-    # Extract adjusted close prices
-    prices = data['Adj Close']
-    
-    # Check for missing data
-    missing = prices.isna().sum()
-    if missing.sum() > 0:
-        print(f"Warning: Missing data detected:\n{missing[missing > 0]}")
-        prices = prices.ffill().bfill()  # Forward and backward fill missing values
-    
-    print(f"Data loaded: {len(prices)} rows from {prices.index[0]} to {prices.index[-1]}")
-    
-    # Optimize portfolio
-    optimizer = PortfolioOptimizer(prices)
-    
-    # Optimize for maximum Sharpe ratio
-    weights_sharpe = optimizer.optimize(objective='sharpe', risk_free_rate=0.02)
-    sharpe_summary = optimizer.summary(weights_sharpe, risk_free_rate=0.02)
-    
-    print("\nOptimal Portfolio (Max Sharpe Ratio):")
-    for asset, weight in zip(assets, weights_sharpe):
-        print(f"  {asset}: {weight:.2%}")
-    print(f"Expected Annual Return: {sharpe_summary['annual_return']:.2%}")
-    print(f"Expected Annual Volatility: {sharpe_summary['annual_volatility']:.2%}")
-    print(f"Sharpe Ratio: {sharpe_summary['sharpe_ratio']:.2f}")
-    
-    # Optimize for minimum volatility
-    weights_vol = optimizer.optimize(objective='volatility')
-    vol_summary = optimizer.summary(weights_vol)
-    
-    print("\nOptimal Portfolio (Min Volatility):")
-    for asset, weight in zip(assets, weights_vol):
-        print(f"  {asset}: {weight:.2%}")
-    print(f"Expected Annual Return: {vol_summary['annual_return']:.2%}")
-    print(f"Expected Annual Volatility: {vol_summary['annual_volatility']:.2%}")
-    print(f"Sharpe Ratio: {vol_summary['sharpe_ratio']:.2f}")
-    
-    # Visualize the portfolio weights
-    plt.figure(figsize=(12, 6))
-    
-    plt.subplot(1, 2, 1)
-    plt.pie(weights_sharpe, labels=assets, autopct='%1.1f%%', startangle=90)
-    plt.title('Max Sharpe Ratio Portfolio')
-    
-    plt.subplot(1, 2, 2)
-    plt.pie(weights_vol, labels=assets, autopct='%1.1f%%', startangle=90)
-    plt.title('Min Volatility Portfolio')
-    
-    plt.tight_layout()
-    plt.savefig('optimal_portfolio_allocation.png')
-    plt.show()
-    
-    # Plot efficient frontier
-    print("\nGenerating efficient frontier...")
-    returns = []
-    volatilities = []
-    sharpe_ratios = []
-    
-    # Generate random portfolios
-    num_portfolios = 5000
-    for i in range(num_portfolios):
-        weights = np.random.random(len(assets))
-        weights = weights / np.sum(weights)
-        ret, vol, sr = optimizer.portfolio_performance(weights, risk_free_rate=0.02)
-        returns.append(ret)
-        volatilities.append(vol)
-        sharpe_ratios.append(sr)
+    def print_portfolio_summary(self, weights: np.ndarray, portfolio_type: str, risk_free_rate=0.0):
+        summary = self.summary(weights, risk_free_rate)
         
-        # Show progress occasionally
-        if (i+1) % 1000 == 0:
-            print(f"  Generated {i+1}/{num_portfolios} random portfolios")
+        # Create weights table
+        weights_table = Table(title=f"\n{portfolio_type} Portfolio Weights", show_header=True, header_style="bold magenta")
+        weights_table.add_column("Asset", style="cyan")
+        weights_table.add_column("Weight", justify="right", style="green")
+        
+        # Sort weights by value for better visualization
+        sorted_weights = sorted(zip(self.assets, weights), key=lambda x: x[1], reverse=True)
+        for asset, weight in sorted_weights:
+            if weight >= 0.01:  # Only show weights >= 1%
+                weights_table.add_row(asset, f"{weight:.2%}")
+        
+        # Create metrics table
+        metrics_table = Table(show_header=True, header_style="bold magenta")
+        metrics_table.add_column("Metric", style="cyan")
+        metrics_table.add_column("Value", justify="right", style="green")
+        
+        metrics_table.add_row("Expected Annual Return", f"{summary['annual_return']:.2%}")
+        metrics_table.add_row("Expected Annual Volatility", f"{summary['annual_volatility']:.2%}")
+        metrics_table.add_row("Sharpe Ratio", f"{summary['sharpe_ratio']:.2f}")
+        
+        # Print tables
+        self.console.print(weights_table)
+        self.console.print(metrics_table)
+
+    def plot_portfolio_weights(self, weights_sharpe, weights_vol, save_path=None):
+        plt.figure(figsize=(12, 6))
+        
+        plt.subplot(1, 2, 1)
+        plt.pie(weights_sharpe, labels=self.assets, autopct='%1.1f%%', startangle=90)
+        plt.title('Max Sharpe Ratio Portfolio')
+        
+        plt.subplot(1, 2, 2)
+        plt.pie(weights_vol, labels=self.assets, autopct='%1.1f%%', startangle=90)
+        plt.title('Min Volatility Portfolio')
+        
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path)
+        plt.show()
+
+    def generate_random_portfolios(self, num_portfolios=5000, risk_free_rate=0.0):
+        returns = []
+        volatilities = []
+        sharpe_ratios = []
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("Generating random portfolios...", total=num_portfolios)
+            
+            for i in range(num_portfolios):
+                weights = np.random.random(len(self.assets))
+                weights = weights / np.sum(weights)
+                ret, vol, sr = self.portfolio_performance(weights, risk_free_rate)
+                returns.append(ret)
+                volatilities.append(vol)
+                sharpe_ratios.append(sr)
+                
+                progress.update(task, advance=1)
+                
+        return returns, volatilities, sharpe_ratios
+
+    def plot_efficient_frontier(self, weights_sharpe, weights_vol, risk_free_rate=0.0, num_portfolios=5000, save_path=None):
+        print("\nGenerating efficient frontier...")
+        returns, volatilities, sharpe_ratios = self.generate_random_portfolios(num_portfolios, risk_free_rate)
+        
+        plt.figure(figsize=(10, 6))
+        plt.scatter(volatilities, returns, c=sharpe_ratios, cmap='viridis', alpha=0.5)
+        plt.colorbar(label='Sharpe Ratio')
+        
+        max_sharpe_ret, max_sharpe_vol, _ = self.portfolio_performance(weights_sharpe, risk_free_rate)
+        min_vol_ret, min_vol_vol, _ = self.portfolio_performance(weights_vol)
+        
+        plt.scatter(max_sharpe_vol, max_sharpe_ret, c='red', marker='*', s=300, label='Max Sharpe')
+        plt.scatter(min_vol_vol, min_vol_ret, c='green', marker='*', s=300, label='Min Volatility')
+        
+        plt.title('Portfolio Optimization - Efficient Frontier')
+        plt.xlabel('Expected Volatility')
+        plt.ylabel('Expected Return')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        if save_path:
+            plt.savefig(save_path)
+        plt.show()
+
+    def optimize_and_plot(self, risk_free_rate=0.0, num_portfolios=5000):
+        """Convenience method to run the full optimization and visualization pipeline."""
+        with self.console.status("[bold blue]Optimizing portfolios...") as status:
+            weights_sharpe = self.optimize(objective='sharpe', risk_free_rate=risk_free_rate)
+            weights_vol = self.optimize(objective='volatility', risk_free_rate=risk_free_rate)
+
+        self.console.rule("[bold blue]Portfolio Optimization Results")
+        
+        self.print_portfolio_summary(weights_sharpe, "Maximum Sharpe Ratio", risk_free_rate)
+        self.console.print()  # Add spacing
+        self.print_portfolio_summary(weights_vol, "Minimum Volatility", risk_free_rate)
+
+        self.console.print("\n[bold blue]Generating visualizations...[/bold blue]")
+        self.plot_portfolio_weights(weights_sharpe, weights_vol, save_path='optimal_portfolio_allocation.png')
+        self.plot_efficient_frontier(weights_sharpe, weights_vol, risk_free_rate=risk_free_rate, 
+                                   num_portfolios=num_portfolios, save_path='efficient_frontier.png')
+
+        return weights_sharpe, weights_vol
+
+if __name__ == "__main__":
+    assets = ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'TSLA', 'NVDA', 'NFLX', 'WMT', 'JNJ', 'VZ', 'IBM', 'MMM', 'PFE', 'BA', 'CAT', 'CSCO', 'TM', 'V', 'WBA', 'DIS', 'GE', 'GS', 'JPM', 'MCD', 'MRK', 'MS', 'NKE', 'ORCL', 'QCOM', 'RTX', 'TXN', 'UNH', 'VZ', 'WMT', 'XOM']
     
-    # Plot efficient frontier
-    plt.figure(figsize=(10, 6))
-    plt.scatter(volatilities, returns, c=sharpe_ratios, cmap='viridis', alpha=0.5)
-    plt.colorbar(label='Sharpe Ratio')
+    # Initialize optimizer with tickers and date range
+    optimizer = PortfolioOptimizer(
+        tickers=assets,
+        start_date='2020-01-01',
+        end_date='2023-12-31'
+    )
     
-    # Plot max Sharpe and min vol portfolios
-    max_sharpe_ret, max_sharpe_vol, _ = optimizer.portfolio_performance(weights_sharpe, risk_free_rate=0.02)
-    min_vol_ret, min_vol_vol, _ = optimizer.portfolio_performance(weights_vol)
-    
-    plt.scatter(max_sharpe_vol, max_sharpe_ret, c='red', marker='*', s=300, label='Max Sharpe')
-    plt.scatter(min_vol_vol, min_vol_ret, c='green', marker='*', s=300, label='Min Volatility')
-    
-    plt.title('Portfolio Optimization - Efficient Frontier')
-    plt.xlabel('Expected Volatility')
-    plt.ylabel('Expected Return')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig('efficient_frontier.png')
-    plt.show()
+    # Run the full optimization and visualization pipeline
+    optimizer.optimize_and_plot(risk_free_rate=0.00)
     
