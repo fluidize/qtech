@@ -23,48 +23,35 @@ import warnings
 class VectorizedBacktesting:
     def __init__(
         self,
-        symbol: str,
         instance_name: str = "default",
         initial_capital: float = 10000.0,
-        chunks: int = 5,
-        interval: str = "5min",
-        age_days: int = 10,
     ):
         self.instance_name = instance_name
+        self.initial_capital = initial_capital
+        self.data: pd.DataFrame = pd.DataFrame()
+
+    def fetch_data(self, symbol: str, chunks: int, interval: str, age_days: int, kucoin: bool = True):
         self.symbol = symbol
         self.chunks = chunks
         self.interval = interval
         self.age_days = age_days
-        self.initial_capital = initial_capital
-
-        self.data: pd.DataFrame = None
-
-    def fetch_data(self, kucoin: bool = True):
-        self.data = mt.fetch_data(self.symbol, self.chunks, self.interval, self.age_days, kucoin=kucoin)
+        self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
 
     def run_strategy(self, strategy_func, **kwargs):
         """Run a trading strategy on the data"""
-        if self.data is None:
+        if self.data is None or self.data.empty:
             raise ValueError("No data available. Call fetch_data() first.")
 
-        backtesting_start_time = time.time()
         signals = strategy_func(self.data, **kwargs)
-        backtesting_end_time = time.time()
-        # print(f"[green]BACKTESTING DONE ({backtesting_end_time - backtesting_start_time:.2f} seconds)[/green]")
 
         self.data['Return'] = self.data['Close'].pct_change()
-
         self.data['Position'] = signals
         self.data['Position'] = self.data['Position'].replace(-1, 0)  # Set -1 signals to 0 (close position)
-        
         self.data['Strategy_Returns'] = self.data['Position'].shift(1) * self.data['Return']
-
         self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
-        
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
         self.data['Drawdown'] = (self.data['Portfolio_Value'] - self.data['Peak']) / self.data['Peak']
-        
         return self.data
 
     def get_performance_metrics(self):
@@ -75,7 +62,7 @@ class VectorizedBacktesting:
             'Total_Return': metrics.get_total_return(self.data['Position'], self.data['Close']),
             'Alpha': metrics.get_alpha(self.data['Position'], self.data['Close']),
             'Beta': metrics.get_beta(self.data['Position'], self.data['Close']),
-            'Excess_Returns': metrics.get_excess_returns(self.data['Position'], self.data['Close']),
+            'Active_Returns': metrics.get_active_returns(self.data['Position'], self.data['Close']),
             'Max_Drawdown': metrics.get_max_drawdown(self.data['Position'], self.data['Close'], self.initial_capital),
             'Sharpe_Ratio': metrics.get_sharpe_ratio(self.data['Position'], self.data['Close']),
             'Sortino_Ratio': metrics.get_sortino_ratio(self.data['Position'], self.data['Close']),
@@ -376,7 +363,7 @@ class VectorizedBacktesting:
             fig.show()
         
         return fig
-
+    
     def hodl_strategy(self, data: pd.DataFrame) -> pd.Series:
         """Hodl strategy implementation. Use for debugging/benchmarking."""
         return pd.Series(1, index=data.index)
@@ -471,12 +458,13 @@ class VectorizedBacktesting:
 
     def custom_scalper_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
-        psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
-        supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
-        rsi = ta.rsi(data['Close'], timeperiod=30)
-
-        buy_conditions = (data['Close'] > psar) & (data['Close'] > supertrend_line) & (rsi < 55)
-        sell_conditions = (data['Close'] < psar) & (data['Close'] < supertrend_line)
+        
+        fast_ema = ta.ema(data['Close'], 9)
+        slow_ema = ta.ema(data['Close'], 26)
+        macd, signal = ta.macd(data['Close'])
+        
+        buy_conditions = (fast_ema > slow_ema) & (macd > signal)
+        sell_conditions = (fast_ema < slow_ema) & (macd < signal)
         
         position[buy_conditions] = 1
         position[sell_conditions] = 0
@@ -548,14 +536,15 @@ class VectorizedBacktesting:
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
-        symbol="HYPE-USDT",
-        initial_capital=400,
+        initial_capital=400
+    )
+    
+    backtest.fetch_data(
+        symbol="DOGE-USDT",
         chunks=100,
         interval="1min",
         age_days=0
     )
-    
-    backtest.fetch_data(kucoin=True)
     
     backtest.run_strategy(backtest.ema_cross_strategy)
     print(backtest.get_performance_metrics())
