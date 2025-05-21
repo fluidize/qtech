@@ -100,7 +100,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
             try:
                 request_data = request["data"]  # list of lists
             except:
-                raise Exception(f"Error fetching Kucoin. Check request parameters. {request}")
+                raise Exception(f"Error fetching {ticker} from Kucoin. Check request parameters. {request}")
             
             records = []
             for dochltv in request_data:
