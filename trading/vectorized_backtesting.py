@@ -385,6 +385,14 @@ class VectorizedBacktesting:
         """Perfect strategy implementation. Use for debugging/benchmarking."""
         future_returns = data['Close'].shift(-1) / data['Close'] - 1
         return (future_returns > 0).astype(int)
+    
+    def ema_cross_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26) -> pd.Series:
+        position = pd.Series(0, index=data.index)
+        ema_fast = ta.ema(data['Close'], fast_period)
+        ema_slow = ta.ema(data['Close'], slow_period)
+        position[ema_fast > ema_slow] = 1
+        position[ema_fast < ema_slow] = 0
+        return position
 
     def reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
         position = pd.Series(0, index=data.index)
@@ -475,27 +483,26 @@ class VectorizedBacktesting:
         
         return position
 
-    def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64) -> pd.Series:
+    def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
         """
-        Neural network strategy implementation using one-by-one prediction to avoid any risk of data leakage.
-        This approach processes each data point individually, which is slower but guarantees no temporal mixing.
-        For a faster batch processing version (where shuffle=False should prevent leakage), see nn_strategy_batch.
+        Neural network strategy with consistent batching.
+        Always passes input as (batch, 1, features) to the model, so batch size does not affect output.
+        Args:
+            data: DataFrame of OHLCV data
+            batch_size: Batch size for inference (default 64)
+            check_consistency: If True, checks that batch and single inference give the same result for a small window
+        Returns:
+            pd.Series of positions (1 for buy, 0 for hold/sell)
         """
         from brains.time_series.single_predictors.classifier_model import load_model
         import model_tools as mt
-        
-        MODEL_PATH = r"trading\BTC-USDT_15min_20_7features.pth"
-        
+        MODEL_PATH = r"trading\BTC-USDT_1min_5_38features.pth"
         position = pd.Series(0, index=data.index)
-        
         model = load_model(MODEL_PATH)
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.eval()
-        
-        features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=20)
-        
         selected_features = model.selected_features
-        
+        features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=5)
         missing_features = [f for f in selected_features if f not in features_df.columns]
         if missing_features:
             print(f"Warning: Missing {len(missing_features)} features: {missing_features[:5]}...")
@@ -503,99 +510,53 @@ class VectorizedBacktesting:
             features_df = features_df[available_features]
         else:
             features_df = features_df[selected_features]
-        
-        position_values = np.zeros(len(features_df))
-        
-        with torch.no_grad():
-            for i in tqdm(range(len(features_df))):
-                x = torch.tensor(features_df.iloc[i].values, dtype=torch.float32).unsqueeze(0).to(model.DEVICE)
-                outputs = model(x)
-                
-                probs = F.softmax(outputs, dim=1)
-                
-                if probs[0, 1].item() > 0.85:
-                    position_values[i] = 1
-
-        position.iloc[len(data)-len(position_values):] = position_values
-        
-        position = position.ffill().fillna(0)
-        
-        return position
-        
-    def nn_strategy_batch(self, data: pd.DataFrame, batch_size: int = 64, confidence_threshold: float = 0.99) -> pd.Series:
-        """
-        Neural network strategy implementation using batch processing for efficiency.
-        
-        Note: While this is faster, batching could theoretically introduce subtle data leakage in some cases.
-        The shuffle=False setting preserves temporal order in batches, but if you want to be absolutely certain
-        there's no leakage, use the nn_strategy method instead which processes one sample at a time.
-        """
-        from brains.time_series.single_predictors.classifier_model import load_model
-        import model_tools as mt
-        
-        MODEL_PATH = r"trading\BTC-USDT_5min_20_10features.pth"
-        
-        position = pd.Series(0, index=data.index)
-        
-        model = load_model(MODEL_PATH)
-        model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-        model.eval()
-
-        selected_features = model.selected_features
-        
-        features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=20)
-        
-        missing_features = [f for f in selected_features if f not in features_df.columns]
-        if missing_features:
-            print(f"Warning: Missing {len(missing_features)} features: {missing_features[:5]}...")
-            available_features = [f for f in selected_features if f in features_df.columns]
-            features_df = features_df[available_features]
-        else:
-            features_df = features_df[selected_features]
-        
         X = torch.tensor(features_df.values, dtype=torch.float32).to(model.DEVICE)
-        dataset = TensorDataset(X)
+        # Add sequence dimension: (N, 1, F)
+        X_seq = X.unsqueeze(1)
+        dataset = TensorDataset(X_seq)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-        
-        predictions = []
-        probabilities = []
-        tqdm_dataloader = tqdm(dataloader, desc="Processing Batches")
-        with torch.no_grad():
-            for batch in tqdm_dataloader:
-                batch_x = batch[0]
-                outputs = model(batch_x)
-                
-                probs = F.softmax(outputs, dim=1)
-                probabilities.extend(probs.cpu().numpy())
-
-                _, preds = torch.max(outputs, 1)
-                predictions.extend(preds.cpu().numpy())
-
-        probabilities = np.array(probabilities)
-        
         position_values = np.zeros(len(features_df))
-        buy_probability = probabilities[:, 1]
-        sell_probability = probabilities[:, 0]
-        probability_difference = buy_probability - sell_probability #positive = more confident buy | negative = more confident sell
-        position_values[probability_difference > confidence_threshold] = 1
-
+        with torch.no_grad():
+            idx = 0
+            for batch in tqdm(dataloader, desc="NN Strategy Batching"):
+                batch_x = batch[0]  # (batch, 1, features)
+                outputs = model(batch_x)
+                probs = F.softmax(outputs, dim=2)  # (batch, 1, classes)
+                actions = torch.argmax(probs, dim=2).cpu().numpy().flatten()  # (batch,)
+                for i, action in enumerate(actions):
+                    if action == 2:
+                        position_values[idx + i] = 1
+                    else:
+                        position_values[idx + i] = 0
+                idx += len(actions)
         position.iloc[len(data)-len(position_values):] = position_values
-
         position = position.ffill().fillna(0)
-        
+        # Consistency check: compare batch vs single
+        if check_consistency:
+            with torch.no_grad():
+                single_preds = []
+                for i in range(min(32, len(X))):
+                    x_single = X[i].unsqueeze(0).unsqueeze(0)  # (1, 1, F)
+                    out = model(x_single)
+                    prob = F.softmax(out, dim=2)
+                    act = torch.argmax(prob, dim=2).item()
+                    single_preds.append(act)
+                batch_preds = position_values[:len(single_preds)]
+                if not np.all(batch_preds == np.array([1 if a==2 else 0 for a in single_preds])):
+                    print("[red]WARNING: Batch and single inference results differ![/red]")
         return position
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
-        symbol="BTC-USDT",
-        initial_capital=39.5,
-        chunks=365,
-        interval="5min",
+        symbol="HYPE-USDT",
+        initial_capital=400,
+        chunks=100,
+        interval="1min",
         age_days=0
     )
     
     backtest.fetch_data(kucoin=True)
     
-    backtest.run_strategy(backtest.nn_strategy_batch)
+    backtest.run_strategy(backtest.ema_cross_strategy)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=True)
