@@ -32,7 +32,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
         if file_age_hours < cache_expiry_hours:
             try:
                 cached_data = pd.read_parquet(cache_file)
-                print(f"[blue]USING CACHED DATA FROM {file_modified_time}[/blue]")
+                print(f"[blue]USING CACHED DATA FROM {file_modified_time}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB)")
                 
                 with open(f"{cache_file}.json", "w") as f:
                     json.dump({
@@ -136,7 +136,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
     if use_cache:
         try:
             data.to_parquet(cache_file)
-            print(f"[blue]Data cached to {cache_file}[/blue]")
+            print(f"[blue]Data cached to {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB)")
             
             with open(f"{cache_file}.json", "w") as f:
                 json.dump({
