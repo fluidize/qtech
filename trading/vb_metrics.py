@@ -31,13 +31,23 @@ def get_portfolio_value(position: pd.Series, close_prices: pd.Series, initial_ca
     cumulative_returns = get_cumulative_returns(position, close_prices)
     return initial_capital * cumulative_returns
 
-def get_alpha(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate alpha from position and close prices."""
-    returns = get_total_return(position, close_prices)
-    risk_free_rate = 0.00
-    benchmark_returns = get_benchmark_total_return(close_prices)
-    beta = get_beta(position, close_prices)
-    return returns - risk_free_rate - beta * (benchmark_returns - risk_free_rate)
+def get_alpha(position: pd.Series, close_prices: pd.Series, annualize: bool = True) -> float:
+    """Calculate CAPM alpha using average daily returns. Optionally annualize (default: True)."""
+    strategy_returns = get_returns(position, close_prices)
+    market_returns = close_prices.pct_change()
+
+    # Align time
+    common_index = strategy_returns.dropna().index.intersection(market_returns.dropna().index)
+    strategy_returns = strategy_returns.loc[common_index]
+    market_returns = market_returns.loc[common_index]
+
+    beta = strategy_returns.cov(market_returns) / market_returns.var() if market_returns.var() != 0 else 0
+    avg_strategy_return = strategy_returns.mean()
+    avg_market_return = market_returns.mean()
+    alpha = avg_strategy_return - beta * avg_market_return
+    if annualize:
+        alpha = alpha * 365
+    return alpha
 
 def get_beta(position: pd.Series, close_prices: pd.Series) -> float:
     """Calculate beta from position and close prices."""
@@ -64,8 +74,8 @@ def get_beta(position: pd.Series, close_prices: pd.Series) -> float:
     beta = covariance / variance
     return beta
 
-def get_excess_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
-    """Calculate excess returns of strategy compared to benchmark."""
+def get_active_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
+    """Calculate active returns of strategy compared to benchmark."""
     returns = get_total_return(position, close_prices)
     benchmark_returns = get_benchmark_total_return(close_prices)
     return returns - benchmark_returns
@@ -145,9 +155,8 @@ def get_pt_ratio(position: pd.Series, close_prices: pd.Series) -> float:
 def get_profit_factor(position: pd.Series, close_prices: pd.Series) -> float:
     """Calculate profit factor from position and close prices."""
     returns = get_returns(position, close_prices)
-    positive_returns = (returns > 0).sum()
-    negative_returns = (returns < 0).sum()
-    return positive_returns / negative_returns if negative_returns > 0 else 0
+    profit_factor = returns[returns > 0].sum() / abs(returns[returns < 0].sum())
+    return profit_factor
 
 def get_total_trades(position: pd.Series) -> int:
     """Calculate total number of trades from position."""
