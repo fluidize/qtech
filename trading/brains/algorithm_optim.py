@@ -6,12 +6,10 @@ from rich.table import Table
 from rich.console import Console
 from tqdm import tqdm
 import numpy as np
-from scipy.optimize import minimize
-import sys, os
+import sys
 sys.path.append("trading")
 from vectorized_backtesting import VectorizedBacktesting
-from skopt import gp_minimize
-from skopt.space import Integer
+import optuna
 
 class AlgorithmGridSearch:
     def __init__(
@@ -85,17 +83,15 @@ class AlgorithmGridSearch:
 
         self.results = []
         
-        table_limit = 50
+        
         with tqdm(total=total_combinations, desc="Grid Search Progress") as progress_bar:
             for count, params in enumerate(param_combinations):
                 result = self._run_single_combination(params)
                 self.results.append(result)
                 progress_bar.update(1)
-                if count >= table_limit-1:
-                    break
 
         sorted_results = sorted(self.results, key=lambda x: x["metrics"][self.metric], reverse=True)
-        
+        table_limit = 50
         for i, result in enumerate(sorted_results, 1):
             table.add_row(
                 str(result["parameters"]),
@@ -103,6 +99,8 @@ class AlgorithmGridSearch:
                 f"{result['metrics']['Alpha']:.2%}",
                 f"{result['metrics']['Active_Returns']:.2%}"
             )
+            if i >= table_limit-1:
+                break
         self.console.print(table)
         
         results_df = pd.DataFrame([
@@ -137,48 +135,45 @@ class AlgorithmGridSearch:
         self.engine.run_strategy(self.strategy_func, **best_params)
         return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
 
-class AlgorithmGradientDescent:
-    def __init__(self, engine: VectorizedBacktesting, strategy_func: Callable, start_params: Dict[str, Any], metric: str = "Total Return", n_calls: int = 30):
+class AlgorithmBayesianOptimization:
+    def __init__(self, engine: VectorizedBacktesting, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total Return", n_trials: int = 30, direction: str = "maximize"):
         self.engine = engine
         self.strategy_func = strategy_func
-        self.start_params = start_params
+        self.param_space = param_space  # e.g., {"fast_period": (1, 50), "slow_period": (1, 50)}
         self.metric = metric
-        self.param_names = list(start_params.keys())
+        self.param_names = list(param_space.keys())
         self.best_params = None
         self.best_metrics = None
-        self.n_calls = n_calls
-        # Use Integer space for all params, using the min/max from start_params or a default range
-        self.bounds = [(1, 50) for _ in self.param_names]  # You can customize this per param if needed
-        self.dimensions = [Integer(b[0], b[1], name=k) for k, b in zip(self.param_names, self.bounds)]
+        self.n_trials = n_trials
+        self.direction = direction
 
-    def _array_to_param_dict(self, arr):
-        return {k: int(round(v)) for k, v in zip(self.param_names, arr)}
+    def _suggest_params(self, trial):
+        params = {}
+        for k, v in self.param_space.items():
+            params[k] = trial.suggest_int(k, v[0], v[1])
+        return params
 
-    def run(self) -> pd.DataFrame:
-        def objective(params):
-            param_dict = self._array_to_param_dict(params)
+    def run(self):
+        def objective(trial):
+            param_dict = self._suggest_params(trial)
             self.engine.run_strategy(self.strategy_func, **param_dict)
             metrics = self.engine.get_performance_metrics()
-            return -metrics[self.metric]  # Negate if maximizing
+            return metrics[self.metric]
 
-        result = gp_minimize(
-            objective,
-            self.dimensions,
-            n_calls=self.n_calls,
-            random_state=42,
-        )
-        self.best_params = self._array_to_param_dict(result.x)
-        self.best_metrics = -result.fun
+        study = optuna.create_study(direction=self.direction)
+        study.optimize(objective, n_trials=self.n_trials)
+        self.best_params = study.best_params
+        self.best_metrics = study.best_value
         return self.best_metrics
 
     def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
         self.engine.run_strategy(self.strategy_func, **self.best_params)
         return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
 
-    def get_best_params(self) -> Dict[str, Any]:
+    def get_best_params(self):
         return self.best_params
 
-    def get_best_metrics(self) -> Dict[str, float]:
+    def get_best_metrics(self):
         return self.best_metrics
 
 class AlgorithmAssignmentOptimizer:
@@ -237,16 +232,21 @@ if __name__ == "__main__":
     vb = VectorizedBacktesting(
         initial_capital=10000.0,
     )
-    AAO = AlgorithmAssignmentOptimizer(
-        engine=vb,
-        pairs=['BONK-USDT', 'WIF-USDT', 'PNUT-USDT', 'AI16Z-USDT', 'MEW-USDT', 'BABYDOGE-USDT'],
+    vb.fetch_data(
+        symbol="ADA-USDT",
         chunks=50,
-        interval="5min",
+        interval="1min",
         age_days=0,
-        strategy_func=vb.ema_cross_strategy,
-        params={"fast_period": 9, "slow_period": 26},
-        metric="Active_Returns",
     )
-    AAO.run()
-    AAO.plot_best_performance(advanced=True)
 
+    bayes_opt = AlgorithmBayesianOptimization(
+        engine=vb,
+        strategy_func=vb.ema_cross_strategy,
+        param_space={"fast_period": (1, 30), "slow_period": (1, 30)},
+        metric="Active_Returns",
+        n_trials=30,
+        direction="maximize",
+    )
+    bayes_opt.run()
+    bayes_opt.plot_best_performance(advanced=True)
+    print(bayes_opt.get_best_params())
