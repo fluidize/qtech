@@ -16,6 +16,7 @@ from plotly.subplots import make_subplots
 
 from rich import print
 import techincal_analysis as ta
+import smc_analysis as smc
 
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cache: bool = True, cache_expiry_hours: int = 24):
     print("[yellow]FETCHING DATA[/yellow]")
@@ -243,18 +244,15 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
 def prepare_data_classifier(data, lagged_length=5, extra_features=False, elapsed_time=False):
     start_time = time.time()
     df = data.copy()
-    
     section_times = {}
-    
     if 'Datetime' in df.columns:
         df.drop(columns=['Datetime'], inplace=True)
-
     indicators = {}
     
     # ===== PRICE ACTION INDICATORS =====
     section_start = time.time()
     # Basic price relationships
-    indicators['Log_Return'] = ta.log_returns(df['Close'])
+    indicators['Log_Return'] = ta.log_return(df['Close'])
     indicators['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     indicators['Close_Open_Range'] = (df['Close'] - df['Open']) / df['Open']
     section_times['Price Action'] = time.time() - section_start
@@ -432,13 +430,15 @@ def prepare_data_classifier(data, lagged_length=5, extra_features=False, elapsed
     section_times['Data Cleaning'] = time.time() - section_start
 
     section_start = time.time()
-    pct_change = df['Close'].pct_change().shift(-1)
-    y = pd.Series(0, index=df.index)
-    y[pct_change > 0] = 1
-    y[pct_change < 0] = 0
-
-    X = df[:-1]
-    y = y[:-1]
+    pivots = smc.pivot_points(data['Open'], data['High'], data['Low'], data['Close'], window=10)
+    y = pd.Series(1, index=df.index)  # Default to hold
+    for idx, row in pivots.iterrows():
+        if row['Type'] == 'Swing_Low' and idx in y.index:
+            y.loc[idx] = 2  # Buy
+        elif row['Type'] == 'Swing_High' and idx in y.index:
+            y.loc[idx] = 0  # Sell
+    X = df
+    y = y.loc[X.index]  # Align y to X
     section_times['Target Creation'] = time.time() - section_start
     
     end_time = time.time()
@@ -621,6 +621,6 @@ def loss_plot(loss_history):
     return fig
 
 if __name__ == "__main__":
-    data = fetch_data("BTC-USDT", 1, "5min", 0, kucoin=True)
+    data = fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
     out_df = prepare_data_reinforcement(data, lagged_length=20)
     bad_data_check(out_df)
