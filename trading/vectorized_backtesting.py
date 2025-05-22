@@ -28,6 +28,12 @@ class VectorizedBacktesting:
     ):
         self.instance_name = instance_name
         self.initial_capital = initial_capital
+
+        self.symbol = None
+        self.chunks = None
+        self.interval = None
+        self.age_days = None
+        self.n_days = None
         self.data: pd.DataFrame = pd.DataFrame()
 
     def fetch_data(self, symbol: str, chunks: int, interval: str, age_days: int, kucoin: bool = True):
@@ -36,6 +42,10 @@ class VectorizedBacktesting:
         self.interval = interval
         self.age_days = age_days
         self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
+
+        oldest = self.data['Datetime'].iloc[0]
+        newest = self.data['Datetime'].iloc[-1]
+        self.n_days = (newest - oldest).days
 
     def run_strategy(self, strategy_func, **kwargs):
         """Run a trading strategy on the data"""
@@ -60,7 +70,7 @@ class VectorizedBacktesting:
 
         return {
             'Total_Return': metrics.get_total_return(self.data['Position'], self.data['Close']),
-            'Alpha': metrics.get_alpha(self.data['Position'], self.data['Close']),
+            'Alpha': metrics.get_alpha(self.data['Position'], self.data['Close'], n_days=self.n_days),
             'Beta': metrics.get_beta(self.data['Position'], self.data['Close']),
             'Active_Returns': metrics.get_active_returns(self.data['Position'], self.data['Close']),
             'Max_Drawdown': metrics.get_max_drawdown(self.data['Position'], self.data['Close'], self.initial_capital),
@@ -456,15 +466,15 @@ class VectorizedBacktesting:
         
         return position
 
-    def custom_scalper_strategy(self, data: pd.DataFrame) -> pd.Series:
+    def custom_scalper_strategy(self, data: pd.DataFrame, fast_period: int = 1, slow_period: int = 5, adx_threshold: int = 25) -> pd.Series:
         position = pd.Series(0, index=data.index)
         
-        fast_ema = ta.ema(data['Close'], 9)
-        slow_ema = ta.ema(data['Close'], 26)
-        macd, signal = ta.macd(data['Close'])
+        fast_ema = ta.ema(data['Close'], fast_period)
+        slow_ema = ta.ema(data['Close'], slow_period)
+        adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'])
         
-        buy_conditions = (fast_ema > slow_ema) & (macd > signal)
-        sell_conditions = (fast_ema < slow_ema) & (macd < signal)
+        buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold)
+        sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold)
         
         position[buy_conditions] = 1
         position[sell_conditions] = 0
@@ -546,6 +556,6 @@ if __name__ == "__main__":
         age_days=0
     )
     
-    backtest.run_strategy(backtest.ema_cross_strategy)
+    backtest.run_strategy(backtest.custom_scalper_strategy, fast_period=4, slow_period=1, adx_threshold=44)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=True)

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple
+import statsmodels.api as sm
 
 def get_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
     """Calculate strategy returns from position and close prices."""
@@ -31,8 +32,8 @@ def get_portfolio_value(position: pd.Series, close_prices: pd.Series, initial_ca
     cumulative_returns = get_cumulative_returns(position, close_prices)
     return initial_capital * cumulative_returns
 
-def get_alpha(position: pd.Series, close_prices: pd.Series, annualize: bool = True) -> float:
-    """Calculate CAPM alpha using average daily returns. Optionally annualize (default: True)."""
+def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int = None, annualize: bool = True):
+    """Calculate Jensen's alpha and beta using regression, annualized and scaled by simulation days."""
     strategy_returns = get_returns(position, close_prices)
     market_returns = close_prices.pct_change()
 
@@ -41,37 +42,26 @@ def get_alpha(position: pd.Series, close_prices: pd.Series, annualize: bool = Tr
     strategy_returns = strategy_returns.loc[common_index]
     market_returns = market_returns.loc[common_index]
 
-    beta = strategy_returns.cov(market_returns) / market_returns.var() if market_returns.var() != 0 else 0
-    avg_strategy_return = strategy_returns.mean()
-    avg_market_return = market_returns.mean()
-    alpha = avg_strategy_return - beta * avg_market_return
-    if annualize:
-        alpha = alpha * 365
+    if len(strategy_returns) < 2 or len(market_returns) < 2:
+        return float('nan'), float('nan')
+
+    X = sm.add_constant(market_returns.values)
+    y = strategy_returns.values
+    model = sm.OLS(y, X).fit()
+    alpha = model.params[0]  # Intercept is Jensen's alpha
+    beta = model.params[1]   # Slope is beta
+    if annualize and n_days > 0:
+        alpha = alpha * (365 / n_days)
+    return alpha, beta
+
+def get_alpha(position: pd.Series, close_prices: pd.Series, n_days: int = None, annualize: bool = True) -> float:
+    """Return annualized Jensen's alpha."""
+    alpha, _ = get_alpha_beta(position, close_prices, annualize=annualize, n_days=n_days)
     return alpha
 
 def get_beta(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate beta from position and close prices."""
-    # Get strategy returns (these are already aligned with position)
-    strategy_returns = get_returns(position, close_prices)
-    
-    # Get market returns (not cumulative, just the daily percentage changes)
-    market_returns = close_prices.pct_change()
-    
-    # Make sure both return series have the same index
-    common_index = strategy_returns.dropna().index.intersection(market_returns.dropna().index)
-    
-    # Align both returns to the common timeframe
-    aligned_strategy_returns = strategy_returns.loc[common_index]
-    aligned_market_returns = market_returns.loc[common_index]
-    
-    # Calculate beta using covariance/variance
-    covariance = aligned_strategy_returns.cov(aligned_market_returns)
-    variance = aligned_market_returns.var()
-    
-    if variance == 0:
-        return 0  # Avoid division by zero
-        
-    beta = covariance / variance
+    """Return beta from regression."""
+    _, beta = get_alpha_beta(position, close_prices, annualize=False)
     return beta
 
 def get_active_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:

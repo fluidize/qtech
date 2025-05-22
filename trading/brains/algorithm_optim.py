@@ -233,7 +233,7 @@ if __name__ == "__main__":
         initial_capital=10000.0,
     )
     vb.fetch_data(
-        symbol="ADA-USDT",
+        symbol="DOGE-USDT",
         chunks=50,
         interval="1min",
         age_days=0,
@@ -241,10 +241,10 @@ if __name__ == "__main__":
 
     bayes_opt = AlgorithmBayesianOptimization(
         engine=vb,
-        strategy_func=vb.ema_cross_strategy,
-        param_space={"fast_period": (1, 30), "slow_period": (1, 30)},
+        strategy_func=vb.custom_scalper_strategy,
+        param_space={"fast_period": (1, 75), "slow_period": (1, 75), "adx_threshold": (1, 100)},
         metric="Active_Returns",
-        n_trials=30,
+        n_trials=500,
         direction="maximize",
     )
     bayes_opt.run()

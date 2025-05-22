@@ -16,7 +16,7 @@ from typing import List, Optional
 import sys
 sys.path.append(r"trading")
 import model_tools as mt
-from brains.gbm.feature_selector import FeatureSelector
+from brains.gbm.feature_selector import AdvancedFeatureSelector
 
 class NormalizationBlock(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=128):
@@ -82,7 +82,7 @@ class ClassifierModel(nn.Module):
             feature_names = X.columns.tolist()
             
             if use_feature_selection:
-                self.feature_selector = FeatureSelector(X_train=X, y_train=y, feature_names=feature_names, 
+                self.feature_selector = AdvancedFeatureSelector(X_train=X, y_train=y, feature_names=feature_names, 
                                                       importance_threshold=importance_threshold, max_features=max_features)
                 self.selected_features = self.feature_selector.get_important_features()
                 X = self.feature_selector.transform(X)
@@ -115,7 +115,7 @@ class ClassifierModel(nn.Module):
         self.res_block2 = ResidualBlock(self.hidden_dim, self.hidden_dim)
         self.fc1 = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.output = nn.Linear(self.hidden_dim, 2)
+        self.output = nn.Linear(self.hidden_dim, 3)
         
         self._init_weights()
 
@@ -502,5 +502,5 @@ def load_model(model_path: str, input_dim=None, verbose: bool = False):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="5min", age_days=0, epochs=50, lagged_length=5, use_feature_selection=True)
+    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="1min", age_days=0, epochs=50, lagged_length=5, use_feature_selection=True, importance_threshold=15, max_features=50)
     model = model.train_model(model, prompt_save=True, show_loss=False)
