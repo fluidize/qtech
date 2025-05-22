@@ -149,13 +149,21 @@ class AlgorithmBayesianOptimization:
 
     def _suggest_params(self, trial):
         params = {}
+        exceptions = [
+            {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold"]},
+                      ] #float exceptions
         for k, v in self.param_space.items():
-            params[k] = trial.suggest_int(k, v[0], v[1])
+            if any(exception["strategy"] == self.strategy_func.__name__ and k in exception["params"] for exception in exceptions):
+                params[k] = trial.suggest_float(k, v[0], v[1])
+            else:
+                params[k] = trial.suggest_int(k, v[0], v[1])
         return params
 
     def run(self):
         def objective(trial):
             param_dict = self._suggest_params(trial)
+            if param_dict["fast_period"] > param_dict["slow_period"]:
+                return float('-inf')
             self.engine.run_strategy(self.strategy_func, **param_dict)
             metrics = self.engine.get_performance_metrics()
             return metrics[self.metric]
@@ -233,7 +241,7 @@ if __name__ == "__main__":
         initial_capital=10000.0,
     )
     vb.fetch_data(
-        symbol="DOGE-USDT",
+        symbol="ADA-USDT",
         chunks=50,
         interval="1min",
         age_days=0,
@@ -242,7 +250,7 @@ if __name__ == "__main__":
     bayes_opt = AlgorithmBayesianOptimization(
         engine=vb,
         strategy_func=vb.custom_scalper_strategy,
-        param_space={"fast_period": (1, 75), "slow_period": (1, 75), "adx_threshold": (1, 100)},
+        param_space={"fast_period": (1, 75), "slow_period": (1, 75), "adx_threshold": (1, 100), "wick_threshold": (0.1, 1.0)},
         metric="Active_Returns",
         n_trials=500,
         direction="maximize",
