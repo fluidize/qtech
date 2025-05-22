@@ -47,16 +47,30 @@ class VectorizedBacktesting:
         newest = self.data['Datetime'].iloc[-1]
         self.n_days = (newest - oldest).days
 
+    def _signals_to_stateful_position(self, signals: pd.Series) -> pd.Series:
+        """Convert raw signals (-1, 0, 1) to a stateful position series (1=long, 0=flat)."""
+        position = pd.Series(0, index=signals.index)
+        current = 0
+        for i, sig in enumerate(signals):
+            if sig == 1:
+                current = 1
+            elif sig == -1:
+                current = 0
+            elif sig == 0:
+                pass  # hold previous
+            position.iloc[i] = current
+        return position
+
     def run_strategy(self, strategy_func, **kwargs):
         """Run a trading strategy on the data"""
         if self.data is None or self.data.empty:
             raise ValueError("No data available. Call fetch_data() first.")
 
-        signals = strategy_func(self.data, **kwargs)
+        raw_signals = strategy_func(self.data, **kwargs)
+        position = self._signals_to_stateful_position(raw_signals)
 
         self.data['Return'] = self.data['Close'].pct_change()
-        self.data['Position'] = signals
-        self.data['Position'] = self.data['Position'].replace(-1, 0)  # Set -1 signals to 0 (close position)
+        self.data['Position'] = position
         self.data['Strategy_Returns'] = self.data['Position'].shift(1) * self.data['Return']
         self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
@@ -376,126 +390,96 @@ class VectorizedBacktesting:
     
     def hodl_strategy(self, data: pd.DataFrame) -> pd.Series:
         """Hodl strategy implementation. Use for debugging/benchmarking."""
+        # Always signal to buy/hold long
         return pd.Series(1, index=data.index)
 
     def perfect_strategy(self, data: pd.DataFrame) -> pd.Series:
         """Perfect strategy implementation. Use for debugging/benchmarking."""
         future_returns = data['Close'].shift(-1) / data['Close'] - 1
-        return (future_returns > 0).astype(int)
+        # 1 for buy/long, -1 for sell/short, 0 for hold
+        signals = pd.Series(0, index=data.index)
+        signals[future_returns > 0] = 1
+        signals[future_returns < 0] = -1
+        return signals
     
     def ema_cross_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26) -> pd.Series:
-        position = pd.Series(0, index=data.index)
+        signals = pd.Series(0, index=data.index)
         ema_fast = ta.ema(data['Close'], fast_period)
         ema_slow = ta.ema(data['Close'], slow_period)
-        position[ema_fast > ema_slow] = 1
-        position[ema_fast < ema_slow] = 0
-        return position
+        signals[ema_fast > ema_slow] = 1
+        signals[ema_fast < ema_slow] = -1
+        return signals
 
     def reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
-        position = pd.Series(0, index=data.index)
+        signals = pd.Series(0, index=data.index)
         sma50 = ta.sma(data['Close'], 50)
         sma100 = ta.sma(data['Close'], 100)
         macd, signal = ta.macd(data['Close'])
-        
         sma_cross = sma50 < sma100
         macd_cross = macd > signal
-        
-        position[sma_cross & macd_cross] = 1
-        position[~sma_cross & ~macd_cross] = 0
-        
-        return position
+        signals[sma_cross & macd_cross] = 1
+        signals[(~sma_cross) & (~macd_cross)] = -1
+        return signals
 
     def rsi_strategy(self, data: pd.DataFrame, oversold: int = 30, overbought: int = 70) -> pd.Series:
-        """RSI strategy implementation.
-        
-        Args:
-            data: DataFrame with price data
-            oversold: RSI threshold for oversold conditions (default: 30)
-            overbought: RSI threshold for overbought conditions (default: 70)
-            
-        Returns:
-            pd.Series: Position series (1 for long, 0 for flat)
-        """
         if oversold >= overbought:
             print(f"Warning: Invalid RSI thresholds - oversold ({oversold}) >= overbought ({overbought})")
             return pd.Series(0, index=data.index)
-        
-        position = pd.Series(0, index=data.index)
+        signals = pd.Series(0, index=data.index)
         rsi = ta.rsi(data['Close'])
-        
-        # Buy when RSI is below oversold threshold
-        buy_conditions = (rsi < oversold)
-        # Sell when RSI is above overbought threshold
-        sell_conditions = (rsi > overbought)
-        
-        position[buy_conditions] = 1
-        position[sell_conditions] = 0
-        
-        return position
+        signals[rsi < oversold] = 1
+        signals[rsi > overbought] = -1
+        return signals
 
     def macd_strategy(self, data: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
-        position = pd.Series(0, index=data.index)
+        signals = pd.Series(0, index=data.index)
         macd, signal = ta.macd(data['Close'], fastperiod=fast_period, slowperiod=slow_period, signalperiod=signal_period)
-        
-        position[macd > signal] = 1
-        position[macd < signal] = 0
-        
-        return position
+        signals[macd > signal] = 1
+        signals[macd < signal] = -1
+        return signals
 
     def supertrend_strategy(self, data: pd.DataFrame) -> pd.Series:
-        position = pd.Series(0, index=data.index)
+        signals = pd.Series(0, index=data.index)
         supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
-
-        position[data['Close'] > supertrend_line] = 1
-        position[data['Close'] < supertrend_line] = 0
-        
-        return position
+        signals[data['Close'] > supertrend_line] = 1
+        signals[data['Close'] < supertrend_line] = -1
+        return signals
     
     def psar_strategy(self, data: pd.DataFrame) -> pd.Series:
-        position = pd.Series(0, index=data.index)
+        signals = pd.Series(0, index=data.index)
         psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
-        
-        position[data['Close'] > psar] = 1
-        position[data['Close'] < psar] = 0
-        
-        return position
+        signals[data['Close'] > psar] = 1
+        signals[data['Close'] < psar] = -1
+        return signals
     
     def smc_strategy(self, data: pd.DataFrame) -> pd.Series:
-        position = pd.Series(0, index=data.index)
-        ...
-        
-        return position
+        signals = pd.Series(0, index=data.index)
+        # ... fill in your SMC logic here, using -1, 0, 1 signals ...
+        return signals
 
-    def custom_scalper_strategy(self, data: pd.DataFrame, fast_period: int = 1, slow_period: int = 5, adx_threshold: int = 25) -> pd.Series:
-        position = pd.Series(0, index=data.index)
-        
+    def custom_scalper_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, wick_threshold: float = 0.5) -> pd.Series:
+        signals = pd.Series(0, index=data.index)
         fast_ema = ta.ema(data['Close'], fast_period)
         slow_ema = ta.ema(data['Close'], slow_period)
         adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'])
-        
-        buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold)
-        sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold)
-        
-        position[buy_conditions] = 1
-        position[sell_conditions] = 0
-        
-        return position
+        upper_wick = data['High'] - np.maximum(data['Open'], data['Close'])
+        lower_wick = np.minimum(data['Open'], data['Close']) - data['Low']
+        body_size = np.abs(data['Close'] - data['Open']) + 1e-9
+        upper_wick_ratio = upper_wick / body_size
+        lower_wick_ratio = lower_wick / body_size
+        is_liquidity_sweep_up = (upper_wick_ratio > lower_wick_ratio) & (upper_wick_ratio > wick_threshold)
+        is_liquidity_sweep_down = (lower_wick_ratio > upper_wick_ratio) & (lower_wick_ratio > wick_threshold)
+        buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_up
+        sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_down
+        signals[buy_conditions] = 1
+        signals[sell_conditions] = -1
+        return signals
 
     def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
-        """
-        Neural network strategy with consistent batching.
-        Always passes input as (batch, 1, features) to the model, so batch size does not affect output.
-        Args:
-            data: DataFrame of OHLCV data
-            batch_size: Batch size for inference (default 64)
-            check_consistency: If True, checks that batch and single inference give the same result for a small window
-        Returns:
-            pd.Series of positions (1 for buy, 0 for hold/sell)
-        """
         from brains.time_series.single_predictors.classifier_model import load_model
         import model_tools as mt
         MODEL_PATH = r"trading\BTC-USDT_1min_5_38features.pth"
-        position = pd.Series(0, index=data.index)
+        signals = pd.Series(0, index=data.index)
         model = load_model(MODEL_PATH)
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.eval()
@@ -509,7 +493,6 @@ class VectorizedBacktesting:
         else:
             features_df = features_df[selected_features]
         X = torch.tensor(features_df.values, dtype=torch.float32).to(model.DEVICE)
-        # Add sequence dimension: (N, 1, F)
         X_seq = X.unsqueeze(1)
         dataset = TensorDataset(X_seq)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -524,12 +507,13 @@ class VectorizedBacktesting:
                 for i, action in enumerate(actions):
                     if action == 2:
                         position_values[idx + i] = 1
+                    elif action == 0:
+                        position_values[idx + i] = -1
                     else:
                         position_values[idx + i] = 0
                 idx += len(actions)
-        position.iloc[len(data)-len(position_values):] = position_values
-        position = position.ffill().fillna(0)
-        # Consistency check: compare batch vs single
+        signals.iloc[len(data)-len(position_values):] = position_values
+        signals = signals.ffill().fillna(0)
         if check_consistency:
             with torch.no_grad():
                 single_preds = []
@@ -540,9 +524,9 @@ class VectorizedBacktesting:
                     act = torch.argmax(prob, dim=2).item()
                     single_preds.append(act)
                 batch_preds = position_values[:len(single_preds)]
-                if not np.all(batch_preds == np.array([1 if a==2 else 0 for a in single_preds])):
+                if not np.all(batch_preds == np.array([1 if a==2 else -1 if a==0 else 0 for a in single_preds])):
                     print("[red]WARNING: Batch and single inference results differ![/red]")
-        return position
+        return signals
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
@@ -550,12 +534,12 @@ if __name__ == "__main__":
     )
     
     backtest.fetch_data(
-        symbol="DOGE-USDT",
+        symbol="ADA-USDT",
         chunks=100,
         interval="1min",
         age_days=0
     )
     
-    backtest.run_strategy(backtest.custom_scalper_strategy, fast_period=4, slow_period=1, adx_threshold=44)
+    backtest.run_strategy(backtest.custom_scalper_strategy, fast_period=9, slow_period=26, adx_threshold=25, wick_threshold=0.5)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=True)
