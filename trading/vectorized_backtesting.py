@@ -205,13 +205,13 @@ class VectorizedBacktesting:
                     f"Equity Curve | TR: {summary['Total_Return']*100:.3f}% | α: {summary['Alpha']*100:.3f}% | β: {summary['Beta']:.3f}", "Drawdown Curve",
                     "Profit and Loss Distribution (%)", "Average Profit per Trade (%)",
                     f"Win Rate | BE: {summary['Breakeven_Rate']*100:.2f}%", f"Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f}",
-                    "Position Size Distribution", "Risk/Reward Distribution"
+                    "Position Distribution", "Cumulative PnL by Trade"
                 ),
                 specs=[
                     [{"type": "scatter"}, {"type": "scatter"}],
                     [{"type": "histogram"}, {"type": "scatter"}],
                     [{"type": "scatter"}, {"type": "scatter"}],
-                    [{"type": "histogram"}, {"type": "histogram"}]
+                    [{"type": "histogram"}, {"type": "scatter"}]
                 ],
                 vertical_spacing=0.1,
                 horizontal_spacing=0.1
@@ -252,113 +252,61 @@ class VectorizedBacktesting:
                 row=1, col=2
             )
 
-            # 3. Profit and Loss Distribution
-            pnl_list = []
-            positions_and_entries = []  # Store (position_type, entry_price)
+            # 3. Profit and Loss Distribution - use metrics function
+            pnl_list = metrics.get_trade_pnls(self.data['Position'], self.data['Close'])
+            pnl_pct_list = [(pnl / self.data['Close'].iloc[0]) * 100 for pnl in pnl_list]  # Convert to percentage
             
-            position_changes = self.data['Position'].diff().values
-            positions = self.data['Position'].values
-            
-            for idx in range(len(self.data)):
-                if abs(position_changes[idx]) > 0 and positions[idx] != 2:  # Entering a position
-                    positions_and_entries.append((positions[idx], self.data['Close'].iloc[idx]))
-                elif abs(position_changes[idx]) > 0 and positions[idx] == 2 and positions_and_entries:  # Exiting to flat
-                    position_type, entry_price = positions_and_entries.pop(0)
-                    exit_price = self.data['Close'].iloc[idx]
-                    if position_type == 3:  # Long position
-                        pnl = (exit_price - entry_price) / entry_price * 100
-                    else:  # Short position (position_type == 1)
-                        pnl = (entry_price - exit_price) / entry_price * 100
-                    pnl_list.append(pnl)
-
             fig.add_trace(
                 go.Histogram(
-                    x=pnl_list,
-                    name='Trade Returns',
-                    nbinsx=250
+                    x=pnl_pct_list,
+                    name='Trade Returns (%)',
+                    nbinsx=50
                 ),
                 row=2, col=1
             )
 
-            # 4. Average Profit per Trade
-            average_profit_series = []
-            cumulative_profit = 0
-            total_trades = 0
-            positions_and_entries = []
-
-            for idx in range(len(self.data)):
-                if abs(position_changes[idx]) > 0 and positions[idx] != 2:  # Entering a position
-                    positions_and_entries.append((positions[idx], self.data['Close'].iloc[idx]))
-                    average_profit_series.append(cumulative_profit / total_trades if total_trades > 0 else 0)
-                elif abs(position_changes[idx]) > 0 and positions[idx] == 2 and positions_and_entries:  # Exiting to flat
-                    position_type, entry_price = positions_and_entries.pop(0)
-                    exit_price = self.data['Close'].iloc[idx]
-                    if position_type == 3:  # Long position
-                        pnl = (exit_price - entry_price) / entry_price * 100
-                    else:  # Short position (position_type == 1)
-                        pnl = (entry_price - exit_price) / entry_price * 100
-                    cumulative_profit += pnl
-                    total_trades += 1
-                    average_profit_series.append(cumulative_profit / total_trades)
-                else:
-                    average_profit_series.append(cumulative_profit / total_trades if total_trades > 0 else 0)
-
-            avg_profit_series = pd.Series(average_profit_series, index=self.data.index)
-
+            # 4. Average Profit per Trade - use strategy returns
+            pnl_arr = np.array(pnl_pct_list)
+            cumulative_pnl = np.cumsum(pnl_arr) if len(pnl_arr) else np.array([0])
+            trade_numbers = np.arange(1, len(pnl_arr) + 1) if len(pnl_arr) else np.array([1])
+            avg_pnl_per_trade = cumulative_pnl / trade_numbers
+            
             fig.add_trace(
                 go.Scatter(
-                    x=self.data.index,
-                    y=avg_profit_series * 100,
+                    x=trade_numbers,
+                    y=avg_pnl_per_trade,
                     mode='lines',
-                    name='Avg Profit per Trade (%)',
+                    name='Avg PnL per Trade (%)',
                 ),
                 row=2, col=2
             )
 
-            mean_profit = np.mean(pnl_list) * 100 if pnl_list else 0
-            fig.add_trace(
-                go.Scatter(
-                    x=[self.data.index[0], self.data.index[-1]],
-                    y=[mean_profit, mean_profit],
-                    mode='lines',
-                    name='Mean Profit',
-                    line=dict(dash='dash', color='red')
-                ),
-                row=2, col=2
-            )
+            if len(pnl_arr):
+                mean_pnl = np.mean(pnl_arr)
+                fig.add_trace(
+                    go.Scatter(
+                        x=[1, len(pnl_arr)],
+                        y=[mean_pnl, mean_pnl],
+                        mode='lines',
+                        name='Mean PnL',
+                        line=dict(dash='dash', color='red')
+                    ),
+                    row=2, col=2
+                )
 
             # 5. Win Rate Over Time
-            win_rates = []
-            total_trades = 0
-            winning_trades = 0
-            positions_and_entries = []
-            
-            for idx in range(len(self.data)):
-                if abs(position_changes[idx]) > 0 and positions[idx] != 2:  # Entering a position
-                    positions_and_entries.append((positions[idx], self.data['Close'].iloc[idx]))
-                elif abs(position_changes[idx]) > 0 and positions[idx] == 2 and positions_and_entries:  # Exiting to flat
-                    position_type, entry_price = positions_and_entries.pop(0)
-                    exit_price = self.data['Close'].iloc[idx]
-                    if position_type == 3:  # Long position
-                        pnl = (exit_price - entry_price) / entry_price * 100
-                    else:  # Short position (position_type == 1)
-                        pnl = (entry_price - exit_price) / entry_price * 100
-                    total_trades += 1
-                    if pnl > 0:
-                        winning_trades += 1
-                    win_rates.append(winning_trades / total_trades if total_trades > 0 else 0)
-                else:
-                    win_rates.append(winning_trades / total_trades if total_trades > 0 else 0)
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data.index,
-                    y=[rate * 100 for rate in win_rates],
-                    mode='lines',
-                    name='Win Rate'
-                ),
-                row=3, col=1
-            )
+            if len(pnl_arr):
+                cumulative_wins = np.cumsum(pnl_arr > 0)
+                win_rates = cumulative_wins / trade_numbers * 100
+                fig.add_trace(
+                    go.Scatter(
+                        x=trade_numbers,
+                        y=win_rates,
+                        mode='lines',
+                        name='Win Rate (%)'
+                    ),
+                    row=3, col=1
+                )
 
             # 6. Sharpe Ratio Over Time
             rolling_returns = self.data['Strategy_Returns'].rolling(window=30)
@@ -374,41 +322,43 @@ class VectorizedBacktesting:
                 row=3, col=2
             )
             
-            mean_sharpe = rolling_sharpe.mean()
-            fig.add_trace(
-                go.Scatter(
-                    x=[self.data.index[0], self.data.index[-1]],
-                    y=[mean_sharpe, mean_sharpe],
-                    mode='lines',
-                    name='Mean Sharpe',
-                    line=dict(dash='dash', color='red')
-                ),
-                row=3, col=2
-            )
+            if not rolling_sharpe.isna().all():
+                mean_sharpe = rolling_sharpe.mean()
+                fig.add_trace(
+                    go.Scatter(
+                        x=[self.data.index[0], self.data.index[-1]],
+                        y=[mean_sharpe, mean_sharpe],
+                        mode='lines',
+                        name='Mean Sharpe',
+                        line=dict(dash='dash', color='red')
+                    ),
+                    row=3, col=2
+                )
 
-            # 7. Position Size Distribution
-            position_sizes = self.data['Position'].abs()
+            # 7. Position Distribution - show actual position states
+            position_counts = self.data['Position'].value_counts().sort_index()
+            position_labels = {0: 'Hold', 1: 'Short', 2: 'Flat', 3: 'Long'}
+            
             fig.add_trace(
                 go.Histogram(
-                    x=position_sizes,
-                    name='Position Sizes',
-                    nbinsx=10
+                    x=[position_labels.get(pos, f'Unknown({pos})') for pos in self.data['Position']],
+                    name='Position States'
                 ),
                 row=4, col=1
             )
 
-            # 8. Risk/Reward Distribution
-            winning_trades = [pnl for pnl in pnl_list if pnl > 0]
-            losing_trades = [pnl for pnl in pnl_list if pnl < 0]
-            risk_reward = np.abs(np.mean(winning_trades) / np.mean(losing_trades)) if losing_trades else 0
-            fig.add_trace(
-                go.Histogram(
-                    x=pnl_list,
-                    name='Risk/Reward',
-                    nbinsx=250
-                ),
-                row=4, col=2
-            )
+            # 8. Cumulative PnL by Trade
+            if pnl_pct_list:
+                fig.add_trace(
+                    go.Scatter(
+                        x=trade_numbers,
+                        y=cumulative_pnl,
+                        mode='lines+markers',
+                        name='Cumulative PnL (%)',
+                        marker=dict(size=4)
+                    ),
+                    row=4, col=2
+                )
 
             end = time.time()
             print(f"[green]Advanced Plotting Done ({end - start:.2f} seconds)[/green]")
@@ -421,14 +371,24 @@ class VectorizedBacktesting:
             )
 
             # Update y-axis labels
-            fig.update_yaxes(title_text="Value", row=1, col=1)
+            fig.update_yaxes(title_text="Portfolio Value", row=1, col=1)
             fig.update_yaxes(title_text="Drawdown (%)", row=1, col=2)
             fig.update_yaxes(title_text="Frequency", row=2, col=1)
-            fig.update_yaxes(title_text="Number of Trades", row=2, col=2)
+            fig.update_yaxes(title_text="Avg PnL per Trade (%)", row=2, col=2)
             fig.update_yaxes(title_text="Win Rate (%)", row=3, col=1)
             fig.update_yaxes(title_text="Sharpe Ratio", row=3, col=2)
             fig.update_yaxes(title_text="Frequency", row=4, col=1)
-            fig.update_yaxes(title_text="Frequency", row=4, col=2)
+            fig.update_yaxes(title_text="Cumulative PnL (%)", row=4, col=2)
+            
+            # Update x-axis labels
+            fig.update_xaxes(title_text="Time", row=1, col=1)
+            fig.update_xaxes(title_text="Time", row=1, col=2)
+            fig.update_xaxes(title_text="PnL (%)", row=2, col=1)
+            fig.update_xaxes(title_text="Trade Number", row=2, col=2)
+            fig.update_xaxes(title_text="Trade Number", row=3, col=1)
+            fig.update_xaxes(title_text="Time", row=3, col=2)
+            fig.update_xaxes(title_text="Position State", row=4, col=1)
+            fig.update_xaxes(title_text="Trade Number", row=4, col=2)
 
         if show_graph:
             fig.show()
@@ -594,7 +554,7 @@ if __name__ == "__main__":
     
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=50,
+        chunks=1,
         interval="1min",
         age_days=0
     )
