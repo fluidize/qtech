@@ -44,25 +44,17 @@ class VectorizedBacktesting:
 
     def _signals_to_stateful_position(self, signals: pd.Series) -> pd.Series:
         """Convert raw signals to a stateful position series (0=hold, 1=short, 2=flat, 3=long)."""
-        position = pd.Series(2, index=signals.index)  # Default to flat
-        for i, sig in enumerate(signals):
-            if sig == 3:
-                position.iloc[i] = 3  # Long position
-            elif sig == 1:
-                position.iloc[i] = 1  # Short position
-            elif sig == 2:
-                position.iloc[i] = 2  # Flat position
-            elif sig == 0:
-                if i > 0:
-                    position.iloc[i] = position.iloc[i-1]
-                else:
-                    position.iloc[i] = 2  # Default to flat if no previous position
+        position = signals.copy()
+        position[signals == 0] = np.nan
+        position = position.ffill().fillna(2).astype(int) #forward fill hold signals, default to flat at start
         return position
 
-    def run_strategy(self, strategy_func, **kwargs):
+    def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
         """Run a trading strategy on the data"""
         if self.data is None or self.data.empty:
             raise ValueError("No data available. Call fetch_data() first.")
+
+        start_time = time.time()
 
         raw_signals = strategy_func(self.data, **kwargs)
         position = self._signals_to_stateful_position(raw_signals)
@@ -79,26 +71,39 @@ class VectorizedBacktesting:
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
         self.data['Drawdown'] = (self.data['Portfolio_Value'] - self.data['Peak']) / self.data['Peak']
+
+        end_time = time.time()
+        if verbose:
+            print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
+
         return self.data
 
     def get_performance_metrics(self):
         if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
+        # Calculate expensive operations once
+        position = self.data['Position']
+        close_prices = self.data['Close']
+        trade_pnls = metrics.get_trade_pnls(position, close_prices)  # Only calculate once
+        
+        # Calculate returns once  
+        returns = metrics.get_returns(position, close_prices)
+
         return {
-            'Total_Return': metrics.get_total_return(self.data['Position'], self.data['Close']),
-            'Alpha': metrics.get_alpha(self.data['Position'], self.data['Close'], n_days=self.n_days),
-            'Beta': metrics.get_beta(self.data['Position'], self.data['Close']),
-            'Active_Returns': metrics.get_active_returns(self.data['Position'], self.data['Close']),
-            'Max_Drawdown': metrics.get_max_drawdown(self.data['Position'], self.data['Close'], self.initial_capital),
-            'Sharpe_Ratio': metrics.get_sharpe_ratio(self.data['Position'], self.data['Close']),
-            'Sortino_Ratio': metrics.get_sortino_ratio(self.data['Position'], self.data['Close']),
-            'Win_Rate': metrics.get_win_rate(self.data['Position'], self.data['Close']),
-            'Breakeven_Rate': metrics.get_breakeven_rate(self.data['Position'], self.data['Close']),
-            'RR_Ratio': metrics.get_rr_ratio(self.data['Position'], self.data['Close']),
-            'PT_Ratio': metrics.get_pt_ratio(self.data['Position'], self.data['Close']),
-            'Profit_Factor': metrics.get_profit_factor(self.data['Position'], self.data['Close']),
-            'Total_Trades': metrics.get_total_trades(self.data['Position'])
+            'Total_Return': metrics.get_total_return(position, close_prices),
+            'Alpha': metrics.get_alpha(position, close_prices, n_days=self.n_days),
+            'Beta': metrics.get_beta(position, close_prices),
+            'Active_Returns': metrics.get_active_returns(position, close_prices),
+            'Max_Drawdown': metrics.get_max_drawdown(position, close_prices, self.initial_capital),
+            'Sharpe_Ratio': metrics.get_sharpe_ratio(position, close_prices),
+            'Sortino_Ratio': metrics.get_sortino_ratio(position, close_prices),
+            'Win_Rate': len([pnl for pnl in trade_pnls if pnl > 0]) / len(trade_pnls) if trade_pnls else 0,
+            'Breakeven_Rate': metrics.get_breakeven_rate_from_pnls(trade_pnls),
+            'RR_Ratio': metrics.get_rr_ratio_from_pnls(trade_pnls),
+            'PT_Ratio': (returns.sum() / len(trade_pnls)) * 100 if trade_pnls else 0,
+            'Profit_Factor': metrics.get_profit_factor(position, close_prices),
+            'Total_Trades': len(trade_pnls)
         }
 
     def plot_performance(self, show_graph: bool = True, advanced: bool = False):
@@ -114,14 +119,14 @@ class VectorizedBacktesting:
             returns = self.data['Return'].values
             asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
 
-            fig.add_trace(go.Scatter(
+            fig.add_trace(go.Scattergl(
                 x=self.data.index,
                 y=portfolio_value,
                 mode='lines',
                 name='Portfolio',
             ))
             
-            fig.add_trace(go.Scatter(
+            fig.add_trace(go.Scattergl(
                 x=self.data.index,
                 y=asset_value,
                 mode='lines',
@@ -360,9 +365,6 @@ class VectorizedBacktesting:
                     row=4, col=2
                 )
 
-            end = time.time()
-            print(f"[green]Advanced Plotting Done ({end - start:.2f} seconds)[/green]")
-
             # Update layout
             fig.update_layout(
                 title_text=f"{self.symbol} {self.interval} Performance Analysis",
@@ -389,6 +391,9 @@ class VectorizedBacktesting:
             fig.update_xaxes(title_text="Time", row=3, col=2)
             fig.update_xaxes(title_text="Position State", row=4, col=1)
             fig.update_xaxes(title_text="Trade Number", row=4, col=2)
+
+            end = time.time()
+            print(f"[green]Advanced Plotting Done ({end - start:.2f} seconds)[/green]")
 
         if show_graph:
             fig.show()
@@ -554,12 +559,13 @@ if __name__ == "__main__":
     
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=1,
+        chunks=100,
         interval="1min",
         age_days=0
     )
     
     # Test flat strategy to debug flat position handling
-    backtest.run_strategy(backtest.perfect_strategy)
+    backtest.run_strategy(backtest.macd_strategy, verbose=True)
+    print("ABc")
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=True)
+    backtest.plot_performance(advanced=False)
