@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from rich import print
-import techincal_analysis as ta
+import technical_analysis as ta
 import smc_analysis as smc
 
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cache: bool = True, cache_expiry_hours: int = 24):
