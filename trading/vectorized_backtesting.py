@@ -15,12 +15,6 @@ import technical_analysis as ta
 import smc_analysis as smc
 import vb_metrics as metrics
 
-import warnings
-# warnings.filterwarnings("ignore")
-# Buy signals: Any positive change in position
-# Sell signals: Any negative change in position
-# If .diff() is 0, then no change in position
-
 class VectorizedBacktesting:
     def __init__(
         self,
@@ -49,17 +43,20 @@ class VectorizedBacktesting:
         self.n_days = (newest - oldest).days
 
     def _signals_to_stateful_position(self, signals: pd.Series) -> pd.Series:
-        """Convert raw signals (-1, 0, 1) to a stateful position series (1=long, 0=flat)."""
-        position = pd.Series(0, index=signals.index)
-        current = 0
+        """Convert raw signals to a stateful position series (0=hold, 1=short, 2=flat, 3=long)."""
+        position = pd.Series(2, index=signals.index)  # Default to flat
         for i, sig in enumerate(signals):
-            if sig == 1:
-                current = 1
-            elif sig == -1:
-                current = 0
+            if sig == 3:
+                position.iloc[i] = 3  # Long position
+            elif sig == 1:
+                position.iloc[i] = 1  # Short position
+            elif sig == 2:
+                position.iloc[i] = 2  # Flat position
             elif sig == 0:
-                pass  # hold previous
-            position.iloc[i] = current
+                if i > 0:
+                    position.iloc[i] = position.iloc[i-1]
+                else:
+                    position.iloc[i] = 2  # Default to flat if no previous position
         return position
 
     def run_strategy(self, strategy_func, **kwargs):
@@ -72,7 +69,12 @@ class VectorizedBacktesting:
 
         self.data['Return'] = self.data['Close'].pct_change()
         self.data['Position'] = position
-        self.data['Strategy_Returns'] = self.data['Position'].shift(1) * self.data['Return']
+        
+        # Temporal alignment: position[t] affects returns from t to t+1
+        # return[t] represents price change from (t-1) to t
+        # So strategy_return[t] = position[t-1] * return[t]
+        # This is correct timing: position taken at t-1 earns return from (t-1) to t
+        self.data['Strategy_Returns'] = metrics.stateful_position_to_multiplier(position).shift(1) * self.data['Return']
         self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
@@ -127,27 +129,59 @@ class VectorizedBacktesting:
             ))
 
             position_changes = np.diff(self.data['Position'].values)
-            buy_signals = self.data.index[np.where(position_changes > 0)[0] + 1]
-            sell_signals = self.data.index[np.where(position_changes < 0)[0] + 1]
+            
+            # Separate different types of position changes
+            long_entries = []
+            short_entries = []
+            flats = []
+            long_entry_values = []
+            short_entry_values = []
+            flat_values = []
+            
+            for i in range(len(position_changes)):
+                if position_changes[i] != 0:  # Any position change
+                    prev_pos = self.data['Position'].iloc[i]
+                    current_pos = self.data['Position'].iloc[i + 1]
+                    
+                    if current_pos == 3 and prev_pos != 3:  # Entering long from any other position
+                        long_entries.append(self.data.index[i + 1])
+                        long_entry_values.append(asset_value[i + 1])
+                    elif current_pos == 1 and prev_pos != 1:  # Entering short from any other position
+                        short_entries.append(self.data.index[i + 1])
+                        short_entry_values.append(asset_value[i + 1])
+                    elif current_pos == 2 and prev_pos != 2:  # Exiting to flat from any position
+                        flats.append(self.data.index[i + 1])
+                        flat_values.append(asset_value[i + 1])
 
-            buy_asset_values = asset_value[np.where(position_changes > 0)[0] + 1]
-            sell_asset_values = asset_value[np.where(position_changes < 0)[0] + 1]
+            # Add long entry signals (green triangles up)
+            if long_entries:
+                fig.add_trace(go.Scatter(
+                    x=long_entries,
+                    y=long_entry_values,
+                    mode='markers',
+                    name='Long Entry',
+                    marker=dict(color='green', size=10, symbol='triangle-up')
+                ))
 
-            fig.add_trace(go.Scatter(
-                x=buy_signals,
-                y=buy_asset_values,
-                mode='markers',
-                name='Buy',
-                marker=dict(color='green', size=10, symbol='triangle-up')
-            ))
+            # Add short entry signals (red triangles down) 
+            if short_entries:
+                fig.add_trace(go.Scatter(
+                    x=short_entries,
+                    y=short_entry_values,
+                    mode='markers',
+                    name='Short Entry',
+                    marker=dict(color='red', size=10, symbol='triangle-down')
+                ))
 
-            fig.add_trace(go.Scatter(
-                x=sell_signals,
-                y=sell_asset_values,
-                mode='markers',
-                name='Sell',
-                marker=dict(color='red', size=10, symbol='triangle-down')
-            ))
+            # Add flat signals (yellow circles)
+            if flats:
+                fig.add_trace(go.Scatter(
+                    x=flats,
+                    y=flat_values,
+                    mode='markers',
+                    name='Exit to Flat',
+                    marker=dict(color='yellow', size=8, symbol='circle')
+                ))
             
             fig.update_layout(
                 title=f'{self.symbol} {self.chunks} days of {self.interval} | {self.age_days}d old | TR: {summary["Total_Return"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | BE: {summary["Breakeven_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
@@ -220,16 +254,21 @@ class VectorizedBacktesting:
 
             # 3. Profit and Loss Distribution
             pnl_list = []
-            entry_prices = []
+            positions_and_entries = []  # Store (position_type, entry_price)
             
             position_changes = self.data['Position'].diff().values
+            positions = self.data['Position'].values
+            
             for idx in range(len(self.data)):
-                if position_changes[idx] == 1:
-                    entry_prices.append(self.data['Close'].iloc[idx])
-                elif position_changes[idx] == -1 and entry_prices:
-                    entry_price = entry_prices.pop(0)
+                if abs(position_changes[idx]) > 0 and positions[idx] != 2:  # Entering a position
+                    positions_and_entries.append((positions[idx], self.data['Close'].iloc[idx]))
+                elif abs(position_changes[idx]) > 0 and positions[idx] == 2 and positions_and_entries:  # Exiting to flat
+                    position_type, entry_price = positions_and_entries.pop(0)
                     exit_price = self.data['Close'].iloc[idx]
-                    pnl = (exit_price - entry_price) / entry_price * 100  # Convert to percentage
+                    if position_type == 3:  # Long position
+                        pnl = (exit_price - entry_price) / entry_price * 100
+                    else:  # Short position (position_type == 1)
+                        pnl = (entry_price - exit_price) / entry_price * 100
                     pnl_list.append(pnl)
 
             fig.add_trace(
@@ -245,16 +284,19 @@ class VectorizedBacktesting:
             average_profit_series = []
             cumulative_profit = 0
             total_trades = 0
-            entry_prices = []
+            positions_and_entries = []
 
             for idx in range(len(self.data)):
-                if position_changes[idx] == 1:
-                    entry_prices.append(self.data['Close'].iloc[idx])
+                if abs(position_changes[idx]) > 0 and positions[idx] != 2:  # Entering a position
+                    positions_and_entries.append((positions[idx], self.data['Close'].iloc[idx]))
                     average_profit_series.append(cumulative_profit / total_trades if total_trades > 0 else 0)
-                elif position_changes[idx] == -1 and entry_prices:
-                    entry_price = entry_prices.pop(0)
+                elif abs(position_changes[idx]) > 0 and positions[idx] == 2 and positions_and_entries:  # Exiting to flat
+                    position_type, entry_price = positions_and_entries.pop(0)
                     exit_price = self.data['Close'].iloc[idx]
-                    pnl = (exit_price - entry_price) / entry_price * 100  # Convert to percentage
+                    if position_type == 3:  # Long position
+                        pnl = (exit_price - entry_price) / entry_price * 100
+                    else:  # Short position (position_type == 1)
+                        pnl = (entry_price - exit_price) / entry_price * 100
                     cumulative_profit += pnl
                     total_trades += 1
                     average_profit_series.append(cumulative_profit / total_trades)
@@ -289,14 +331,18 @@ class VectorizedBacktesting:
             win_rates = []
             total_trades = 0
             winning_trades = 0
+            positions_and_entries = []
             
             for idx in range(len(self.data)):
-                if position_changes[idx] == 1:
-                    entry_prices.append(self.data['Close'].iloc[idx])
-                elif position_changes[idx] == -1 and entry_prices:
-                    entry_price = entry_prices.pop(0)
+                if abs(position_changes[idx]) > 0 and positions[idx] != 2:  # Entering a position
+                    positions_and_entries.append((positions[idx], self.data['Close'].iloc[idx]))
+                elif abs(position_changes[idx]) > 0 and positions[idx] == 2 and positions_and_entries:  # Exiting to flat
+                    position_type, entry_price = positions_and_entries.pop(0)
                     exit_price = self.data['Close'].iloc[idx]
-                    pnl = (exit_price - entry_price) / entry_price * 100  # Convert to percentage
+                    if position_type == 3:  # Long position
+                        pnl = (exit_price - entry_price) / entry_price * 100
+                    else:  # Short position (position_type == 1)
+                        pnl = (entry_price - exit_price) / entry_price * 100
                     total_trades += 1
                     if pnl > 0:
                         winning_trades += 1
@@ -392,74 +438,73 @@ class VectorizedBacktesting:
     def hodl_strategy(self, data: pd.DataFrame) -> pd.Series:
         """Hodl strategy implementation. Use for debugging/benchmarking."""
         # Always signal to buy/hold long
-        return pd.Series(1, index=data.index)
+        return pd.Series(3, index=data.index)
 
     def perfect_strategy(self, data: pd.DataFrame) -> pd.Series:
         """Perfect strategy implementation. Use for debugging/benchmarking."""
         future_returns = data['Close'].shift(-1) / data['Close'] - 1
-        # 1 for buy/long, -1 for sell/short, 0 for hold
-        signals = pd.Series(0, index=data.index)
-        signals[future_returns > 0] = 1
-        signals[future_returns < 0] = -1
+        # 3 for buy/long, 1 for sell/short, 2 for flat
+        signals = pd.Series(2, index=data.index)
+        signals[future_returns > 0] = 3
+        signals[future_returns < 0] = 1
         return signals
     
     def ema_cross_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
+        signals = pd.Series(2, index=data.index)
         ema_fast = ta.ema(data['Close'], fast_period)
         ema_slow = ta.ema(data['Close'], slow_period)
-        signals[ema_fast > ema_slow] = 1
-        signals[ema_fast < ema_slow] = -1
+        signals[ema_fast > ema_slow] = 3
+        signals[ema_fast < ema_slow] = 1
         return signals
 
     def reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
+        signals = pd.Series(2, index=data.index)
         sma50 = ta.sma(data['Close'], 50)
         sma100 = ta.sma(data['Close'], 100)
         macd, signal = ta.macd(data['Close'])
         sma_cross = sma50 < sma100
         macd_cross = macd > signal
-        signals[sma_cross & macd_cross] = 1
-        signals[(~sma_cross) & (~macd_cross)] = -1
+        signals[sma_cross & macd_cross] = 3
+        signals[(~sma_cross) & (~macd_cross)] = 1
         return signals
 
     def rsi_strategy(self, data: pd.DataFrame, oversold: int = 30, overbought: int = 70) -> pd.Series:
         if oversold >= overbought:
             print(f"Warning: Invalid RSI thresholds - oversold ({oversold}) >= overbought ({overbought})")
-            return pd.Series(0, index=data.index)
-        signals = pd.Series(0, index=data.index)
+            return pd.Series(2, index=data.index)
+        signals = pd.Series(2, index=data.index)
         rsi = ta.rsi(data['Close'])
-        signals[rsi < oversold] = 1
-        signals[rsi > overbought] = -1
+        signals[rsi < oversold] = 3
+        signals[rsi > overbought] = 1
         return signals
 
     def macd_strategy(self, data: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
+        signals = pd.Series(2, index=data.index)
         macd, signal = ta.macd(data['Close'], fastperiod=fast_period, slowperiod=slow_period, signalperiod=signal_period)
-        signals[macd > signal] = 1
-        signals[macd < signal] = -1
+        signals[macd > signal] = 3
+        signals[macd < signal] = 1
         return signals
 
     def supertrend_strategy(self, data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
+        signals = pd.Series(2, index=data.index)
         supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
-        signals[data['Close'] > supertrend_line] = 1
-        signals[data['Close'] < supertrend_line] = -1
+        signals[data['Close'] > supertrend_line] = 3
+        signals[data['Close'] < supertrend_line] = 1
         return signals
     
     def psar_strategy(self, data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
+        signals = pd.Series(2, index=data.index)
         psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
-        signals[data['Close'] > psar] = 1
-        signals[data['Close'] < psar] = -1
+        signals[data['Close'] > psar] = 3
+        signals[data['Close'] < psar] = 1
         return signals
     
     def smc_strategy(self, data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
-        # ... fill in your SMC logic here, using -1, 0, 1 signals ...
+        signals = pd.Series(2, index=data.index)
         return signals
 
     def custom_scalper_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
+        signals = pd.Series(2, index=data.index)
         fast_ema = ta.ema(data['Close'], fast_period)
         slow_ema = ta.ema(data['Close'], slow_period)
 
@@ -477,14 +522,14 @@ class VectorizedBacktesting:
         is_liquidity_sweep_down = (lower_wick_ratio > upper_wick_ratio) & (lower_wick_ratio > wick_threshold)
         buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_up | (momentum <= -momentum_threshold)
         sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_down | (momentum >= momentum_threshold)
-        signals[buy_conditions] = 1
-        signals[sell_conditions] = -1
+        signals[buy_conditions] = 3
+        signals[sell_conditions] = 1
         return signals
 
     def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
         from brains.time_series.single_predictors.classifier_model import load_model
         MODEL_PATH = r"trading\BTC-USDT_1min_5_38features.pth"
-        signals = pd.Series(0, index=data.index)
+        signals = pd.Series(2, index=data.index)
         model = load_model(MODEL_PATH)
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.eval()
@@ -510,15 +555,15 @@ class VectorizedBacktesting:
                 probs = F.softmax(outputs, dim=2)  # (batch, 1, classes)
                 actions = torch.argmax(probs, dim=2).cpu().numpy().flatten()  # (batch,)
                 for i, action in enumerate(actions):
-                    if action == 2:
+                    if action == 3:
+                        position_values[idx + i] = 3
+                    elif action == 1:
                         position_values[idx + i] = 1
-                    elif action == 0:
-                        position_values[idx + i] = -1
                     else:
-                        position_values[idx + i] = 0
+                        position_values[idx + i] = 2
                 idx += len(actions)
         signals.iloc[len(data)-len(position_values):] = position_values
-        signals = signals.ffill().fillna(0)
+        signals = signals.ffill().fillna(2)
         if check_consistency:
             with torch.no_grad():
                 single_preds = []
@@ -529,8 +574,17 @@ class VectorizedBacktesting:
                     act = torch.argmax(prob, dim=2).item()
                     single_preds.append(act)
                 batch_preds = position_values[:len(single_preds)]
-                if not np.all(batch_preds == np.array([1 if a==2 else -1 if a==0 else 0 for a in single_preds])):
+                if not np.all(batch_preds == np.array([3 if a==3 else 1 if a==1 else 2 for a in single_preds])):
                     print("[red]WARNING: Batch and single inference results differ![/red]")
+        return signals
+
+    def test_flat_strategy(self, data: pd.DataFrame) -> pd.Series:
+        """Test strategy that alternates between long (1) and flat (0) - no shorts."""
+        signals = pd.Series(2, index=data.index)
+        # Simple alternating pattern for testing
+        for i in range(0, len(signals), 20):  # Long for 20 periods
+            signals.iloc[i:i+10] = 3  # Long for 10 periods
+            signals.iloc[i+10:i+20] = 2  # Flat for 10 periods
         return signals
 
 if __name__ == "__main__":
@@ -545,6 +599,7 @@ if __name__ == "__main__":
         age_days=0
     )
     
-    backtest.run_strategy(backtest.custom_scalper_strategy, fast_period=46, slow_period=66, adx_threshold=69.02778758321986, momentum_period=5, momentum_threshold=0.9854203300638632, wick_threshold=0.14776972524351914)
+    # Test flat strategy to debug flat position handling
+    backtest.run_strategy(backtest.perfect_strategy)
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=False)
+    backtest.plot_performance(advanced=True)

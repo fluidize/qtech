@@ -3,10 +3,27 @@ import pandas as pd
 from typing import Dict, List, Tuple
 import statsmodels.api as sm
 
+def stateful_position_to_multiplier(position: pd.Series) -> pd.Series:
+    """Convert stateful position to multiplier."""
+    position_multiplier = position.copy()
+    position_multiplier[position == 1] = -1  # Short
+    position_multiplier[position == 2] = 0   # Flat
+    position_multiplier[position == 3] = 1   # Long
+
+    # Handle hold positions (0) - use previous position's multiplier
+    for i in range(len(position_multiplier)):
+        if position.iloc[i] == 0 and i > 0:  # Hold
+            position_multiplier.iloc[i] = position_multiplier.iloc[i-1]
+        elif position.iloc[i] == 0 and i == 0:  # First position is hold, default to flat
+            position_multiplier.iloc[i] = 0
+
+    return position_multiplier
+
 def get_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
     """Calculate strategy returns from position and close prices."""
     returns = close_prices.pct_change()
-    return position.shift(1) * returns
+    position_multiplier = stateful_position_to_multiplier(position)
+    return position_multiplier.shift(1) * returns
 
 def get_cumulative_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
     """Calculate cumulative returns from position and close prices."""
@@ -98,16 +115,40 @@ def get_sortino_ratio(position: pd.Series, close_prices: pd.Series, risk_free_ra
 def get_trade_pnls(position: pd.Series, close_prices: pd.Series) -> List[float]:
     """Calculate P&L for each trade from position and close prices."""
     pnl_list = []
-    entry_prices = []
+    positions_and_entries = []  # Store (position_type, entry_price)
     
     position_changes = position.diff()
+    
     for idx in range(len(position)):
-        if position_changes[idx] == 1:
-            entry_prices.append(close_prices.iloc[idx])
-        elif position_changes[idx] == -1 and entry_prices:
-            entry_price = entry_prices.pop(0)
+        if pd.isna(position_changes.iloc[idx]):  # Skip first row (NaN)
+            continue
+            
+        prev_pos = position.iloc[idx - 1]
+        current_pos = position.iloc[idx]
+        
+        # Check if we're entering a new position (from flat or switching positions)
+        if current_pos != 2 and prev_pos != current_pos:
+            # If we had a previous position, close it first
+            if prev_pos != 2 and positions_and_entries:
+                position_type, entry_price = positions_and_entries.pop(0)
+                exit_price = close_prices.iloc[idx]
+                if position_type == 3:  # Long position
+                    pnl = exit_price - entry_price
+                else:  # Short position (position_type == 1)
+                    pnl = entry_price - exit_price
+                pnl_list.append(pnl)
+            
+            # Enter new position
+            positions_and_entries.append((current_pos, close_prices.iloc[idx]))
+            
+        # Check if we're exiting to flat
+        elif current_pos == 2 and prev_pos != 2 and positions_and_entries:
+            position_type, entry_price = positions_and_entries.pop(0)
             exit_price = close_prices.iloc[idx]
-            pnl = exit_price - entry_price
+            if position_type == 3:  # Long position
+                pnl = exit_price - entry_price
+            else:  # Short position (position_type == 1)
+                pnl = entry_price - exit_price
             pnl_list.append(pnl)
     
     return pnl_list
@@ -150,5 +191,7 @@ def get_profit_factor(position: pd.Series, close_prices: pd.Series) -> float:
 
 def get_total_trades(position: pd.Series) -> int:
     """Calculate total number of trades from position."""
-    position_changes = position.diff()
-    return (position_changes != 0).sum() // 2  # Each trade has an entry and exit
+    # Use the trade PnL function and count the trades
+    dummy_prices = pd.Series(range(len(position)), index=position.index)  # Dummy prices for counting
+    pnl_list = get_trade_pnls(position, dummy_prices)
+    return len(pnl_list)
