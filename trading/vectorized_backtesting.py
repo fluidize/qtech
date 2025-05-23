@@ -10,7 +10,7 @@ from tqdm import tqdm
 import torch.nn.functional as F
 
 import model_tools as mt
-import techincal_analysis as ta
+import technical_analysis as ta
 import smc_analysis as smc
 import vb_metrics as metrics
 
@@ -457,20 +457,25 @@ class VectorizedBacktesting:
         # ... fill in your SMC logic here, using -1, 0, 1 signals ...
         return signals
 
-    def custom_scalper_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, wick_threshold: float = 0.5) -> pd.Series:
+    def custom_scalper_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
         signals = pd.Series(0, index=data.index)
         fast_ema = ta.ema(data['Close'], fast_period)
         slow_ema = ta.ema(data['Close'], slow_period)
+
         adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'])
         upper_wick = data['High'] - np.maximum(data['Open'], data['Close'])
         lower_wick = np.minimum(data['Open'], data['Close']) - data['Low']
+
+        momentum = ta.mom(data['Close'], momentum_period)
+        
         body_size = np.abs(data['Close'] - data['Open']) + 1e-9
         upper_wick_ratio = upper_wick / body_size
         lower_wick_ratio = lower_wick / body_size
+
         is_liquidity_sweep_up = (upper_wick_ratio > lower_wick_ratio) & (upper_wick_ratio > wick_threshold)
         is_liquidity_sweep_down = (lower_wick_ratio > upper_wick_ratio) & (lower_wick_ratio > wick_threshold)
-        buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_up
-        sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_down
+        buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_up | (momentum <= -momentum_threshold)
+        sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_down | (momentum >= momentum_threshold)
         signals[buy_conditions] = 1
         signals[sell_conditions] = -1
         return signals
@@ -534,12 +539,12 @@ if __name__ == "__main__":
     )
     
     backtest.fetch_data(
-        symbol="ADA-USDT",
-        chunks=100,
+        symbol="SOL-USDT",
+        chunks=50,
         interval="1min",
         age_days=0
     )
     
-    backtest.run_strategy(backtest.custom_scalper_strategy, fast_period=9, slow_period=26, adx_threshold=25, wick_threshold=0.5)
+    backtest.run_strategy(backtest.custom_scalper_strategy, fast_period=62, slow_period=70, adx_threshold=11.0186072189645, momentum_period=40, momentum_threshold=0.918370960219818, wick_threshold=0.9128567632361257)
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=True)
+    backtest.plot_performance(advanced=False)
