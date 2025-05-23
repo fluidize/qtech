@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import time
+from scipy.stats import percentileofscore
+from scipy import signal
 
 def sma(series, timeperiod=20) -> pd.Series:
     """Simple Moving Average"""
@@ -350,7 +352,6 @@ def percent_rank(series, timeperiod=14) -> pd.Series:
             return np.nan
         return percentileofscore(window, window.iloc[-1]) 
     
-    from scipy.stats import percentileofscore
     return series.rolling(window=timeperiod).apply(percentile_rank, raw=False)
 
 def historical_volatility(close, timeperiod=20, annualization=252) -> pd.Series:
@@ -399,8 +400,6 @@ def donchian_channel(high, low, timeperiod=20) -> tuple[pd.Series, pd.Series, pd
 def price_cycle(close, cycle_period=20) -> pd.Series:
     """Price Cycle Oscillator
     Attempts to isolate the cyclical component of price movements"""
-    from scipy import signal
-    
     # Apply bandpass filter to isolate cyclical component
     # Parameters tuned to the given cycle period
     b, a = signal.butter(2, [0.5/cycle_period, 2.0/cycle_period], 'bandpass')

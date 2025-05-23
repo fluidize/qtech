@@ -2,12 +2,13 @@ import time
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 import plotly.graph_objects as go
 from rich import print
-import sys
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
-import torch.nn.functional as F
+import sys
+import os
 
 import model_tools as mt
 import technical_analysis as ta
@@ -482,7 +483,6 @@ class VectorizedBacktesting:
 
     def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
         from brains.time_series.single_predictors.classifier_model import load_model
-        import model_tools as mt
         MODEL_PATH = r"trading\BTC-USDT_1min_5_38features.pth"
         signals = pd.Series(0, index=data.index)
         model = load_model(MODEL_PATH)

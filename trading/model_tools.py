@@ -163,7 +163,7 @@ def prepare_data(data, lagged_length=5, train_split=True, scale_y=True):
 
     df = data.copy()
 
-    df['Log_Return'] = ta.log_returns(df['Close'])
+    df['Log_Return'] = ta.log_return(df['Close'])
     df['Price_Range'] = (df['High'] - df['Low']) / df['Close']
     
     df['MACD'], df['MACD_Signal'] = ta.macd(df['Close'])
