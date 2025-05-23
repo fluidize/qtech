@@ -1,4 +1,5 @@
 import itertools
+import json
 import pandas as pd
 from typing import Dict, List, Any, Callable
 from rich import print
@@ -147,31 +148,38 @@ class AlgorithmBayesianOptimization:
         self.n_trials = n_trials
         self.direction = direction
 
+        invalid = float('-inf') if self.direction == "maximize" else float('inf')
+
+        def objective(trial):
+            param_dict = self._suggest_params(trial)
+            if param_dict["fast_period"] >= param_dict["slow_period"]:
+                return invalid
+            self.engine.run_strategy(self.strategy_func, **param_dict)
+            metrics = self.engine.get_performance_metrics()
+            return metrics[self.metric]
+        
+        self.objective_function = objective
+
     def _suggest_params(self, trial):
         params = {}
-        exceptions = [
-            {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold"]},
-                      ] #float exceptions
+        float_exceptions = [
+            {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold", "momentum_threshold"]},
+        ] #float exceptions
         for k, v in self.param_space.items():
-            if any(exception["strategy"] == self.strategy_func.__name__ and k in exception["params"] for exception in exceptions):
+            if any(exception["strategy"] == self.strategy_func.__name__ and k in exception["params"] for exception in float_exceptions):
                 params[k] = trial.suggest_float(k, v[0], v[1])
             else:
                 params[k] = trial.suggest_int(k, v[0], v[1])
         return params
 
-    def run(self):
-        def objective(trial):
-            param_dict = self._suggest_params(trial)
-            if param_dict["fast_period"] > param_dict["slow_period"]:
-                return float('-inf')
-            self.engine.run_strategy(self.strategy_func, **param_dict)
-            metrics = self.engine.get_performance_metrics()
-            return metrics[self.metric]
-
+    def run(self, save_params: bool = False):
         study = optuna.create_study(direction=self.direction)
-        study.optimize(objective, n_trials=self.n_trials)
+        study.optimize(self.objective_function, n_trials=self.n_trials)
         self.best_params = study.best_params
         self.best_metrics = study.best_value
+        if save_params:
+            with open(f"{self.strategy_func.__name__}-{self.metric}-{self.n_trials}trials-params.json", "w") as f:
+                json.dump(self.best_params, f)
         return self.best_metrics
 
     def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
@@ -185,7 +193,7 @@ class AlgorithmBayesianOptimization:
         return self.best_metrics
 
 class AlgorithmAssignmentOptimizer:
-    """ Instead of optimizing the algorithm itself, we find the best pair fit for the given algorithm."""
+    """ Instead of optimizing the algorithm itself, find the best pair fit for the given algorithm."""
     def __init__(self, engine: VectorizedBacktesting, pairs: List[str], chunks: int, interval: str, age_days: int, strategy_func: Callable, params: Dict[str, List[Any]], metric: str = "Total Return"):
         self.engine = engine
         self.pairs = pairs
@@ -241,7 +249,7 @@ if __name__ == "__main__":
         initial_capital=10000.0,
     )
     vb.fetch_data(
-        symbol="ADA-USDT",
+        symbol="SOL-USDT",
         chunks=50,
         interval="1min",
         age_days=0,
@@ -250,11 +258,11 @@ if __name__ == "__main__":
     bayes_opt = AlgorithmBayesianOptimization(
         engine=vb,
         strategy_func=vb.custom_scalper_strategy,
-        param_space={"fast_period": (1, 75), "slow_period": (1, 75), "adx_threshold": (1, 100), "wick_threshold": (0.1, 1.0)},
-        metric="Active_Returns",
+        param_space={"fast_period": (1, 75), "slow_period": (1, 75), "adx_threshold": (1, 100), "momentum_period": (1, 100), "momentum_threshold": (0.1, 1.0), "wick_threshold": (0.1, 1.0)},
+        metric="PT_Ratio",
         n_trials=500,
         direction="maximize",
     )
-    bayes_opt.run()
+    bayes_opt.run(save_params=True)
     bayes_opt.plot_best_performance(advanced=True)
     print(bayes_opt.get_best_params())
