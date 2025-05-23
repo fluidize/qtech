@@ -545,6 +545,6 @@ if __name__ == "__main__":
         age_days=0
     )
     
-    backtest.run_strategy(backtest.custom_scalper_strategy, fast_period=62, slow_period=70, adx_threshold=11.0186072189645, momentum_period=40, momentum_threshold=0.918370960219818, wick_threshold=0.9128567632361257)
+    backtest.run_strategy(backtest.custom_scalper_strategy, fast_period=46, slow_period=66, adx_threshold=69.02778758321986, momentum_period=5, momentum_threshold=0.9854203300638632, wick_threshold=0.14776972524351914)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=False)
