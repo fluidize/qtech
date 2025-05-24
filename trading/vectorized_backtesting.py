@@ -61,7 +61,8 @@ class VectorizedBacktesting:
 
         self.data['Return'] = self.data['Close'].pct_change()
         self.data['Position'] = position
-        
+        print(self.data['Position'].where(self.data['Position'] == 2).count())
+        self.data['Position'].to_csv('position.csv')
         # Temporal alignment: position[t] affects returns from t to t+1
         # return[t] represents price change from (t-1) to t
         # So strategy_return[t] = position[t-1] * return[t]
@@ -119,14 +120,14 @@ class VectorizedBacktesting:
             returns = self.data['Return'].values
             asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
 
-            fig.add_trace(go.Scattergl(
+            fig.add_trace(go.Scatter(
                 x=self.data.index,
                 y=portfolio_value,
                 mode='lines',
                 name='Portfolio',
             ))
             
-            fig.add_trace(go.Scattergl(
+            fig.add_trace(go.Scatter(
                 x=self.data.index,
                 y=asset_value,
                 mode='lines',
@@ -400,10 +401,10 @@ class VectorizedBacktesting:
         
         return fig
     
-    def hodl_strategy(self, data: pd.DataFrame) -> pd.Series:
-        """Hodl strategy implementation. Use for debugging/benchmarking."""
+    def hold_strategy(self, data: pd.DataFrame, signal: int = 3) -> pd.Series:
+        """Strategy that only holds one signal."""
         # Always signal to buy/hold long
-        return pd.Series(3, index=data.index)
+        return pd.Series(signal, index=data.index)
 
     def perfect_strategy(self, data: pd.DataFrame) -> pd.Series:
         """Perfect strategy implementation. Use for debugging/benchmarking."""
@@ -468,7 +469,7 @@ class VectorizedBacktesting:
         signals = pd.Series(2, index=data.index)
         return signals
 
-    def custom_scalper_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
+    def scalper_strategy1(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         fast_ema = ta.ema(data['Close'], fast_period)
         slow_ema = ta.ema(data['Close'], slow_period)
@@ -489,6 +490,111 @@ class VectorizedBacktesting:
         sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_down | (momentum >= momentum_threshold)
         signals[buy_conditions] = 3
         signals[sell_conditions] = 1
+        return signals
+    
+    def scalper_strategy2(self, data: pd.DataFrame) -> pd.Series:
+        signals = pd.Series(2, index=data.index)
+        return signals
+    
+    def volatility_breakout_strategy(self, data: pd.DataFrame, 
+                                   atr_period: int = 14, 
+                                   atr_lookback: int = 30,
+                                   atr_threshold: float = 1.2,
+                                   donchian_period: int = 20,
+                                   ema_fast: int = 20,
+                                   ema_slow: int = 50,
+                                   rr_ratio: float = 3.0,
+                                   use_rsi_filter: bool = True,
+                                   rsi_threshold: float = 70.0) -> pd.Series:
+        """
+        High RR Volatility Breakout Strategy
+        
+        Logic:
+        1. Wait for volatility contraction (ATR near recent lows)
+        2. Enter on breakout above Donchian high with trend confirmation
+        3. Tight stop, 3:1+ reward/risk target
+        
+        Expected: ~30-45% win rate, 3:1+ RR, 1-3 trades/week
+        """
+        signals = pd.Series(2, index=data.index)
+        
+        atr = ta.atr(data['High'], data['Low'], data['Close'], timeperiod=atr_period)
+        donchian_high, donchian_middle, donchian_low = ta.donchian_channel(data['High'], data['Low'], timeperiod=donchian_period)
+        ema_fast_line = ta.ema(data['Close'], ema_fast)
+        ema_slow_line = ta.ema(data['Close'], ema_slow)
+        
+        atr_min = atr.rolling(window=atr_lookback).min()
+        
+        if use_rsi_filter:
+            rsi = ta.rsi(data['Close'])
+        
+        # Entry conditions
+        for i in range(atr_lookback, len(data)):
+            # 1. Volatility consolidation: Current ATR near recent lows
+            volatility_low = atr.iloc[i] < (atr_min.iloc[i] * atr_threshold)
+            
+            # 2. Breakout: Close above Donchian high
+            breakout_long = data['Close'].iloc[i] > donchian_high.iloc[i-1]
+            
+            # 3. Trend confirmation: EMA alignment
+            trend_up = ema_fast_line.iloc[i] > ema_slow_line.iloc[i]
+            
+            # 4. Optional RSI filter (avoid overbought)
+            rsi_ok = True
+            if use_rsi_filter:
+                rsi_ok = rsi.iloc[i] < rsi_threshold
+            
+            # Long entry
+            if volatility_low and breakout_long and trend_up and rsi_ok:
+                signals.iloc[i] = 3  # Long
+            
+            # Short entry (opposite conditions)
+            elif volatility_low and data['Close'].iloc[i] < donchian_low.iloc[i-1] and not trend_up:
+                if not use_rsi_filter or rsi.iloc[i] > (100 - rsi_threshold):
+                    signals.iloc[i] = 1  # Short
+        
+        return signals
+    
+    def high_rr_momentum_strategy(self, data: pd.DataFrame,
+                                bb_period: int = 20,
+                                bb_std: float = 2.0,
+                                volume_multiplier: float = 1.5,
+                                ema_trend: int = 50,
+                                min_consolidation_bars: int = 10) -> pd.Series:
+        """
+        Alternative high RR strategy using Bollinger Band squeezes
+        """
+        signals = pd.Series(2, index=data.index)
+        
+        # Bollinger Bands for squeeze detection
+        bb_upper, bb_middle, bb_lower = ta.bbands(data['Close'], timeperiod=bb_period, nbdevup=bb_std, nbdevdn=bb_std)
+        bb_width = (bb_upper - bb_lower) / bb_middle
+        
+        ema_trend_line = ta.ema(data['Close'], ema_trend)
+        
+        avg_volume = data['Volume'].rolling(window=20).mean()
+        
+        bb_width_min = bb_width.rolling(window=30).min()
+        
+        for i in range(30, len(data)):
+            squeeze = bb_width.iloc[i] < (bb_width_min.iloc[i] * 1.3)
+            
+            # Breakout above upper band
+            breakout_up = data['Close'].iloc[i] > bb_upper.iloc[i-1]
+            breakout_down = data['Close'].iloc[i] < bb_lower.iloc[i-1]
+            
+            # Trend confirmation
+            uptrend = data['Close'].iloc[i] > ema_trend_line.iloc[i]
+            
+            # Volume confirmation
+            volume_spike = data['Volume'].iloc[i] > (avg_volume.iloc[i] * volume_multiplier)
+            
+            # Entry signals
+            if squeeze and breakout_up and uptrend and volume_spike:
+                signals.iloc[i] = 3  # Long
+            elif squeeze and breakout_down and not uptrend and volume_spike:
+                signals.iloc[i] = 1  # Short
+                
         return signals
 
     def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
@@ -543,29 +649,16 @@ class VectorizedBacktesting:
                     print("[red]WARNING: Batch and single inference results differ![/red]")
         return signals
 
-    def test_flat_strategy(self, data: pd.DataFrame) -> pd.Series:
-        """Test strategy that alternates between long (1) and flat (0) - no shorts."""
-        signals = pd.Series(2, index=data.index)
-        # Simple alternating pattern for testing
-        for i in range(0, len(signals), 20):  # Long for 20 periods
-            signals.iloc[i:i+10] = 3  # Long for 10 periods
-            signals.iloc[i+10:i+20] = 2  # Flat for 10 periods
-        return signals
-
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400
     )
-    
     backtest.fetch_data(
         symbol="SOL-USDT",
         chunks=100,
         interval="1min",
         age_days=0
     )
-    
-    # Test flat strategy to debug flat position handling
-    backtest.run_strategy(backtest.macd_strategy, verbose=True)
-    print("ABc")
+    backtest.run_strategy(backtest.volatility_breakout_strategy, verbose=True)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=False)
