@@ -182,7 +182,7 @@ class AlgorithmBayesianOptimization:
         return params
 
     def run(self, save_params: bool = False):
-        study = optuna.create_study(direction=self.direction)
+        study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
         study.optimize(self.objective_function, n_trials=self.n_trials, callbacks=[self.save_callback])
         self.best_params = study.best_params
         self.best_metrics = study.best_value
