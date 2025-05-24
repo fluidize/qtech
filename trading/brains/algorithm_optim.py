@@ -150,15 +150,24 @@ class AlgorithmBayesianOptimization:
 
         invalid = float('-inf') if self.direction == "maximize" else float('inf')
 
+        def save_callback(study, trial):
+            if study.best_trial.number == trial.number:
+                self.save_params(trial)
+        self.save_callback = save_callback
+
         def objective(trial):
             param_dict = self._suggest_params(trial)
-            if param_dict["fast_period"] >= param_dict["slow_period"]:
+            if param_dict["ema_fast"] >= param_dict["ema_slow"]:
                 return invalid
             self.engine.run_strategy(self.strategy_func, **param_dict)
             metrics = self.engine.get_performance_metrics()
             return metrics[self.metric]
         
         self.objective_function = objective
+
+    def save_params(self, trial):
+        with open(f"{self.engine.symbol}-{self.engine.interval}-{self.strategy_func.__name__}-{self.metric}-{self.n_trials}trials-params.json", "w") as f:
+            json.dump(trial.params, f)
 
     def _suggest_params(self, trial):
         params = {}
@@ -174,12 +183,11 @@ class AlgorithmBayesianOptimization:
 
     def run(self, save_params: bool = False):
         study = optuna.create_study(direction=self.direction)
-        study.optimize(self.objective_function, n_trials=self.n_trials)
+        study.optimize(self.objective_function, n_trials=self.n_trials, callbacks=[self.save_callback])
         self.best_params = study.best_params
         self.best_metrics = study.best_value
         if save_params:
-            with open(f"{self.engine.symbol}-{self.strategy_func.__name__}-{self.metric}-{self.n_trials}trials-params.json", "w") as f:
-                json.dump(self.best_params, f)
+            self.save_params(study.best_trial)
         return self.best_metrics
 
     def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
@@ -257,10 +265,10 @@ if __name__ == "__main__":
 
     bayes_opt = AlgorithmBayesianOptimization(
         engine=vb,
-        strategy_func=vb.custom_scalper_strategy,
-        param_space={"fast_period": (1, 75), "slow_period": (1, 75), "adx_threshold": (1, 100), "momentum_period": (1, 100), "momentum_threshold": (0.1, 1.0), "wick_threshold": (0.1, 1.0)},
+        strategy_func=vb.volatility_breakout_strategy,
+        param_space={"atr_period": (1, 100), "atr_lookback": (1, 100), "atr_threshold": (0.1, 10.0), "donchian_period": (1, 100), "ema_fast": (1, 100), "ema_slow": (1, 100), "use_rsi_filter": (0, 1), "rsi_threshold": (0.1, 100.0)},
         metric="PT_Ratio",
-        n_trials=500,
+        n_trials=250,
         direction="maximize",
     )
     bayes_opt.run(save_params=True)
