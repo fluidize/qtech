@@ -61,8 +61,6 @@ class VectorizedBacktesting:
 
         self.data['Return'] = self.data['Close'].pct_change()
         self.data['Position'] = position
-        print(self.data['Position'].where(self.data['Position'] == 2).count())
-        self.data['Position'].to_csv('position.csv')
         # Temporal alignment: position[t] affects returns from t to t+1
         # return[t] represents price change from (t-1) to t
         # So strategy_return[t] = position[t-1] * return[t]
@@ -503,8 +501,7 @@ class VectorizedBacktesting:
                                    donchian_period: int = 20,
                                    ema_fast: int = 20,
                                    ema_slow: int = 50,
-                                   rr_ratio: float = 3.0,
-                                   use_rsi_filter: bool = True,
+                                   use_rsi_filter: bool = 1, #0 false, 1 true
                                    rsi_threshold: float = 70.0) -> pd.Series:
         """
         High RR Volatility Breakout Strategy
@@ -525,7 +522,7 @@ class VectorizedBacktesting:
         
         atr_min = atr.rolling(window=atr_lookback).min()
         
-        if use_rsi_filter:
+        if bool(use_rsi_filter):
             rsi = ta.rsi(data['Close'])
         
         # Entry conditions
@@ -579,17 +576,13 @@ class VectorizedBacktesting:
         for i in range(30, len(data)):
             squeeze = bb_width.iloc[i] < (bb_width_min.iloc[i] * 1.3)
             
-            # Breakout above upper band
             breakout_up = data['Close'].iloc[i] > bb_upper.iloc[i-1]
             breakout_down = data['Close'].iloc[i] < bb_lower.iloc[i-1]
             
-            # Trend confirmation
             uptrend = data['Close'].iloc[i] > ema_trend_line.iloc[i]
             
-            # Volume confirmation
             volume_spike = data['Volume'].iloc[i] > (avg_volume.iloc[i] * volume_multiplier)
             
-            # Entry signals
             if squeeze and breakout_up and uptrend and volume_spike:
                 signals.iloc[i] = 3  # Long
             elif squeeze and breakout_down and not uptrend and volume_spike:
