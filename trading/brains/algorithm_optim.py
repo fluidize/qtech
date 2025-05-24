@@ -178,7 +178,7 @@ class AlgorithmBayesianOptimization:
         self.best_params = study.best_params
         self.best_metrics = study.best_value
         if save_params:
-            with open(f"{self.strategy_func.__name__}-{self.metric}-{self.n_trials}trials-params.json", "w") as f:
+            with open(f"{self.engine.symbol}-{self.strategy_func.__name__}-{self.metric}-{self.n_trials}trials-params.json", "w") as f:
                 json.dump(self.best_params, f)
         return self.best_metrics
 
@@ -249,8 +249,8 @@ if __name__ == "__main__":
         initial_capital=10000.0,
     )
     vb.fetch_data(
-        symbol="SOL-USDT",
-        chunks=50,
+        symbol="RENDER-USDT",
+        chunks=100,
         interval="1min",
         age_days=0,
     )
