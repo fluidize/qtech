@@ -31,16 +31,22 @@ class VectorizedBacktesting:
         self.n_days = None
         self.data: pd.DataFrame = pd.DataFrame()
 
-    def fetch_data(self, symbol: str, chunks: int, interval: str, age_days: int, kucoin: bool = True):
+    def fetch_data(self, symbol: str = "None", chunks: int = "None", interval: str = "None", age_days: int = "None", kucoin: bool = True):
         self.symbol = symbol
         self.chunks = chunks
         self.interval = interval
         self.age_days = age_days
-        self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
+        if any([symbol, chunks, interval, age_days]) == "None":
+            pass
+        else:
+            self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
 
         oldest = self.data['Datetime'].iloc[0]
         newest = self.data['Datetime'].iloc[-1]
         self.n_days = (newest - oldest).days
+
+    def load_data(self, data: pd.DataFrame):
+        self.data = data
 
     def _signals_to_stateful_position(self, signals: pd.Series) -> pd.Series:
         """Convert raw signals to a stateful position series (0=hold, 1=short, 2=flat, 3=long)."""
@@ -421,18 +427,21 @@ class VectorizedBacktesting:
         signals[ema_fast < ema_slow] = 1
         return signals
 
-    def reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
+    def zscore_reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
         signals = pd.Series(2, index=data.index)
-        sma50 = ta.sma(data['Close'], 50)
-        sma100 = ta.sma(data['Close'], 100)
-        macd, signal = ta.macd(data['Close'])
-        sma_cross = sma50 < sma100
-        macd_cross = macd > signal
-        signals[sma_cross & macd_cross] = 3
-        signals[(~sma_cross) & (~macd_cross)] = 1
+        zscore = ta.zscore(data['Close'])
+        print(zscore.where(zscore < -1).count())
+        signals[zscore < -1] = 3
+        signals[zscore > 1] = 1
+        return signals
+    def zscore_momentum_strategy(self, data: pd.DataFrame) -> pd.Series:
+        signals = pd.Series(2, index=data.index)
+        zscore = ta.zscore(data['Close'])
+        signals[zscore < -1] = 1
+        signals[zscore > 1] = 3
         return signals
 
-    def rsi_strategy(self, data: pd.DataFrame, oversold: int = 30, overbought: int = 70) -> pd.Series:
+    def rsi_strategy(self, data: pd.DataFrame, oversold: int = 32, overbought: int = 72) -> pd.Series:
         if oversold >= overbought:
             print(f"Warning: Invalid RSI thresholds - oversold ({oversold}) >= overbought ({overbought})")
             return pd.Series(2, index=data.index)
@@ -652,6 +661,7 @@ if __name__ == "__main__":
         interval="1min",
         age_days=0
     )
-    backtest.run_strategy(backtest.volatility_breakout_strategy, verbose=True)
+    
+    backtest.run_strategy(backtest.zscore_momentum_strategy, verbose=True)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=False)

@@ -336,7 +336,7 @@ def hurst_exponent(series, max_lag=20) -> pd.Series:
     # Forward-fill to handle initial NaN values
     return result.ffill()
 
-def z_score(series, timeperiod=20) -> pd.Series:
+def zscore(series, timeperiod=20) -> pd.Series:
     """Z-Score
     Measures how many standard deviations a value is from the mean"""
     mean = series.rolling(window=timeperiod).mean()
