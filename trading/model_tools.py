@@ -21,9 +21,13 @@ import smc_analysis as smc
 def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cache: bool = True, cache_expiry_hours: int = 24):
     print("[yellow]FETCHING DATA[/yellow]")
     
+    # Create a temp directory for market data
+    temp_dir = os.path.join(tempfile.gettempdir(), "market_data")
+    os.makedirs(temp_dir, exist_ok=True)
+    
     cache_key = f"{ticker}_{chunks}_{interval}_{age_days}_{kucoin}"
     cache_hash = hashlib.sha256(cache_key.encode()).hexdigest()
-    cache_file = os.path.join(tempfile.gettempdir(), f"market_data_{cache_hash}.parquet")
+    cache_file = os.path.join(temp_dir, f"market_data_{cache_hash}.parquet")
     
     if use_cache and os.path.exists(cache_file):
         file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
