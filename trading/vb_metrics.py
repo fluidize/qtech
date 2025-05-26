@@ -86,11 +86,18 @@ def get_beta(position: pd.Series, close_prices: pd.Series) -> float:
     _, beta = get_alpha_beta(position, close_prices, annualize=False)
     return beta
 
-def get_active_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
-    """Calculate active returns of strategy compared to benchmark."""
-    returns = get_total_return(position, close_prices)
-    benchmark_returns = get_benchmark_total_return(close_prices)
+def get_active_return(position: pd.Series, close_prices: pd.Series) -> pd.Series:
+    """Calculate the active return of strategy compared to benchmark."""
+    returns = get_returns(position, close_prices)
+    benchmark_returns = get_benchmark_returns(close_prices)
     result = returns - benchmark_returns
+    return result
+
+def get_total_active_return(position: pd.Series, close_prices: pd.Series) -> pd.Series:
+    """Calculate the total active return of strategy compared to benchmark."""
+    return_total = get_total_return(position, close_prices)
+    return_benchmark = get_benchmark_total_return(close_prices)
+    result = return_total - return_benchmark
     return result
 
 def get_drawdown(position: pd.Series, close_prices: pd.Series, initial_capital: float) -> pd.Series:
@@ -229,4 +236,10 @@ def get_breakeven_rate_from_pnls(pnl_list: List[float]) -> float:
     
     rr_ratio = (avg_win / abs(avg_loss)) if avg_loss < 0 else 0
     result = 1 / (rr_ratio + 1) if rr_ratio > 0 else 0
+    return result
+
+def get_information_ratio(position: pd.Series, close_prices: pd.Series) -> float:
+    """Calculate information ratio from position and close prices."""
+    active_returns = get_active_return(position, close_prices)
+    result = active_returns.mean() / active_returns.std()
     return result

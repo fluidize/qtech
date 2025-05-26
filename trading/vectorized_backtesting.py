@@ -40,13 +40,16 @@ class VectorizedBacktesting:
             pass
         else:
             self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
-
-        oldest = self.data['Datetime'].iloc[0]
-        newest = self.data['Datetime'].iloc[-1]
-        self.n_days = (newest - oldest).days
+            self.set_n_days()
 
     def load_data(self, data: pd.DataFrame):
         self.data = data
+        self.set_n_days()
+
+    def set_n_days(self):
+        oldest = self.data['Datetime'].iloc[0]
+        newest = self.data['Datetime'].iloc[-1]
+        self.n_days = (newest - oldest).days
 
     def _signals_to_stateful_position(self, signals: pd.Series) -> pd.Series:
         """Convert raw signals to a stateful position series (0=hold, 1=short, 2=flat, 3=long)."""
@@ -99,10 +102,11 @@ class VectorizedBacktesting:
             'Total_Return': metrics.get_total_return(position, close_prices),
             'Alpha': metrics.get_alpha(position, close_prices, n_days=self.n_days),
             'Beta': metrics.get_beta(position, close_prices),
-            'Active_Returns': metrics.get_active_returns(position, close_prices),
+            'Active_Return': metrics.get_total_active_return(position, close_prices),
             'Max_Drawdown': metrics.get_max_drawdown(position, close_prices, self.initial_capital),
             'Sharpe_Ratio': metrics.get_sharpe_ratio(position, close_prices),
             'Sortino_Ratio': metrics.get_sortino_ratio(position, close_prices),
+            'Information_Ratio': metrics.get_information_ratio(position, close_prices),
             'Win_Rate': len([pnl for pnl in trade_pnls if pnl > 0]) / len(trade_pnls) if trade_pnls else 0,
             'Breakeven_Rate': metrics.get_breakeven_rate_from_pnls(trade_pnls),
             'RR_Ratio': metrics.get_rr_ratio_from_pnls(trade_pnls),
@@ -430,10 +434,10 @@ class VectorizedBacktesting:
     def zscore_reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         zscore = ta.zscore(data['Close'])
-        print(zscore.where(zscore < -1).count())
         signals[zscore < -1] = 3
         signals[zscore > 1] = 1
         return signals
+    
     def zscore_momentum_strategy(self, data: pd.DataFrame) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         zscore = ta.zscore(data['Close'])
