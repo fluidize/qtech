@@ -42,6 +42,8 @@ class VectorizedBacktesting:
             self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
             self.set_n_days()
 
+            return self.data
+
     def load_data(self, data: pd.DataFrame):
         self.data = data
         self.set_n_days()
