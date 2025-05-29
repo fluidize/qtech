@@ -132,11 +132,25 @@ class EntropyAnalyzer:
         return output
         
 
-data = mt.fetch_data('RENDER-USDT',
-                     interval='1min',
-                     chunks=50,
-                     age_days=0,
-                     )
+def scan_and_sort_by_binned_entropy(symbols, interval='5min', chunks=50, age_days=0, column='Close', variable='log_return', bins=100):
+    results = []
+    for symbol in symbols:
+        try:
+            data = mt.fetch_data(symbol,
+                                 interval=interval,
+                                 chunks=chunks,
+                                 age_days=age_days)
+            analyzer = EntropyAnalyzer(data=data, column=column, variable=variable)
+            binned_entropy = analyzer.calculate_entropy(use_bins=True, bins=bins, plot=False, base=2)
+            results.append((symbol, binned_entropy))
+        except Exception as e:
+            print(f"Error processing {symbol}: {e}")
+    # Sort by binned entropy (ascending)
+    results.sort(key=lambda x: x[1])
+    return results
 
-entropy = EntropyAnalyzer(data=data, column='Close', variable='log_return')
-entropy.informational_profile(verbose=True)
+
+symbols = ['BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'GRIFFAIN-USDT', 'RENDER-USDT']
+sorted_entropies = scan_and_sort_by_binned_entropy(symbols)
+for symbol, entropy in sorted_entropies:
+    print(f"{symbol}: {entropy}")
