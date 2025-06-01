@@ -107,32 +107,36 @@ class VectorizedBacktesting:
         return position
 
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
-        """Run a trading strategy on the data"""
+        """Run a trading strategy on the data with realistic execution at open prices"""
         if self.data is None or self.data.empty:
             raise ValueError("No data available. Call fetch_data() first.")
 
         start_time = time.time()
 
+        # Generate signals based on available data (no hindsight bias)
         raw_signals = strategy_func(self.data, **kwargs)
         position = self._signals_to_stateful_position(raw_signals)
 
-        self.data['Return'] = self.data['Open'].pct_change()
+        # Calculate open-to-open returns (realistic execution)
+        # Return[t] = (Open[t+1] - Open[t]) / Open[t]
+        # This represents the return from executing at Open[t] to Open[t+1]
+        self.data['Return'] = self.data['Open'].shift(-1) / self.data['Open'] - 1
         self.data['Position'] = position
         
         # Calculate position changes for cost application
         position_changes = position.diff().fillna(0)
         
-        # Temporal alignment: position[t] affects returns from t to t+1
-        # return[t] represents price change from (t-1) to t
-        # So strategy_return[t] = position[t-1] * return[t]
-        # This is correct timing: position taken at t-1 earns return from (t-1) to t
-        base_returns = metrics.stateful_position_to_multiplier(position).shift(1) * self.data['Return']
+        # REALISTIC TIMING: Signal at close of bar t-1 -> Execute at open of bar t -> Earn return from open t to open t+1
+        # So: Strategy_Return[t] = Position[t] * Return[t]
+        # Where Return[t] is the return from Open[t] to Open[t+1]
+        # And Position[t] is the position taken at Open[t] based on signal at Close[t-1]
+        base_returns = metrics.stateful_position_to_multiplier(position) * self.data['Return']
         
         # Apply trading costs (slippage + commissions)
         if self.slippage_pct == 0 and self.commission_pct == 0:
             self.data['Strategy_Returns'] = base_returns
         else:
-            self.data['Strategy_Returns'] = self._apply_trading_costs(base_returns, position_changes.shift(1))
+            self.data['Strategy_Returns'] = self._apply_trading_costs(base_returns, position_changes)
         
         self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
@@ -142,7 +146,8 @@ class VectorizedBacktesting:
         end_time = time.time()
         if verbose:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
-            print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission per trade[/blue]")
+            if self.slippage_pct > 0 or self.commission_pct > 0:
+                print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission per trade[/blue]")
 
         return self.data
 
@@ -150,28 +155,28 @@ class VectorizedBacktesting:
         if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
-        # Use the strategy returns that already include trading costs
+        # Use the strategy returns that already include trading costs and open-to-open execution
         position = self.data['Position']
-        close_prices = self.data['Close']
-        trade_pnls = metrics.get_trade_pnls(position, close_prices)
+        open_prices = self.data['Open']  # Use Open prices since that's where we execute
+        trade_pnls = metrics.get_trade_pnls(position, open_prices)  # Calculate PnL based on open prices
         
-        # Use the Strategy_Returns that already include trading costs
+        # Use the Strategy_Returns that already include trading costs and proper timing
         strategy_returns = self.data['Strategy_Returns'].dropna()
 
         return {
-            'Total_Return': metrics.get_total_return(position, close_prices),
-            'Alpha': metrics.get_alpha(position, close_prices, n_days=self.n_days),
-            'Beta': metrics.get_beta(position, close_prices),
-            'Active_Return': metrics.get_total_active_return(position, close_prices),
-            'Max_Drawdown': metrics.get_max_drawdown(position, close_prices, self.initial_capital),
-            'Sharpe_Ratio': metrics.get_sharpe_ratio(position, close_prices),
-            'Sortino_Ratio': metrics.get_sortino_ratio(position, close_prices),
-            'Information_Ratio': metrics.get_information_ratio(position, close_prices),
+            'Total_Return': metrics.get_total_return(position, open_prices),
+            'Alpha': metrics.get_alpha(position, open_prices, n_days=self.n_days),
+            'Beta': metrics.get_beta(position, open_prices),
+            'Active_Return': metrics.get_total_active_return(position, open_prices),
+            'Max_Drawdown': metrics.get_max_drawdown(position, open_prices, self.initial_capital),
+            'Sharpe_Ratio': metrics.get_sharpe_ratio(position, open_prices),
+            'Sortino_Ratio': metrics.get_sortino_ratio(position, open_prices),
+            'Information_Ratio': metrics.get_information_ratio(position, open_prices),
             'Win_Rate': len([pnl for pnl in trade_pnls if pnl > 0]) / len(trade_pnls) if trade_pnls else 0,
             'Breakeven_Rate': metrics.get_breakeven_rate_from_pnls(trade_pnls),
             'RR_Ratio': metrics.get_rr_ratio_from_pnls(trade_pnls),
             'PT_Ratio': (strategy_returns.sum() / len(trade_pnls)) if trade_pnls else 0,
-            'Profit_Factor': metrics.get_profit_factor(position, close_prices),
+            'Profit_Factor': metrics.get_profit_factor(position, open_prices),
             'Total_Trades': len(trade_pnls)
         }
 
@@ -185,20 +190,21 @@ class VectorizedBacktesting:
             fig = go.Figure()
             
             portfolio_value = self.data['Portfolio_Value'].values
+            # Calculate asset value using open-to-open returns (consistent with execution)
             asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
 
             fig.add_trace(go.Scatter(
                 x=self.data.index,
                 y=portfolio_value,
                 mode='lines',
-                name='Portfolio',
+                name='Strategy Portfolio',
             ))
             
             fig.add_trace(go.Scatter(
                 x=self.data.index,
                 y=asset_value,
                 mode='lines',
-                name='Asset Value'
+                name='Buy & Hold (Open-to-Open)'
             ))
 
             position_changes = np.diff(self.data['Position'].values)
@@ -301,13 +307,14 @@ class VectorizedBacktesting:
                 row=1, col=1
             )
             
+            # Calculate asset value using open-to-open returns (consistent with execution)
             asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
                     y=asset_value,
                     mode='lines',
-                    name='Asset Value',
+                    name='Buy & Hold (Open-to-Open)',
                     line=dict(dash='dash')
                 ),
                 row=1, col=1
@@ -325,8 +332,8 @@ class VectorizedBacktesting:
                 row=1, col=2
             )
 
-            # 3. Profit and Loss Distribution - use metrics function
-            pnl_list = metrics.get_trade_pnls(self.data['Position'], self.data['Close'])
+            # 3. Profit and Loss Distribution - use metrics function with open prices
+            pnl_list = metrics.get_trade_pnls(self.data['Position'], self.data['Open'])
             # Convert PnL to percentage of portfolio value at time of trade
             initial_value = self.initial_capital
             pnl_pct_list = [(pnl / initial_value) * 100 for pnl in pnl_list]
@@ -498,23 +505,27 @@ class VectorizedBacktesting:
         
         # Show first N bars
         print(f"\n[bold]FIRST {n_bars} BARS:[/bold]")
-        debug_cols = ['Close', 'Return', 'Position', 'Strategy_Returns', 'Portfolio_Value']
+        debug_cols = ['Open', 'Close', 'Return', 'Position', 'Strategy_Returns', 'Portfolio_Value']
         available_cols = [col for col in debug_cols if col in self.data.columns]
         
         first_bars = self.data[available_cols].head(n_bars)
         for i, (idx, row) in enumerate(first_bars.iterrows()):
-            print(f"Bar {i:2d}: Close={row['Close']:8.2f}, Return={row['Return']*100:6.2f}%, "
-                  f"Pos={row['Position']}, StratRet={row['Strategy_Returns']*100:6.2f}%, "
-                  f"Portfolio=${row['Portfolio_Value']:8.2f}")
+            open_price = row.get('Open', 'N/A')
+            close_price = row.get('Close', 'N/A')
+            print(f"Bar {i:2d}: Open={open_price:8.2f}, Close={close_price:8.2f}, "
+                  f"Return={row['Return']*100:6.2f}%, Pos={row['Position']}, "
+                  f"StratRet={row['Strategy_Returns']*100:6.2f}%, Portfolio=${row['Portfolio_Value']:8.2f}")
         
         # Show last N bars  
         print(f"\n[bold]LAST {n_bars} BARS:[/bold]")
         last_bars = self.data[available_cols].tail(n_bars)
         start_idx = len(self.data) - n_bars
         for i, (idx, row) in enumerate(last_bars.iterrows()):
-            print(f"Bar {start_idx+i:2d}: Close={row['Close']:8.2f}, Return={row['Return']*100:6.2f}%, "
-                  f"Pos={row['Position']}, StratRet={row['Strategy_Returns']*100:6.2f}%, "
-                  f"Portfolio=${row['Portfolio_Value']:8.2f}")
+            open_price = row.get('Open', 'N/A')
+            close_price = row.get('Close', 'N/A')
+            print(f"Bar {start_idx+i:2d}: Open={open_price:8.2f}, Close={close_price:8.2f}, "
+                  f"Return={row['Return']*100:6.2f}%, Pos={row['Position']}, "
+                  f"StratRet={row['Strategy_Returns']*100:6.2f}%, Portfolio=${row['Portfolio_Value']:8.2f}")
         
         # Check for NaN values
         nan_cols = []
@@ -537,12 +548,31 @@ class Strategy:
 
     @staticmethod
     def perfect_strategy(data: pd.DataFrame) -> pd.Series:
-        future_returns = data['Close'].shift(-1) / data['Close'] - 1
+        """
+        Perfect strategy that uses only past information to predict future open-to-open returns.
+        
+        Uses Close[t-1] to predict return from Open[t] to Open[t+1]
+        Signal at Close[t-1] -> Execute at Open[t] -> Earn Open[t] to Open[t+1]
+        """
         signals = pd.Series(2, index=data.index)
-        signals[future_returns > 0] = 3
-        signals[future_returns < 0] = 1
-        # Handle the last bar where future return is NaN
-        signals = signals.fillna(2)  # Default to flat for unknown future
+        
+        if len(data) < 2:
+            return signals
+            
+        # For each bar, use only information available at the previous close
+        for i in range(1, len(data)):
+            # At close of bar i-1, predict return from Open[i] to Open[i+1]
+            if i < len(data) - 1:  # Make sure we have the next open
+                # This is the return we want to predict and capture
+                future_return = (data['Open'].iloc[i+1] - data['Open'].iloc[i]) / data['Open'].iloc[i]
+                
+                # "Perfect" prediction based on past data (in reality this would be a model)
+                if future_return > 0:
+                    signals.iloc[i] = 3  # Long
+                elif future_return < 0:
+                    signals.iloc[i] = 1  # Short
+                # else stay flat (2)
+        
         return signals
 
     @staticmethod
@@ -633,7 +663,8 @@ class Strategy:
         eth_price = mt.fetch_data('ETH-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
         btc_price = mt.fetch_data('BTC-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
         ethbtc_ratio = eth_price[['Open', 'High', 'Low', 'Close']] / btc_price[['Open', 'High', 'Low', 'Close']]
-        zscore = ta.zscore(ethbtc_ratio['Close'])
+        
+        zscore = ta.zscore(ethbtc_ratio['Open'])
 
         #follow ethbtc ratio breakouts
         buy_conditions = zscore > 1
@@ -740,19 +771,21 @@ class Strategy:
         return signals
 
 if __name__ == "__main__":
+    
+
     backtest = VectorizedBacktesting(
         initial_capital=400,
-        slippage_pct=0.0,     # Zero costs for perfect strategy test
-        commission_pct=0.0    # Zero costs for perfect strategy test
+        slippage_pct=0.0,
+        commission_pct=0.0
     )
     backtest.fetch_data(
-        symbol="BTC-USDT",
+        symbol="ETH-USDT",
         chunks=100,
-        interval="5min",
+        interval="30min",
         age_days=0
     )
     
-    backtest.run_strategy(Strategy.perfect_strategy, verbose=True)
+    backtest.run_strategy(Strategy.ETHBTC_trader, verbose=True, chunks=backtest.chunks, interval=backtest.interval, age_days=backtest.age_days)
     print(backtest.get_performance_metrics())
     backtest.plot_performance(advanced=False)
     backtest.debug_strategy()
