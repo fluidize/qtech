@@ -38,15 +38,14 @@ def get_total_return(position: pd.Series, close_prices: pd.Series) -> float:
     return result
 
 def get_benchmark_returns(close_prices: pd.Series) -> pd.Series:
-    """Calculate benchmark returns. (if you just held the asset)"""
-    result = (1 + close_prices.pct_change()).cumprod()
-    return result
+    """Calculate benchmark returns per period (if you just held the asset)."""
+    return close_prices.pct_change()
 
 def get_benchmark_total_return(close_prices: pd.Series) -> float:
-    """Calculate total return of benchmark."""
-    benchmark_returns = get_benchmark_returns(close_prices)
-    result = benchmark_returns.iloc[-1] - 1
-    return result
+    returns = get_benchmark_returns(close_prices).dropna()
+    cum_return = (1 + returns).prod() - 1
+    return cum_return
+
 
 def get_portfolio_value(position: pd.Series, close_prices: pd.Series, initial_capital: float) -> pd.Series:
     """Calculate portfolio value from position, close prices, and initial capital."""
@@ -87,11 +86,10 @@ def get_beta(position: pd.Series, close_prices: pd.Series) -> float:
     return beta
 
 def get_active_return(position: pd.Series, close_prices: pd.Series) -> pd.Series:
-    """Calculate the active return of strategy compared to benchmark."""
+    """Calculate the active return of strategy compared to benchmark (per period)."""
     returns = get_returns(position, close_prices)
     benchmark_returns = get_benchmark_returns(close_prices)
-    result = returns - benchmark_returns
-    return result
+    return returns - benchmark_returns
 
 def get_total_active_return(position: pd.Series, close_prices: pd.Series) -> pd.Series:
     """Calculate the total active return of strategy compared to benchmark."""
@@ -113,20 +111,21 @@ def get_max_drawdown(position: pd.Series, close_prices: pd.Series, initial_capit
     result = drawdown.min()
     return result
 
-def get_sharpe_ratio(position: pd.Series, close_prices: pd.Series, risk_free_rate: float = 0.00, trading_days: int = 365) -> float:
-    """Calculate Sharpe ratio from position, close prices, risk-free rate, and trading days."""
+def get_sharpe_ratio(position: pd.Series, close_prices: pd.Series, risk_free_rate: float = 0.00) -> float:
+    """Calculate per-period Sharpe ratio from position, close prices, and risk-free rate."""
     returns = get_returns(position, close_prices)
-    daily_rf = (1 + risk_free_rate) ** (1/trading_days) - 1
-    excess_returns = returns - daily_rf
-    result = np.sqrt(trading_days) * excess_returns.mean() / excess_returns.std()
+    excess_returns = returns - risk_free_rate
+    result = excess_returns.mean() / excess_returns.std(ddof=1)
     return result
 
-def get_sortino_ratio(position: pd.Series, close_prices: pd.Series, risk_free_rate: float = 0.00, trading_days: int = 365) -> float:
-    """Calculate Sortino ratio from position, close prices, risk-free rate, and trading days."""
+def get_sortino_ratio(position: pd.Series, close_prices: pd.Series, risk_free_rate: float = 0.00) -> float:
+    """Calculate per-period Sortino ratio from position, close prices, and risk-free rate."""
     returns = get_returns(position, close_prices)
-    daily_rf = (1 + risk_free_rate) ** (1/trading_days) - 1
-    downside_returns = returns[returns < 0]
-    result = np.sqrt(trading_days) * (returns.mean() - daily_rf) / downside_returns.std()
+    excess_returns = returns - risk_free_rate
+    downside_returns = excess_returns[excess_returns < 0]
+    if downside_returns.std(ddof=1) == 0:
+        return float('nan')
+    result = excess_returns.mean() / downside_returns.std(ddof=1)
     return result
 
 def get_trade_pnls(position: pd.Series, close_prices: pd.Series) -> List[float]:
@@ -239,7 +238,10 @@ def get_breakeven_rate_from_pnls(pnl_list: List[float]) -> float:
     return result
 
 def get_information_ratio(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate information ratio from position and close prices."""
-    active_returns = get_active_return(position, close_prices)
-    result = active_returns.mean() / active_returns.std()
-    return result
+    """Calculate information ratio from position and close prices (per-period, not annualized)."""
+    active_returns = get_active_return(position, close_prices).dropna()
+    mean_active_return = active_returns.mean()
+    tracking_error = active_returns.std(ddof=1)
+    if tracking_error == 0:
+        return float('nan')
+    return mean_active_return / tracking_error
