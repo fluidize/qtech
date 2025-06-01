@@ -20,9 +20,13 @@ class VectorizedBacktesting:
         self,
         instance_name: str = "default",
         initial_capital: float = 10000.0,
+        slippage_pct: float = 0.001,  # 0.1% slippage per trade
+        commission_pct: float = 0.001,  # 0.1% commission per trade
     ):
         self.instance_name = instance_name
         self.initial_capital = initial_capital
+        self.slippage_pct = slippage_pct
+        self.commission_pct = commission_pct
 
         self.symbol = None
         self.chunks = None
@@ -40,13 +44,55 @@ class VectorizedBacktesting:
             pass
         else:
             self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
+            self._validate_data_quality()
             self.set_n_days()
 
             return self.data
 
     def load_data(self, data: pd.DataFrame):
         self.data = data
+        self._validate_data_quality()
         self.set_n_days()
+
+    def _validate_data_quality(self):
+        """Validate data quality and handle common issues."""
+        if self.data.empty:
+            raise ValueError("Data is empty")
+        
+        # Check for missing data
+        missing_data = self.data.isnull().sum()
+        if missing_data.any():
+            print(f"[yellow]Warning: Missing data found: {missing_data[missing_data > 0].to_dict()}[/yellow]")
+            
+        # Check for duplicates
+        duplicates = self.data.duplicated().sum()
+        if duplicates > 0:
+            print(f"[yellow]Warning: {duplicates} duplicate rows found and removed[/yellow]")
+            self.data = self.data.drop_duplicates()
+            
+        # Check for data gaps (if datetime index)
+        if 'Datetime' in self.data.columns:
+            time_diff = self.data['Datetime'].diff()
+            expected_interval = time_diff.mode()[0] if not time_diff.mode().empty else None
+            if expected_interval:
+                large_gaps = time_diff > expected_interval * 2
+                if large_gaps.any():
+                    print(f"[yellow]Warning: {large_gaps.sum()} large time gaps detected[/yellow]")
+
+    def _apply_trading_costs(self, returns: pd.Series, position_changes: pd.Series) -> pd.Series:
+        """Apply slippage and commissions to returns."""
+        if self.slippage_pct == 0 and self.commission_pct == 0:
+            return returns
+            
+        costs = pd.Series(0.0, index=returns.index)
+        trade_mask = position_changes != 0
+        
+        # Apply costs only when position changes (trades occur)
+        costs[trade_mask] = self.slippage_pct + self.commission_pct
+        
+        # Subtract costs from returns
+        adjusted_returns = returns - costs
+        return adjusted_returns
 
     def set_n_days(self):
         oldest = self.data['Datetime'].iloc[0]
@@ -70,13 +116,24 @@ class VectorizedBacktesting:
         raw_signals = strategy_func(self.data, **kwargs)
         position = self._signals_to_stateful_position(raw_signals)
 
-        self.data['Return'] = self.data['Close'].pct_change()
+        self.data['Return'] = self.data['Open'].pct_change()
         self.data['Position'] = position
+        
+        # Calculate position changes for cost application
+        position_changes = position.diff().fillna(0)
+        
         # Temporal alignment: position[t] affects returns from t to t+1
         # return[t] represents price change from (t-1) to t
         # So strategy_return[t] = position[t-1] * return[t]
         # This is correct timing: position taken at t-1 earns return from (t-1) to t
-        self.data['Strategy_Returns'] = metrics.stateful_position_to_multiplier(position).shift(1) * self.data['Return']
+        base_returns = metrics.stateful_position_to_multiplier(position).shift(1) * self.data['Return']
+        
+        # Apply trading costs (slippage + commissions)
+        if self.slippage_pct == 0 and self.commission_pct == 0:
+            self.data['Strategy_Returns'] = base_returns
+        else:
+            self.data['Strategy_Returns'] = self._apply_trading_costs(base_returns, position_changes.shift(1))
+        
         self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
         self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
@@ -85,6 +142,7 @@ class VectorizedBacktesting:
         end_time = time.time()
         if verbose:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
+            print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission per trade[/blue]")
 
         return self.data
 
@@ -92,13 +150,13 @@ class VectorizedBacktesting:
         if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
-        # Calculate expensive operations once
+        # Use the strategy returns that already include trading costs
         position = self.data['Position']
         close_prices = self.data['Close']
-        trade_pnls = metrics.get_trade_pnls(position, close_prices)  # Only calculate once
+        trade_pnls = metrics.get_trade_pnls(position, close_prices)
         
-        # Calculate returns once  
-        returns = metrics.get_returns(position, close_prices)
+        # Use the Strategy_Returns that already include trading costs
+        strategy_returns = self.data['Strategy_Returns'].dropna()
 
         return {
             'Total_Return': metrics.get_total_return(position, close_prices),
@@ -112,7 +170,7 @@ class VectorizedBacktesting:
             'Win_Rate': len([pnl for pnl in trade_pnls if pnl > 0]) / len(trade_pnls) if trade_pnls else 0,
             'Breakeven_Rate': metrics.get_breakeven_rate_from_pnls(trade_pnls),
             'RR_Ratio': metrics.get_rr_ratio_from_pnls(trade_pnls),
-            'PT_Ratio': (returns.sum() / len(trade_pnls)) * 100 if trade_pnls else 0,
+            'PT_Ratio': (strategy_returns.sum() / len(trade_pnls)) if trade_pnls else 0,
             'Profit_Factor': metrics.get_profit_factor(position, close_prices),
             'Total_Trades': len(trade_pnls)
         }
@@ -127,7 +185,6 @@ class VectorizedBacktesting:
             fig = go.Figure()
             
             portfolio_value = self.data['Portfolio_Value'].values
-            returns = self.data['Return'].values
             asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
 
             fig.add_trace(go.Scatter(
@@ -270,7 +327,9 @@ class VectorizedBacktesting:
 
             # 3. Profit and Loss Distribution - use metrics function
             pnl_list = metrics.get_trade_pnls(self.data['Position'], self.data['Close'])
-            pnl_pct_list = [(pnl / self.data['Close'].iloc[0]) * 100 for pnl in pnl_list]  # Convert to percentage
+            # Convert PnL to percentage of portfolio value at time of trade
+            initial_value = self.initial_capital
+            pnl_pct_list = [(pnl / initial_value) * 100 for pnl in pnl_list]
             
             fig.add_trace(
                 go.Histogram(
@@ -282,7 +341,7 @@ class VectorizedBacktesting:
             )
 
             # 4. Average Profit per Trade - use strategy returns
-            pnl_arr = np.array(pnl_pct_list)*100
+            pnl_arr = np.array(pnl_pct_list)  # Already in percentage
             cumulative_pnl = np.cumsum(pnl_arr) if len(pnl_arr) else np.array([0])
             trade_numbers = np.arange(1, len(pnl_arr) + 1) if len(pnl_arr) else np.array([1])
             avg_pnl_per_trade = cumulative_pnl / trade_numbers
@@ -324,16 +383,16 @@ class VectorizedBacktesting:
                     row=3, col=1
                 )
 
-            # 6. Sharpe Ratio Over Time
+            # 6. Sharpe Ratio Over Time (per-period, not annualized)
             rolling_returns = self.data['Strategy_Returns'].rolling(window=30)
-            rolling_sharpe = np.sqrt(365) * rolling_returns.mean() / rolling_returns.std()
+            rolling_sharpe = rolling_returns.mean() / rolling_returns.std()
             
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
                     y=rolling_sharpe,
                     mode='lines',
-                    name='Rolling Sharpe'
+                    name='Rolling Sharpe (Per-Period)'
                 ),
                 row=3, col=2
             )
@@ -410,6 +469,67 @@ class VectorizedBacktesting:
             fig.show()
         
         return fig
+
+    def debug_strategy(self, n_bars: int = 10):
+        """Print debugging information about the strategy execution."""
+        if self.data is None or 'Position' not in self.data.columns:
+            raise ValueError("No strategy results available. Run a strategy first.")
+            
+        print(f"\n[bold blue]STRATEGY DEBUG INFORMATION[/bold blue]")
+        print(f"Data shape: {self.data.shape}")
+        print(f"Trading costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission")
+        
+        # Position distribution
+        pos_counts = self.data['Position'].value_counts().sort_index()
+        print(f"\nPosition distribution:")
+        pos_labels = {0: 'Hold', 1: 'Short', 2: 'Flat', 3: 'Long'}
+        for pos, count in pos_counts.items():
+            print(f"  {pos_labels.get(pos, f'Unknown({pos})')}: {count} bars ({count/len(self.data)*100:.1f}%)")
+        
+        # Strategy performance summary
+        total_return = (self.data['Portfolio_Value'].iloc[-1] / self.initial_capital - 1) * 100
+        max_dd = self.data['Drawdown'].min() * 100
+        n_trades = len([1 for i in range(1, len(self.data)) if self.data['Position'].iloc[i] != self.data['Position'].iloc[i-1]])
+        
+        print(f"\nPerformance Summary:")
+        print(f"  Total Return: {total_return:.2f}%")
+        print(f"  Max Drawdown: {max_dd:.2f}%")
+        print(f"  Number of Position Changes: {n_trades}")
+        
+        # Show first N bars
+        print(f"\n[bold]FIRST {n_bars} BARS:[/bold]")
+        debug_cols = ['Close', 'Return', 'Position', 'Strategy_Returns', 'Portfolio_Value']
+        available_cols = [col for col in debug_cols if col in self.data.columns]
+        
+        first_bars = self.data[available_cols].head(n_bars)
+        for i, (idx, row) in enumerate(first_bars.iterrows()):
+            print(f"Bar {i:2d}: Close={row['Close']:8.2f}, Return={row['Return']*100:6.2f}%, "
+                  f"Pos={row['Position']}, StratRet={row['Strategy_Returns']*100:6.2f}%, "
+                  f"Portfolio=${row['Portfolio_Value']:8.2f}")
+        
+        # Show last N bars  
+        print(f"\n[bold]LAST {n_bars} BARS:[/bold]")
+        last_bars = self.data[available_cols].tail(n_bars)
+        start_idx = len(self.data) - n_bars
+        for i, (idx, row) in enumerate(last_bars.iterrows()):
+            print(f"Bar {start_idx+i:2d}: Close={row['Close']:8.2f}, Return={row['Return']*100:6.2f}%, "
+                  f"Pos={row['Position']}, StratRet={row['Strategy_Returns']*100:6.2f}%, "
+                  f"Portfolio=${row['Portfolio_Value']:8.2f}")
+        
+        # Check for NaN values
+        nan_cols = []
+        for col in self.data.columns:
+            if self.data[col].isna().any():
+                nan_count = self.data[col].isna().sum()
+                nan_cols.append(f"{col}: {nan_count}")
+        
+        if nan_cols:
+            print(f"\n[yellow]NaN values found:[/yellow]")
+            for col_info in nan_cols:
+                print(f"  {col_info}")
+        else:
+            print(f"\n[green]No NaN values found[/green]")
+
 class Strategy:
     @staticmethod
     def hold_strategy(data: pd.DataFrame, signal: int = 3) -> pd.Series:
@@ -421,6 +541,8 @@ class Strategy:
         signals = pd.Series(2, index=data.index)
         signals[future_returns > 0] = 3
         signals[future_returns < 0] = 1
+        # Handle the last bar where future return is NaN
+        signals = signals.fillna(2)  # Default to flat for unknown future
         return signals
 
     @staticmethod
@@ -507,11 +629,13 @@ class Strategy:
 
     @staticmethod
     def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
+        signals = pd.Series(2, index=data.index)
         eth_price = mt.fetch_data('ETH-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
         btc_price = mt.fetch_data('BTC-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
         ethbtc_ratio = eth_price[['Open', 'High', 'Low', 'Close']] / btc_price[['Open', 'High', 'Low', 'Close']]
         zscore = ta.zscore(ethbtc_ratio['Close'])
+
+        #follow ethbtc ratio breakouts
         buy_conditions = zscore > 1
         sell_conditions = zscore < -1
         signals[buy_conditions] = 3
@@ -617,14 +741,18 @@ class Strategy:
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
-        initial_capital=400
+        initial_capital=400,
+        slippage_pct=0.0,     # Zero costs for perfect strategy test
+        commission_pct=0.0    # Zero costs for perfect strategy test
     )
     backtest.fetch_data(
         symbol="BTC-USDT",
-        chunks=365,
+        chunks=100,
         interval="5min",
         age_days=0
     )
-    backtest.run_strategy(Strategy.ETHBTC_trader, verbose=True)
+    
+    backtest.run_strategy(Strategy.perfect_strategy, verbose=True)
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=True)
+    backtest.plot_performance(advanced=False)
+    backtest.debug_strategy()
