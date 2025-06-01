@@ -282,7 +282,7 @@ class VectorizedBacktesting:
             )
 
             # 4. Average Profit per Trade - use strategy returns
-            pnl_arr = np.array(pnl_pct_list)
+            pnl_arr = np.array(pnl_pct_list)*100
             cumulative_pnl = np.cumsum(pnl_arr) if len(pnl_arr) else np.array([0])
             trade_numbers = np.arange(1, len(pnl_arr) + 1) if len(pnl_arr) else np.array([1])
             avg_pnl_per_trade = cumulative_pnl / trade_numbers
@@ -410,22 +410,21 @@ class VectorizedBacktesting:
             fig.show()
         
         return fig
-    
-    def hold_strategy(self, data: pd.DataFrame, signal: int = 3) -> pd.Series:
-        """Strategy that only holds one signal."""
-        # Always signal to buy/hold long
+class Strategy:
+    @staticmethod
+    def hold_strategy(data: pd.DataFrame, signal: int = 3) -> pd.Series:
         return pd.Series(signal, index=data.index)
 
-    def perfect_strategy(self, data: pd.DataFrame) -> pd.Series:
-        """Perfect strategy implementation. Use for debugging/benchmarking."""
+    @staticmethod
+    def perfect_strategy(data: pd.DataFrame) -> pd.Series:
         future_returns = data['Close'].shift(-1) / data['Close'] - 1
-        # 3 for buy/long, 1 for sell/short, 2 for flat
         signals = pd.Series(2, index=data.index)
         signals[future_returns > 0] = 3
         signals[future_returns < 0] = 1
         return signals
-    
-    def ema_cross_strategy(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26) -> pd.Series:
+
+    @staticmethod
+    def ema_cross_strategy(data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         ema_fast = ta.ema(data['Close'], fast_period)
         ema_slow = ta.ema(data['Close'], slow_period)
@@ -433,70 +432,71 @@ class VectorizedBacktesting:
         signals[ema_fast < ema_slow] = 1
         return signals
 
-    def zscore_reversion_strategy(self, data: pd.DataFrame) -> pd.Series:
+    @staticmethod
+    def zscore_reversion_strategy(data: pd.DataFrame) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         zscore = ta.zscore(data['Close'])
         signals[zscore < -1] = 3
         signals[zscore > 1] = 1
         return signals
-    
-    def zscore_momentum_strategy(self, data: pd.DataFrame) -> pd.Series:
+
+    @staticmethod
+    def zscore_momentum_strategy(data: pd.DataFrame) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         zscore = ta.zscore(data['Close'])
         signals[zscore < -1] = 1
         signals[zscore > 1] = 3
         return signals
 
-    def rsi_strategy(self, data: pd.DataFrame, oversold: int = 32, overbought: int = 72) -> pd.Series:
-        if oversold >= overbought:
-            print(f"Warning: Invalid RSI thresholds - oversold ({oversold}) >= overbought ({overbought})")
-            return pd.Series(2, index=data.index)
+    @staticmethod
+    def rsi_strategy(data: pd.DataFrame, oversold: int = 32, overbought: int = 72) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         rsi = ta.rsi(data['Close'])
         signals[rsi < oversold] = 3
         signals[rsi > overbought] = 1
         return signals
 
-    def macd_strategy(self, data: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
+    @staticmethod
+    def macd_strategy(data: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         macd, signal = ta.macd(data['Close'], fastperiod=fast_period, slowperiod=slow_period, signalperiod=signal_period)
         signals[macd > signal] = 3
         signals[macd < signal] = 1
         return signals
 
-    def supertrend_strategy(self, data: pd.DataFrame) -> pd.Series:
+    @staticmethod
+    def supertrend_strategy(data: pd.DataFrame) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
         signals[data['Close'] > supertrend_line] = 3
         signals[data['Close'] < supertrend_line] = 1
         return signals
-    
-    def psar_strategy(self, data: pd.DataFrame) -> pd.Series:
+
+    @staticmethod
+    def psar_strategy(data: pd.DataFrame) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
         signals[data['Close'] > psar] = 3
         signals[data['Close'] < psar] = 1
         return signals
-    
-    def smc_strategy(self, data: pd.DataFrame) -> pd.Series:
+
+    @staticmethod
+    def smc_strategy(data: pd.DataFrame) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         return signals
 
-    def scalper_strategy1(self, data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
+    @staticmethod
+    def scalper_strategy1(data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         fast_ema = ta.ema(data['Close'], fast_period)
         slow_ema = ta.ema(data['Close'], slow_period)
-
         adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'])
         upper_wick = data['High'] - np.maximum(data['Open'], data['Close'])
         lower_wick = np.minimum(data['Open'], data['Close']) - data['Low']
-
         momentum = ta.mom(data['Close'], momentum_period)
-        
         body_size = np.abs(data['Close'] - data['Open']) + 1e-9
         upper_wick_ratio = upper_wick / body_size
         lower_wick_ratio = lower_wick / body_size
-
         is_liquidity_sweep_up = (upper_wick_ratio > lower_wick_ratio) & (upper_wick_ratio > wick_threshold)
         is_liquidity_sweep_down = (lower_wick_ratio > upper_wick_ratio) & (lower_wick_ratio > wick_threshold)
         buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_up | (momentum <= -momentum_threshold)
@@ -504,108 +504,66 @@ class VectorizedBacktesting:
         signals[buy_conditions] = 3
         signals[sell_conditions] = 1
         return signals
-    
-    def scalper_strategy2(self, data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
+
+    @staticmethod
+    def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days) -> pd.Series:
+        signals = pd.Series(0, index=data.index)
+        eth_price = mt.fetch_data('ETH-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
+        btc_price = mt.fetch_data('BTC-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
+        ethbtc_ratio = eth_price[['Open', 'High', 'Low', 'Close']] / btc_price[['Open', 'High', 'Low', 'Close']]
+        zscore = ta.zscore(ethbtc_ratio['Close'])
+        buy_conditions = zscore > 1
+        sell_conditions = zscore < -1
+        signals[buy_conditions] = 3
+        signals[sell_conditions] = 1
         return signals
-    
-    def volatility_breakout_strategy(self, data: pd.DataFrame, 
-                                   atr_period: int = 14, 
-                                   atr_lookback: int = 30,
-                                   atr_threshold: float = 1.2,
-                                   donchian_period: int = 20,
-                                   ema_fast: int = 20,
-                                   ema_slow: int = 50,
-                                   use_rsi_filter: bool = 1, #0 false, 1 true
-                                   rsi_threshold: float = 70.0) -> pd.Series:
-        """
-        High RR Volatility Breakout Strategy
-        
-        Logic:
-        1. Wait for volatility contraction (ATR near recent lows)
-        2. Enter on breakout above Donchian high with trend confirmation
-        3. Tight stop, 3:1+ reward/risk target
-        
-        Expected: ~30-45% win rate, 3:1+ RR, 1-3 trades/week
-        """
+
+    @staticmethod
+    def volatility_breakout_strategy(data: pd.DataFrame, atr_period: int = 14, atr_lookback: int = 30, atr_threshold: float = 1.2, donchian_period: int = 20, ema_fast: int = 20, ema_slow: int = 50, use_rsi_filter: int = 1, rsi_threshold: float = 70.0) -> pd.Series:
         signals = pd.Series(2, index=data.index)
-        
         atr = ta.atr(data['High'], data['Low'], data['Close'], timeperiod=atr_period)
         donchian_high, donchian_middle, donchian_low = ta.donchian_channel(data['High'], data['Low'], timeperiod=donchian_period)
         ema_fast_line = ta.ema(data['Close'], ema_fast)
         ema_slow_line = ta.ema(data['Close'], ema_slow)
-        
         atr_min = atr.rolling(window=atr_lookback).min()
-        
         if bool(use_rsi_filter):
             rsi = ta.rsi(data['Close'])
-        
-        # Entry conditions
         for i in range(atr_lookback, len(data)):
-            # 1. Volatility consolidation: Current ATR near recent lows
             volatility_low = atr.iloc[i] < (atr_min.iloc[i] * atr_threshold)
-            
-            # 2. Breakout: Close above Donchian high
             breakout_long = data['Close'].iloc[i] > donchian_high.iloc[i-1]
-            
-            # 3. Trend confirmation: EMA alignment
             trend_up = ema_fast_line.iloc[i] > ema_slow_line.iloc[i]
-            
-            # 4. Optional RSI filter (avoid overbought)
             rsi_ok = True
             if use_rsi_filter:
                 rsi_ok = rsi.iloc[i] < rsi_threshold
-            
-            # Long entry
             if volatility_low and breakout_long and trend_up and rsi_ok:
-                signals.iloc[i] = 3  # Long
-            
-            # Short entry (opposite conditions)
+                signals.iloc[i] = 3
             elif volatility_low and data['Close'].iloc[i] < donchian_low.iloc[i-1] and not trend_up:
                 if not use_rsi_filter or rsi.iloc[i] > (100 - rsi_threshold):
-                    signals.iloc[i] = 1  # Short
-        
-        return signals
-    
-    def high_rr_momentum_strategy(self, data: pd.DataFrame,
-                                bb_period: int = 20,
-                                bb_std: float = 2.0,
-                                volume_multiplier: float = 1.5,
-                                ema_trend: int = 50,
-                                min_consolidation_bars: int = 10) -> pd.Series:
-        """
-        Alternative high RR strategy using Bollinger Band squeezes
-        """
-        signals = pd.Series(2, index=data.index)
-        
-        # Bollinger Bands for squeeze detection
-        bb_upper, bb_middle, bb_lower = ta.bbands(data['Close'], timeperiod=bb_period, nbdevup=bb_std, nbdevdn=bb_std)
-        bb_width = (bb_upper - bb_lower) / bb_middle
-        
-        ema_trend_line = ta.ema(data['Close'], ema_trend)
-        
-        avg_volume = data['Volume'].rolling(window=20).mean()
-        
-        bb_width_min = bb_width.rolling(window=30).min()
-        
-        for i in range(30, len(data)):
-            squeeze = bb_width.iloc[i] < (bb_width_min.iloc[i] * 1.3)
-            
-            breakout_up = data['Close'].iloc[i] > bb_upper.iloc[i-1]
-            breakout_down = data['Close'].iloc[i] < bb_lower.iloc[i-1]
-            
-            uptrend = data['Close'].iloc[i] > ema_trend_line.iloc[i]
-            
-            volume_spike = data['Volume'].iloc[i] > (avg_volume.iloc[i] * volume_multiplier)
-            
-            if squeeze and breakout_up and uptrend and volume_spike:
-                signals.iloc[i] = 3  # Long
-            elif squeeze and breakout_down and not uptrend and volume_spike:
-                signals.iloc[i] = 1  # Short
-                
+                    signals.iloc[i] = 1
         return signals
 
-    def nn_strategy(self, data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
+    @staticmethod
+    def high_rr_momentum_strategy(data: pd.DataFrame, bb_period: int = 20, bb_std: float = 2.0, volume_multiplier: float = 1.5, ema_trend: int = 50, min_consolidation_bars: int = 10) -> pd.Series:
+        signals = pd.Series(2, index=data.index)
+        bb_upper, bb_middle, bb_lower = ta.bbands(data['Close'], timeperiod=bb_period, nbdevup=bb_std, nbdevdn=bb_std)
+        bb_width = (bb_upper - bb_lower) / bb_middle
+        ema_trend_line = ta.ema(data['Close'], ema_trend)
+        avg_volume = data['Volume'].rolling(window=20).mean()
+        bb_width_min = bb_width.rolling(window=30).min()
+        for i in range(30, len(data)):
+            squeeze = bb_width.iloc[i] < (bb_width_min.iloc[i] * 1.3)
+            breakout_up = data['Close'].iloc[i] > bb_upper.iloc[i-1]
+            breakout_down = data['Close'].iloc[i] < bb_lower.iloc[i-1]
+            uptrend = data['Close'].iloc[i] > ema_trend_line.iloc[i]
+            volume_spike = data['Volume'].iloc[i] > (avg_volume.iloc[i] * volume_multiplier)
+            if squeeze and breakout_up and uptrend and volume_spike:
+                signals.iloc[i] = 3
+            elif squeeze and breakout_down and not uptrend and volume_spike:
+                signals.iloc[i] = 1
+        return signals
+
+    @staticmethod
+    def nn_strategy(data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
         from brains.time_series.single_predictors.classifier_model import load_model
         MODEL_PATH = r"trading\BTC-USDT_1min_5_38features.pth"
         signals = pd.Series(2, index=data.index)
@@ -629,10 +587,10 @@ class VectorizedBacktesting:
         with torch.no_grad():
             idx = 0
             for batch in tqdm(dataloader, desc="NN Strategy Batching"):
-                batch_x = batch[0]  # (batch, 1, features)
+                batch_x = batch[0]
                 outputs = model(batch_x)
-                probs = F.softmax(outputs, dim=2)  # (batch, 1, classes)
-                actions = torch.argmax(probs, dim=2).cpu().numpy().flatten()  # (batch,)
+                probs = F.softmax(outputs, dim=2)
+                actions = torch.argmax(probs, dim=2).cpu().numpy().flatten()
                 for i, action in enumerate(actions):
                     if action == 3:
                         position_values[idx + i] = 3
@@ -647,14 +605,14 @@ class VectorizedBacktesting:
             with torch.no_grad():
                 single_preds = []
                 for i in range(min(32, len(X))):
-                    x_single = X[i].unsqueeze(0).unsqueeze(0)  # (1, 1, F)
+                    x_single = X[i].unsqueeze(0).unsqueeze(0)
                     out = model(x_single)
                     prob = F.softmax(out, dim=2)
                     act = torch.argmax(prob, dim=2).item()
                     single_preds.append(act)
                 batch_preds = position_values[:len(single_preds)]
                 if not np.all(batch_preds == np.array([3 if a==3 else 1 if a==1 else 2 for a in single_preds])):
-                    print("[red]WARNING: Batch and single inference results differ![/red]")
+                    print("[red]WARNING: Batch and single inference results differ![red]")
         return signals
 
 if __name__ == "__main__":
@@ -662,12 +620,11 @@ if __name__ == "__main__":
         initial_capital=400
     )
     backtest.fetch_data(
-        symbol="SOL-USDT",
-        chunks=100,
-        interval="1min",
+        symbol="BTC-USDT",
+        chunks=365,
+        interval="5min",
         age_days=0
     )
-    
-    backtest.run_strategy(backtest.zscore_momentum_strategy, verbose=True)
+    backtest.run_strategy(Strategy.ETHBTC_trader, verbose=True)
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=False)
+    backtest.plot_performance(advanced=True)
