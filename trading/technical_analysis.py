@@ -354,14 +354,65 @@ def percent_rank(series, timeperiod=14) -> pd.Series:
     
     return series.rolling(window=timeperiod).apply(percentile_rank, raw=False)
 
-def historical_volatility(close, timeperiod=20, annualization=252) -> pd.Series:
-    """Historical Volatility
-    Estimates future volatility based on past price movements (annualized)"""
+def get_date_range_periods(df: pd.DataFrame, unit: str = 'days') -> float:
+    """
+    Get the time span of a DataFrame in specified units.
+    
+    Args:
+        df: DataFrame with datetime index or 'Datetime' column
+        unit: 'days', 'hours', 'minutes', 'weeks'
+    
+    Returns:
+        float: Time span in the specified unit
+    """
+    # Get datetime series
+    if 'Datetime' in df.columns:
+        datetime_series = pd.to_datetime(df['Datetime'])
+    elif isinstance(df.index, pd.DatetimeIndex):
+        datetime_series = df.index
+    else:
+        raise ValueError("DataFrame must have 'Datetime' column or DatetimeIndex")
+    
+    # Calculate total time span
+    start_date = datetime_series.min()
+    end_date = datetime_series.max()
+    total_timedelta = end_date - start_date
+    
+    # Convert to requested unit
+    total_seconds = total_timedelta.total_seconds()
+    
+    if unit == 'days':
+        return total_seconds / (24 * 3600)
+    elif unit == 'hours':
+        return total_seconds / 3600
+    elif unit == 'minutes':
+        return total_seconds / 60
+    elif unit == 'weeks':
+        return total_seconds / (7 * 24 * 3600)
+    else:
+        raise ValueError("Unit must be 'days', 'hours', 'minutes', or 'weeks'")
+
+def historical_volatility(close: pd.Series, output_period: float = -1, df: pd.DataFrame = None) -> pd.Series:
+    """
+    Historical Volatility with optional automatic period detection
+    Estimates future volatility based on past price movements
+    
+    Args:
+        close: Close price series
+        output_period: Output scaling period, -1 for no scaling (default 365 for annualization)
+        df: DataFrame for automatic period detection (optional)
+    """
+    # Auto-detect input period if DataFrame provided
+    if output_period == -1:
+        input_period = output_period
+    else:
+        input_period = get_date_range_periods(df, unit='days')
+    
     # Calculate daily log returns
     log_ret = np.log(close / close.shift(1))
     
     # Calculate standard deviation of log returns
-    hist_vol = log_ret.rolling(window=timeperiod).std() * np.sqrt(annualization)
+    hist_vol = log_ret.std() * np.sqrt(output_period / input_period)
     
     return hist_vol
 

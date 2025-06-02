@@ -343,7 +343,7 @@ def prepare_data_classifier(data, lagged_length=5, extra_features=False, elapsed
     indicators['KC_Pos'] = (df['Close'] - indicators['KC_Lower']) / (indicators['KC_Upper'] - indicators['KC_Lower'])
     
     indicators['CHOP'] = ta.choppiness_index(df['High'], df['Low'], df['Close'])
-    indicators['HIST_VOL'] = ta.historical_volatility(df['Close'])
+    indicators['HIST_VOL'] = ta.historical_volatility(df['Close'], df=df)
     indicators['Volatility_Ratio'] = ta.volatility_ratio(df['High'], df['Low'], df['Close'])
     section_times['Volatility Indicators'] = time.time() - section_start
     
@@ -515,7 +515,7 @@ def prepare_data_reinforcement(data, lagged_length=5, extra_features=False, elap
     indicators['KC_Pos'] = (df['Close'] - indicators['KC_Lower']) / (indicators['KC_Upper'] - indicators['KC_Lower'])
     
     indicators['CHOP'] = ta.choppiness_index(df['High'], df['Low'], df['Close'])
-    indicators['HIST_VOL'] = ta.historical_volatility(df['Close'])
+    indicators['HIST_VOL'] = ta.historical_volatility(df['Close'], df=df)
     indicators['Volatility_Ratio'] = ta.volatility_ratio(df['High'], df['Low'], df['Close'])
     
     if 'Volume' in df.columns:
