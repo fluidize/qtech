@@ -24,11 +24,13 @@ class VectorizedBacktesting:
         initial_capital: float = 10000.0,
         slippage_pct: float = 0.001,  # 0.1% slippage per trade
         commission_pct: float = 0.001,  # 0.1% commission per trade
+        reinvest: bool = True,  # True for compound returns, False for linear returns
     ):
         self.instance_name = instance_name
         self.initial_capital = initial_capital
         self.slippage_pct = slippage_pct
         self.commission_pct = commission_pct
+        self.reinvest = reinvest
 
         self.symbol = None
         self.chunks = None
@@ -109,7 +111,20 @@ class VectorizedBacktesting:
         return position
 
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
-        """Run a trading strategy on the data with realistic execution at open prices"""
+        """
+        Run a trading strategy on the data with realistic execution at open prices.
+        
+        Supports two return calculation modes:
+        - Compound (reinvest=True): Returns compound over time. Profits increase position size.
+          Example: 10% + 10% = 21% total return (1.1 * 1.1 - 1)
+        - Linear (reinvest=False): Each period's return applied to initial capital only.
+          Example: 10% + 10% = 20% total return (additive)
+          
+        Args:
+            strategy_func: Strategy function that returns position signals
+            verbose: Print execution details
+            **kwargs: Parameters passed to strategy function
+        """
         if self.data is None or self.data.empty:
             raise ValueError("No data available. Call fetch_data() first.")
 
@@ -140,8 +155,17 @@ class VectorizedBacktesting:
         else:
             self.data['Strategy_Returns'] = self._apply_trading_costs(base_returns, position_changes)
         
-        self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
-        self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
+        # Calculate cumulative returns and portfolio value based on reinvestment setting
+        if self.reinvest:
+            # Compound returns (reinvestment) - default behavior
+            self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
+            self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
+        else:
+            # Linear returns (no reinvestment) - each period's return applied to initial capital only
+            self.data['Linear_Profit'] = (self.initial_capital * self.data['Strategy_Returns']).cumsum()
+            self.data['Portfolio_Value'] = self.initial_capital + self.data['Linear_Profit']
+            self.data['Cumulative_Returns'] = self.data['Portfolio_Value'] / self.initial_capital
+        
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
         self.data['Drawdown'] = (self.data['Portfolio_Value'] - self.data['Peak']) / self.data['Peak']
 
@@ -150,6 +174,7 @@ class VectorizedBacktesting:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
             if self.slippage_pct > 0 or self.commission_pct > 0:
                 print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission per trade[/blue]")
+            print(f"[cyan]Return calculation mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}[/cyan]")
 
         return self.data
 
@@ -157,28 +182,89 @@ class VectorizedBacktesting:
         if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
-        # Use the strategy returns that already include trading costs and open-to-open execution
+        # Use the strategy returns that already include trading costs and proper timing
         position = self.data['Position']
-        open_prices = self.data['Open']  # Use Open prices since that's where we execute
-        trade_pnls = metrics.get_trade_pnls(position, open_prices)  # Calculate PnL based on open prices
-        
-        # Use the Strategy_Returns that already include trading costs and proper timing
+        open_prices = self.data['Open']
         strategy_returns = self.data['Strategy_Returns'].dropna()
+        portfolio_value = self.data['Portfolio_Value'].dropna()
+        
+        # Calculate metrics using the actual portfolio performance (respects reinvest setting)
+        total_return = (portfolio_value.iloc[-1] / self.initial_capital) - 1
+        
+        # For benchmark comparison, use the same reinvest logic
+        asset_returns = self.data['Return'].dropna()
+        if self.reinvest:
+            benchmark_total_return = (1 + asset_returns).prod() - 1
+        else:
+            benchmark_total_return = asset_returns.sum()
+        
+        active_return = total_return - benchmark_total_return
+        
+        # Calculate drawdown from actual portfolio values
+        peak = portfolio_value.cummax()
+        drawdown = (portfolio_value - peak) / peak
+        max_drawdown = drawdown.min()
+        
+        # Calculate Sharpe and Sortino using strategy returns
+        sharpe_ratio = strategy_returns.mean() / strategy_returns.std(ddof=1) if strategy_returns.std() != 0 else float('nan')
+        
+        downside_returns = strategy_returns[strategy_returns < 0]
+        sortino_ratio = strategy_returns.mean() / downside_returns.std(ddof=1) if len(downside_returns) > 0 and downside_returns.std() != 0 else float('nan')
+        
+        # Information ratio using active returns
+        if self.reinvest:
+            active_returns_series = strategy_returns - asset_returns.reindex_like(strategy_returns).fillna(0)
+        else:
+            # For linear returns, active return per period is the difference between strategy and benchmark
+            benchmark_returns_linear = asset_returns.reindex_like(strategy_returns).fillna(0)
+            active_returns_series = strategy_returns - benchmark_returns_linear
+        
+        info_ratio = active_returns_series.mean() / active_returns_series.std(ddof=1) if active_returns_series.std() != 0 else float('nan')
+        
+        # Calculate Alpha and Beta using regression (these should work the same for both modes)
+        if len(strategy_returns) >= 2 and len(asset_returns) >= 2:
+            try:
+                import statsmodels.api as sm
+                # Align the series
+                common_index = strategy_returns.index.intersection(asset_returns.index)
+                if len(common_index) >= 2:
+                    y = strategy_returns.loc[common_index]
+                    x = asset_returns.loc[common_index]
+                    X = sm.add_constant(x.values)
+                    model = sm.OLS(y.values, X).fit()
+                    alpha_raw = model.params[0]
+                    beta = model.params[1]
+                    # Annualize alpha
+                    alpha = alpha_raw * (365 / self.n_days) if self.n_days > 0 else alpha_raw
+                else:
+                    alpha, beta = float('nan'), float('nan')
+            except:
+                alpha, beta = float('nan'), float('nan')
+        else:
+            alpha, beta = float('nan'), float('nan')
+        
+        # Trade-level metrics (these work the same regardless of reinvest mode)
+        trade_pnls = metrics.get_trade_pnls(position, open_prices)
+        
+        # Profit factor using strategy returns
+        positive_returns = strategy_returns[strategy_returns > 0]
+        negative_returns = strategy_returns[strategy_returns < 0]
+        profit_factor = positive_returns.sum() / abs(negative_returns.sum()) if negative_returns.sum() < 0 else float('inf')
 
         return {
-            'Total_Return': metrics.get_total_return(position, open_prices),
-            'Alpha': metrics.get_alpha(position, open_prices, n_days=self.n_days),
-            'Beta': metrics.get_beta(position, open_prices),
-            'Active_Return': metrics.get_total_active_return(position, open_prices),
-            'Max_Drawdown': metrics.get_max_drawdown(position, open_prices, self.initial_capital),
-            'Sharpe_Ratio': metrics.get_sharpe_ratio(position, open_prices),
-            'Sortino_Ratio': metrics.get_sortino_ratio(position, open_prices),
-            'Information_Ratio': metrics.get_information_ratio(position, open_prices),
+            'Total_Return': total_return,
+            'Alpha': alpha,
+            'Beta': beta,
+            'Active_Return': active_return,
+            'Max_Drawdown': max_drawdown,
+            'Sharpe_Ratio': sharpe_ratio,
+            'Sortino_Ratio': sortino_ratio,
+            'Information_Ratio': info_ratio,
             'Win_Rate': len([pnl for pnl in trade_pnls if pnl > 0]) / len(trade_pnls) if trade_pnls else 0,
             'Breakeven_Rate': metrics.get_breakeven_rate_from_pnls(trade_pnls),
             'RR_Ratio': metrics.get_rr_ratio_from_pnls(trade_pnls),
-            'PT_Ratio': (strategy_returns.sum() / len(trade_pnls)) if trade_pnls else 0,
-            'Profit_Factor': metrics.get_profit_factor(position, open_prices),
+            'PT_Ratio': (strategy_returns.sum() / len(trade_pnls)) * 100 if trade_pnls else 0,
+            'Profit_Factor': profit_factor,
             'Total_Trades': len(trade_pnls)
         }
 
@@ -192,8 +278,13 @@ class VectorizedBacktesting:
             fig = go.Figure()
             
             portfolio_value = self.data['Portfolio_Value'].values
-            # Calculate asset value using open-to-open returns (consistent with execution)
-            asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
+            # Calculate asset value using the same reinvestment logic as the strategy
+            asset_returns = self.data['Return'].dropna()
+            if self.reinvest:
+                asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
+            else:
+                asset_linear_profit = (self.initial_capital * self.data['Return']).cumsum()
+                asset_value = self.initial_capital + asset_linear_profit
 
             fig.add_trace(go.Scatter(
                 x=self.data.index,
@@ -206,7 +297,7 @@ class VectorizedBacktesting:
                 x=self.data.index,
                 y=asset_value,
                 mode='lines',
-                name='Buy & Hold (Open-to-Open)'
+                name=f'Buy & Hold ({"Compound" if self.reinvest else "Linear"})'
             ))
 
             position_changes = np.diff(self.data['Position'].values)
@@ -226,13 +317,13 @@ class VectorizedBacktesting:
                     
                     if current_pos == 3 and prev_pos != 3:  # Entering long from any other position
                         long_entries.append(self.data.index[i + 1])
-                        long_entry_values.append(asset_value[i + 1])
+                        long_entry_values.append(asset_value.iloc[i + 1])
                     elif current_pos == 1 and prev_pos != 1:  # Entering short from any other position
                         short_entries.append(self.data.index[i + 1])
-                        short_entry_values.append(asset_value[i + 1])
+                        short_entry_values.append(asset_value.iloc[i + 1])
                     elif current_pos == 2 and prev_pos != 2:  # Exiting to flat from any position
                         flats.append(self.data.index[i + 1])
-                        flat_values.append(asset_value[i + 1])
+                        flat_values.append(asset_value.iloc[i + 1])
 
             # Add long entry signals (green triangles up)
             if long_entries:
@@ -265,7 +356,7 @@ class VectorizedBacktesting:
                 ))
             
             fig.update_layout(
-                title=f'{self.symbol} {self.chunks} days of {self.interval} | {self.age_days}d old | TR: {summary["Total_Return"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | BE: {summary["Breakeven_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
+                title=f'{self.symbol} {self.chunks} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | BE: {summary["Breakeven_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis_title='Date',
                 yaxis_title='Value',
                 showlegend=True,
@@ -309,14 +400,19 @@ class VectorizedBacktesting:
                 row=1, col=1
             )
             
-            # Calculate asset value using open-to-open returns (consistent with execution)
-            asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
+            # Calculate asset value using the same reinvestment logic as the strategy
+            if self.reinvest:
+                asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
+            else:
+                asset_linear_profit = (self.initial_capital * self.data['Return']).cumsum()
+                asset_value = self.initial_capital + asset_linear_profit
+                
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
                     y=asset_value,
                     mode='lines',
-                    name='Buy & Hold (Open-to-Open)',
+                    name=f'Buy & Hold ({"Compound" if self.reinvest else "Linear"})',
                     line=dict(dash='dash')
                 ),
                 row=1, col=1
@@ -446,7 +542,7 @@ class VectorizedBacktesting:
 
             # Update layout
             fig.update_layout(
-                title_text=f"{self.symbol} {self.interval} Performance Analysis",
+                title_text=f"{self.symbol} {self.interval} Performance Analysis ({'Compound' if self.reinvest else 'Linear'} Returns)",
                 showlegend=True,
                 template="plotly_dark"
             )
@@ -487,6 +583,7 @@ class VectorizedBacktesting:
         print(f"\n[bold blue]STRATEGY DEBUG INFORMATION[/bold blue]")
         print(f"Data shape: {self.data.shape}")
         print(f"Trading costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission")
+        print(f"Return mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}")
         
         # Position distribution
         pos_counts = self.data['Position'].value_counts().sort_index()
@@ -660,7 +757,7 @@ class Strategy:
         return signals
 
     @staticmethod
-    def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days) -> pd.Series:
+    def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days, lower_zscore_threshold: float = -1, upper_zscore_threshold: float = 1) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         eth_price = mt.fetch_data('ETH-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
         btc_price = mt.fetch_data('BTC-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
@@ -669,8 +766,8 @@ class Strategy:
         zscore = ta.zscore(ethbtc_ratio['Open'])
 
         #follow ethbtc ratio breakouts
-        buy_conditions = zscore > 1
-        sell_conditions = zscore < -1
+        buy_conditions = zscore > upper_zscore_threshold
+        sell_conditions = zscore < lower_zscore_threshold
         signals[buy_conditions] = 3
         signals[sell_conditions] = 1
         return signals
@@ -773,19 +870,54 @@ class Strategy:
         return signals
 
 if __name__ == "__main__":
-    backtest = VectorizedBacktesting(
+    # Test compound returns (reinvestment)
+    backtest_compound = VectorizedBacktesting(
         initial_capital=400,
         slippage_pct=0.0,
-        commission_pct=0.0
+        commission_pct=0.0,
+        reinvest=True
     )
-    backtest.fetch_data(
+    backtest_compound.fetch_data(
         symbol="BTC-USDT",
         chunks=10,
         interval="5min",
         age_days=0
     )
     
-    backtest.run_strategy(Strategy.ETHBTC_trader, verbose=True, chunks=backtest.chunks, interval=backtest.interval, age_days=backtest.age_days)
-    print(backtest.get_performance_metrics())
-    backtest.plot_performance(advanced=False)
-    backtest.debug_strategy()
+    backtest_compound.run_strategy(Strategy.ETHBTC_trader, 
+                          verbose=True, 
+                          chunks=backtest_compound.chunks, 
+                          interval=backtest_compound.interval, 
+                          age_days=backtest_compound.age_days,
+                          lower_zscore_threshold=-0.33,
+                          upper_zscore_threshold=0.101)
+    print("[bold green]COMPOUND RETURNS (REINVEST):[/bold green]")
+    print(backtest_compound.get_performance_metrics())
+    
+    # Test linear returns (no reinvestment)
+    backtest_linear = VectorizedBacktesting(
+        initial_capital=400,
+        slippage_pct=0.0,
+        commission_pct=0.0,
+        reinvest=False
+    )
+    backtest_linear.fetch_data(
+        symbol="BTC-USDT",
+        chunks=10,
+        interval="5min",
+        age_days=0
+    )
+    
+    backtest_linear.run_strategy(Strategy.ETHBTC_trader, 
+                          verbose=True, 
+                          chunks=backtest_linear.chunks, 
+                          interval=backtest_linear.interval, 
+                          age_days=backtest_linear.age_days,
+                          lower_zscore_threshold=-0.33,
+                          upper_zscore_threshold=0.101)
+    print("[bold yellow]LINEAR RETURNS (NO REINVEST):[/bold yellow]")
+    print(backtest_linear.get_performance_metrics())
+    
+    # Compare both on same plot would require modification to plotting function
+    backtest_compound.plot_performance(advanced=False)
+    backtest_linear.plot_performance(advanced=False)
