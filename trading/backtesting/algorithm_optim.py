@@ -157,8 +157,7 @@ class AlgorithmBayesianOptimization:
 
         def objective(trial):
             param_dict = self._suggest_params(trial)
-            if param_dict["ema_fast"] >= param_dict["ema_slow"]:
-                return invalid
+
             self.engine.run_strategy(self.strategy_func, **param_dict)
             metrics = self.engine.get_performance_metrics()
             return metrics[self.metric]
@@ -173,9 +172,22 @@ class AlgorithmBayesianOptimization:
         params = {}
         float_exceptions = [
             {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold", "momentum_threshold"]},
+            {"strategy": "ETHBTC_trader", "params": ["lower_zscore_threshold", "upper_zscore_threshold"]},
         ] #float exceptions
+        
+        fixed_param_exceptions = [
+            {"strategy": "ETHBTC_trader", "params": ["chunks", "interval", "age_days"]},
+        ] #fixed parameter exceptions
+        
         for k, v in self.param_space.items():
-            if any(exception["strategy"] == self.strategy_func.__name__ and k in exception["params"] for exception in float_exceptions):
+            # Check if this is a fixed parameter that should not be optimized
+            is_fixed = any(exception["strategy"] == self.strategy_func.__name__ and k in exception["params"] 
+                          for exception in fixed_param_exceptions)
+            
+            if is_fixed:
+                # For fixed parameters, just use the first value if it's a tuple/list, otherwise use the value directly
+                params[k] = v[0] if isinstance(v, (tuple, list)) else v
+            elif any(exception["strategy"] == self.strategy_func.__name__ and k in exception["params"] for exception in float_exceptions):
                 params[k] = trial.suggest_float(k, v[0], v[1])
             else:
                 params[k] = trial.suggest_int(k, v[0], v[1])
@@ -255,19 +267,26 @@ class AlgorithmAssignmentOptimizer:
 if __name__ == "__main__":
     vb = VectorizedBacktesting(
         initial_capital=10000.0,
+        reinvest=True,  # Test with compound returns
     )
     vb.fetch_data(
-        symbol="RENDER-USDT",
+        symbol="BTC-USDT",
         chunks=100,
-        interval="1min",
+        interval="5min",
         age_days=0,
     )
 
     bayes_opt = AlgorithmBayesianOptimization(
         engine=vb,
-        strategy_func=vb.volatility_breakout_strategy,
-        param_space={"atr_period": (1, 100), "atr_lookback": (1, 100), "atr_threshold": (0.1, 10.0), "donchian_period": (1, 100), "ema_fast": (1, 100), "ema_slow": (1, 100), "use_rsi_filter": (0, 1), "rsi_threshold": (0.1, 100.0)},
-        metric="PT_Ratio",
+        strategy_func=Strategy.ETHBTC_trader,
+        param_space={
+            "chunks": (100,),      # Fixed value - will always use 100
+            "interval": ("5min",), # Fixed value - will always use "5min"  
+            "age_days": (0,),      # Fixed value - will always use 0
+            "lower_zscore_threshold": (-5, 0),
+            "upper_zscore_threshold": (0, 5),
+        },
+        metric="Total_Return",
         n_trials=250,
         direction="maximize",
     )
