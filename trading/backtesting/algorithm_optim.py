@@ -8,8 +8,8 @@ from rich.console import Console
 from tqdm import tqdm
 import numpy as np
 import sys
-sys.path.append("trading")
-from vectorized_backtesting import VectorizedBacktesting
+
+from backtesting import VectorizedBacktesting, Strategy
 import optuna
 
 class AlgorithmGridSearch:

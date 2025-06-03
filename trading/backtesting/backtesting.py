@@ -8,11 +8,13 @@ from rich import print
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
 import sys
-import os
+
+sys.path.append("trading")
 
 import model_tools as mt
 import technical_analysis as ta
 import smc_analysis as smc
+
 import vb_metrics as metrics
 
 class VectorizedBacktesting:
@@ -44,14 +46,14 @@ class VectorizedBacktesting:
             pass
         else:
             self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
-            self._validate_data_quality()
+            # self._validate_data_quality()
             self.set_n_days()
 
             return self.data
 
     def load_data(self, data: pd.DataFrame):
         self.data = data
-        self._validate_data_quality()
+        # self._validate_data_quality()
         self.set_n_days()
 
     def _validate_data_quality(self):
@@ -771,17 +773,15 @@ class Strategy:
         return signals
 
 if __name__ == "__main__":
-    
-
     backtest = VectorizedBacktesting(
         initial_capital=400,
         slippage_pct=0.0,
         commission_pct=0.0
     )
     backtest.fetch_data(
-        symbol="ETH-USDT",
-        chunks=100,
-        interval="30min",
+        symbol="BTC-USDT",
+        chunks=10,
+        interval="5min",
         age_days=0
     )
     
