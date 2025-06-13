@@ -37,27 +37,14 @@ def support_resistance_levels(open: pd.Series, high: pd.Series, low: pd.Series, 
         low: pd.Series - Low prices
         close: pd.Series - Close prices
         window: int - Window size for finding pivot points
-        forward_fill_periods: int - Number of periods to forward fill the levels
         
     Returns:
         support: pd.Series - Support levels
         resistance: pd.Series - Resistance levels
     """
-    pivots = pivot_points(open, high, low, close, window)
-    
-    support = pd.Series(index=open.index, dtype=float)
-    resistance = pd.Series(index=open.index, dtype=float)
-    
-    # Fill support and resistance from pivot points
-    for idx, row in pivots.iterrows():
-        if row['Type'] == 'Swing_Low':
-            support.loc[idx] = row['Price']
-        elif row['Type'] == 'Swing_High':
-            resistance.loc[idx] = row['Price']
-    
-    # Forward fill the levels for specified number of periods
-    support = support.ffill()
-    resistance = resistance.ffill()
+
+    support = low.rolling(window=window).min()
+    resistance = high.rolling(window=window).max()
     
     return support, resistance
 
@@ -86,39 +73,16 @@ def fvg(open: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, pct_
     return fvg
 
 if __name__ == "__main__":
-    data = mt.fetch_data("BTC-USDT", 1, "5min", 0, kucoin=True, use_cache=True)
+    data = mt.fetch_data("BTC-USDT", 1, "5m", 0, data_source="kucoin", use_cache=True)
     pivots = pivot_points(data["Open"], data["High"], data["Low"], data["Close"])
     support, resistance = support_resistance_levels(data["Open"], data["High"], data["Low"], data["Close"])
     fvg = fvg(data["Open"], data["High"], data["Low"], data["Close"])
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=data.index, open=data["Open"], high=data["High"], low=data["Low"], close=data["Close"], name="Close"))
-    print(fvg)
-    # # Add FVG boxes
-    for idx, row in fvg.iterrows():
-        if pd.notna(row["Lower_Range"]):
-            if row["Direction"] == "Bullish":
-                fig.add_shape(
-                    type="rect",
-                    x0=idx,
-                    x1=idx+5,
-                    y0=row["Lower_Range"],
-                    y1=row["Upper_Range"],
-                    fillcolor="blue",
-                    opacity=0.2,
-                    line=dict(width=0),
-                    layer="below"
-                )
-            elif row["Direction"] == "Bearish":
-                fig.add_shape(
-                    type="rect",
-                    x0=idx,
-                    x1=idx+5,
-                    y0=row["Upper_Range"],
-                    y1=row["Lower_Range"],
-                    fillcolor="red",
-                    opacity=0.2,
-                    line=dict(width=0),
-                    layer="below"
-                )
+    
+    # Add support and resistance lines
+    fig.add_trace(go.Scatter(x=data.index, y=support, name="Support", line=dict(color="green", width=1)))
+    fig.add_trace(go.Scatter(x=data.index, y=resistance, name="Resistance", line=dict(color="red", width=1)))
+
     fig.show()

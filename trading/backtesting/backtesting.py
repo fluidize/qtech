@@ -39,15 +39,16 @@ class VectorizedBacktesting:
         self.n_days = None
         self.data: pd.DataFrame = pd.DataFrame()
 
-    def fetch_data(self, symbol: str = "None", chunks: int = "None", interval: str = "None", age_days: int = "None", kucoin: bool = True):
+    def fetch_data(self, symbol: str = "None", chunks: int = "None", interval: str = "None", age_days: int = "None", data_source: str = "kucoin"):
         self.symbol = symbol
         self.chunks = chunks
         self.interval = interval
         self.age_days = age_days
+        self.data_source = data_source
         if any([symbol, chunks, interval, age_days]) == "None":
             pass
         else:
-            self.data = mt.fetch_data(symbol, chunks, interval, age_days, kucoin=kucoin)
+            self.data = mt.fetch_data(symbol, chunks, interval, age_days, data_source=data_source)
             # self._validate_data_quality()
             self.set_n_days()
 
@@ -205,40 +206,16 @@ class VectorizedBacktesting:
         drawdown = (portfolio_value - peak) / peak
         max_drawdown = drawdown.min()
         
-        # Calculate Sharpe and Sortino using strategy returns
-        sharpe_ratio = strategy_returns.mean() / strategy_returns.std(ddof=1) if strategy_returns.std() != 0 else float('nan')
-        
-        downside_returns = strategy_returns[strategy_returns < 0]
-        sortino_ratio = strategy_returns.mean() / downside_returns.std(ddof=1) if len(downside_returns) > 0 and downside_returns.std() != 0 else float('nan')
-        
-        # Information ratio using active returns
-        if self.reinvest:
-            active_returns_series = strategy_returns - asset_returns.reindex_like(strategy_returns).fillna(0)
-        else:
-            # For linear returns, active return per period is the difference between strategy and benchmark
-            benchmark_returns_linear = asset_returns.reindex_like(strategy_returns).fillna(0)
-            active_returns_series = strategy_returns - benchmark_returns_linear
-        
-        info_ratio = active_returns_series.mean() / active_returns_series.std(ddof=1) if active_returns_series.std() != 0 else float('nan')
-        
+        # Calculate Sharpe, Sortino, and Information ratios using updated metrics functions
+        sharpe_ratio = metrics.get_sharpe_ratio(position, open_prices, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+        sortino_ratio = metrics.get_sortino_ratio(position, open_prices, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+        info_ratio = metrics.get_information_ratio(position, open_prices, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+
         # Calculate Alpha and Beta using regression (these should work the same for both modes)
         if len(strategy_returns) >= 2 and len(asset_returns) >= 2:
             try:
-                import statsmodels.api as sm
-                # Align the series
-                common_index = strategy_returns.index.intersection(asset_returns.index)
-                if len(common_index) >= 2:
-                    y = strategy_returns.loc[common_index]
-                    x = asset_returns.loc[common_index]
-                    X = sm.add_constant(x.values)
-                    model = sm.OLS(y.values, X).fit()
-                    alpha_raw = model.params[0]
-                    beta = model.params[1]
-                    # Annualize alpha
-                    alpha = alpha_raw * (365 / self.n_days) if self.n_days > 0 else alpha_raw
-                else:
-                    alpha, beta = float('nan'), float('nan')
-            except:
+                alpha, beta = metrics.get_alpha_beta(position, open_prices, n_days=self.n_days, return_interval=self.interval)
+            except Exception:
                 alpha, beta = float('nan'), float('nan')
         else:
             alpha, beta = float('nan'), float('nan')
@@ -737,7 +714,7 @@ class Strategy:
         return signals
 
     @staticmethod
-    def scalper_strategy1(data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
+    def scalper_strategy(data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         fast_ema = ta.ema(data['Close'], fast_period)
         slow_ema = ta.ema(data['Close'], slow_period)
@@ -757,65 +734,35 @@ class Strategy:
         return signals
 
     @staticmethod
-    def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days, lower_zscore_threshold: float = -1, upper_zscore_threshold: float = 1) -> pd.Series:
+    def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days, zscore_window: int = 20, lower_zscore_threshold: float = -1, upper_zscore_threshold: float = 1) -> pd.Series:
         signals = pd.Series(2, index=data.index)
         eth_price = mt.fetch_data('ETH-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
         btc_price = mt.fetch_data('BTC-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
         ethbtc_ratio = eth_price[['Open', 'High', 'Low', 'Close']] / btc_price[['Open', 'High', 'Low', 'Close']]
         
-        zscore = ta.zscore(ethbtc_ratio['Open'])
+        zscore = ta.zscore(ethbtc_ratio['Open'], timeperiod=zscore_window)
 
         #follow ethbtc ratio breakouts
         buy_conditions = zscore > upper_zscore_threshold
         sell_conditions = zscore < lower_zscore_threshold
         signals[buy_conditions] = 3
+        signals[sell_conditions] = 2
+        return signals
+    
+    @staticmethod
+    def smc_strategy(data: pd.DataFrame, window: int = 10, buy_threshold: float = 0.005, sell_threshold: float = 0.005) -> pd.Series:
+        signals = pd.Series(0, index=data.index)
+        support, resistance = smc.support_resistance_levels(data['Open'], data['High'], data['Low'], data['Close'], window=window)
+        
+        support_pct_distance = (data['Close'] - support) / support
+        resistance_pct_distance = (resistance - data['Close']) / resistance
+
+        buy_conditions = support_pct_distance > buy_threshold
+        sell_conditions = resistance_pct_distance > sell_threshold
+        signals[buy_conditions] = 3
         signals[sell_conditions] = 1
         return signals
-
-    @staticmethod
-    def volatility_breakout_strategy(data: pd.DataFrame, atr_period: int = 14, atr_lookback: int = 30, atr_threshold: float = 1.2, donchian_period: int = 20, ema_fast: int = 20, ema_slow: int = 50, use_rsi_filter: int = 1, rsi_threshold: float = 70.0) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        atr = ta.atr(data['High'], data['Low'], data['Close'], timeperiod=atr_period)
-        donchian_high, donchian_middle, donchian_low = ta.donchian_channel(data['High'], data['Low'], timeperiod=donchian_period)
-        ema_fast_line = ta.ema(data['Close'], ema_fast)
-        ema_slow_line = ta.ema(data['Close'], ema_slow)
-        atr_min = atr.rolling(window=atr_lookback).min()
-        if bool(use_rsi_filter):
-            rsi = ta.rsi(data['Close'])
-        for i in range(atr_lookback, len(data)):
-            volatility_low = atr.iloc[i] < (atr_min.iloc[i] * atr_threshold)
-            breakout_long = data['Close'].iloc[i] > donchian_high.iloc[i-1]
-            trend_up = ema_fast_line.iloc[i] > ema_slow_line.iloc[i]
-            rsi_ok = True
-            if use_rsi_filter:
-                rsi_ok = rsi.iloc[i] < rsi_threshold
-            if volatility_low and breakout_long and trend_up and rsi_ok:
-                signals.iloc[i] = 3
-            elif volatility_low and data['Close'].iloc[i] < donchian_low.iloc[i-1] and not trend_up:
-                if not use_rsi_filter or rsi.iloc[i] > (100 - rsi_threshold):
-                    signals.iloc[i] = 1
-        return signals
-
-    @staticmethod
-    def high_rr_momentum_strategy(data: pd.DataFrame, bb_period: int = 20, bb_std: float = 2.0, volume_multiplier: float = 1.5, ema_trend: int = 50, min_consolidation_bars: int = 10) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        bb_upper, bb_middle, bb_lower = ta.bbands(data['Close'], timeperiod=bb_period, nbdevup=bb_std, nbdevdn=bb_std)
-        bb_width = (bb_upper - bb_lower) / bb_middle
-        ema_trend_line = ta.ema(data['Close'], ema_trend)
-        avg_volume = data['Volume'].rolling(window=20).mean()
-        bb_width_min = bb_width.rolling(window=30).min()
-        for i in range(30, len(data)):
-            squeeze = bb_width.iloc[i] < (bb_width_min.iloc[i] * 1.3)
-            breakout_up = data['Close'].iloc[i] > bb_upper.iloc[i-1]
-            breakout_down = data['Close'].iloc[i] < bb_lower.iloc[i-1]
-            uptrend = data['Close'].iloc[i] > ema_trend_line.iloc[i]
-            volume_spike = data['Volume'].iloc[i] > (avg_volume.iloc[i] * volume_multiplier)
-            if squeeze and breakout_up and uptrend and volume_spike:
-                signals.iloc[i] = 3
-            elif squeeze and breakout_down and not uptrend and volume_spike:
-                signals.iloc[i] = 1
-        return signals
-
+    
     @staticmethod
     def nn_strategy(data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
         from brains.time_series.single_predictors.classifier_model import load_model
@@ -870,54 +817,29 @@ class Strategy:
         return signals
 
 if __name__ == "__main__":
-    # Test compound returns (reinvestment)
-    backtest_compound = VectorizedBacktesting(
-        initial_capital=400,
-        slippage_pct=0.0,
-        commission_pct=0.0,
-        reinvest=True
-    )
-    backtest_compound.fetch_data(
-        symbol="BTC-USDT",
-        chunks=10,
-        interval="5min",
-        age_days=0
-    )
-    
-    backtest_compound.run_strategy(Strategy.ETHBTC_trader, 
-                          verbose=True, 
-                          chunks=backtest_compound.chunks, 
-                          interval=backtest_compound.interval, 
-                          age_days=backtest_compound.age_days,
-                          lower_zscore_threshold=-0.33,
-                          upper_zscore_threshold=0.101)
-    print("[bold green]COMPOUND RETURNS (REINVEST):[/bold green]")
-    print(backtest_compound.get_performance_metrics())
-    
-    # Test linear returns (no reinvestment)
-    backtest_linear = VectorizedBacktesting(
+    backtest = VectorizedBacktesting(
         initial_capital=400,
         slippage_pct=0.0,
         commission_pct=0.0,
         reinvest=False
     )
-    backtest_linear.fetch_data(
+    backtest.fetch_data(
         symbol="BTC-USDT",
-        chunks=10,
-        interval="5min",
+        chunks=365,
+        interval="5m",
         age_days=0
     )
     
-    backtest_linear.run_strategy(Strategy.ETHBTC_trader, 
-                          verbose=True, 
-                          chunks=backtest_linear.chunks, 
-                          interval=backtest_linear.interval, 
-                          age_days=backtest_linear.age_days,
-                          lower_zscore_threshold=-0.33,
-                          upper_zscore_threshold=0.101)
-    print("[bold yellow]LINEAR RETURNS (NO REINVEST):[/bold yellow]")
-    print(backtest_linear.get_performance_metrics())
+    # backtest.run_strategy(Strategy.ETHBTC_trader, 
+    #                       verbose=True, 
+    #                       chunks=backtest.chunks, 
+    #                       interval=backtest.interval, 
+    #                       age_days=backtest.age_days,
+    #                       lower_zscore_threshold=-0.33,
+    #                       upper_zscore_threshold=0.101)
+
+    backtest.run_strategy(Strategy.smc_strategy)
+
+    print(backtest.get_performance_metrics())
     
-    # Compare both on same plot would require modification to plotting function
-    backtest_compound.plot_performance(advanced=False)
-    backtest_linear.plot_performance(advanced=False)
+    backtest.plot_performance(advanced=True)
