@@ -292,15 +292,16 @@ class VectorizedBacktesting:
                     prev_pos = self.data['Position'].iloc[i]
                     current_pos = self.data['Position'].iloc[i + 1]
                     
-                    if current_pos == 3 and prev_pos != 3:  # Entering long from any other position
-                        long_entries.append(self.data.index[i + 1])
-                        long_entry_values.append(asset_value.iloc[i + 1])
-                    elif current_pos == 1 and prev_pos != 1:  # Entering short from any other position
-                        short_entries.append(self.data.index[i + 1])
-                        short_entry_values.append(asset_value.iloc[i + 1])
-                    elif current_pos == 2 and prev_pos != 2:  # Exiting to flat from any position
-                        flats.append(self.data.index[i + 1])
-                        flat_values.append(asset_value.iloc[i + 1])
+                    if i < len(self.data):
+                        if current_pos == 3 and prev_pos != 3:
+                            long_entries.append(self.data.index[i])
+                            long_entry_values.append(asset_value.iloc[i])
+                        elif current_pos == 1 and prev_pos != 1:
+                            short_entries.append(self.data.index[i])
+                            short_entry_values.append(asset_value.iloc[i])
+                        elif current_pos == 2 and prev_pos != 2:
+                            flats.append(self.data.index[i])
+                            flat_values.append(asset_value.iloc[i])
 
             # Add long entry signals (green triangles up)
             if long_entries:
@@ -750,7 +751,7 @@ class Strategy:
         return signals
     
     @staticmethod
-    def smc_strategy(data: pd.DataFrame, window: int = 10, buy_threshold: float = 0.005, sell_threshold: float = 0.005) -> pd.Series:
+    def sr_strategy(data: pd.DataFrame, window: int = 10, buy_threshold: float = 0.005, sell_threshold: float = 0.005) -> pd.Series:
         signals = pd.Series(0, index=data.index)
         support, resistance = smc.support_resistance_levels(data['Open'], data['High'], data['Low'], data['Close'], window=window)
         
@@ -821,12 +822,12 @@ if __name__ == "__main__":
         initial_capital=400,
         slippage_pct=0.0,
         commission_pct=0.0,
-        reinvest=False
+        reinvest=True
     )
     backtest.fetch_data(
         symbol="BTC-USDT",
-        chunks=365,
-        interval="5m",
+        chunks=10,
+        interval="15m",
         age_days=0
     )
     
@@ -838,8 +839,8 @@ if __name__ == "__main__":
     #                       lower_zscore_threshold=-0.33,
     #                       upper_zscore_threshold=0.101)
 
-    backtest.run_strategy(Strategy.smc_strategy)
+    backtest.run_strategy(Strategy.perfect_strategy)
 
     print(backtest.get_performance_metrics())
     
-    backtest.plot_performance(advanced=True)
+    backtest.plot_performance(advanced=False)
