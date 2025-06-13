@@ -52,7 +52,7 @@ def get_portfolio_value(position: pd.Series, close_prices: pd.Series, initial_ca
     result = initial_capital * cumulative_returns
     return result
 
-def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int = None, return_interval: str = None):
+def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int, return_interval: str = None):
     """Calculate annualized Jensen's alpha and beta using regression."""
     strategy_returns = get_returns(position, close_prices)
     market_returns = close_prices.pct_change()
@@ -70,16 +70,33 @@ def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int = N
     model = sm.OLS(y, X).fit()
     alpha = model.params[0]  # Intercept is Jensen's alpha
     beta = model.params[1]   # Slope is beta
+
+    if return_interval == '1m':
+        bars_per_day = 1440
+    elif return_interval == '3m':
+        bars_per_day = 480
+    elif return_interval == '5m':
+        bars_per_day = 288
+    elif return_interval == '15m':
+        bars_per_day = 96
+    elif return_interval == '30m':
+        bars_per_day = 48
+    elif return_interval == '1h':
+        bars_per_day = 24
+    else:
+        bars_per_day = 1
+
     if n_days and n_days > 0:
-        alpha = alpha * (365 / n_days)
+        alpha = alpha * (bars_per_day * 365/n_days)
+
     return alpha, beta
 
-def get_alpha(position: pd.Series, close_prices: pd.Series, n_days: int = None, return_interval: str = None) -> float:
+def get_alpha(position: pd.Series, close_prices: pd.Series, n_days: int, return_interval: str = None) -> float:
     """Return annualized Jensen's alpha."""
     alpha, _ = get_alpha_beta(position, close_prices, n_days=n_days, return_interval=return_interval)
     return alpha
 
-def get_beta(position: pd.Series, close_prices: pd.Series, n_days: int = None, return_interval: str = None) -> float:
+def get_beta(position: pd.Series, close_prices: pd.Series, n_days: int, return_interval: str = None) -> float:
     """Return beta from regression."""
     _, beta = get_alpha_beta(position, close_prices, n_days=n_days, return_interval=return_interval)
     return beta
