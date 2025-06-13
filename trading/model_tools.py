@@ -18,14 +18,14 @@ from rich import print
 import technical_analysis as ta
 import smc_analysis as smc
 
-def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cache: bool = True, cache_expiry_hours: int = 24):
+def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24):
     print("[yellow]FETCHING DATA[/yellow]")
     
     # Create a temp directory for market data
     temp_dir = os.path.join(tempfile.gettempdir(), "market_data")
     os.makedirs(temp_dir, exist_ok=True)
     
-    cache_key = f"{ticker}_{chunks}_{interval}_{age_days}_{kucoin}"
+    cache_key = f"{ticker}_{chunks}_{interval}_{age_days}_{data_source}"
     cache_hash = hashlib.sha256(cache_key.encode()).hexdigest()
     cache_file = os.path.join(temp_dir, f"market_data_{cache_hash}.parquet")
     
@@ -44,7 +44,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
                         "chunks": chunks,
                         "interval": interval,
                         "age_days": age_days,
-                        "kucoin": kucoin,
+                        "data_source": data_source,
                         "cached_time": str(file_modified_time),
                         "rows": len(cached_data),
                         "accessed_time": str(datetime.now())
@@ -57,7 +57,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
             print(f"[yellow]Cache expired ({file_age_hours:.1f} hours old). Fetching fresh data...[/yellow]")
     
     print("[green]DOWNLOADING DATA[/green]")
-    if not kucoin:
+    if data_source == "yfinance":
         data = pd.DataFrame()
         times = []
         for x in range(chunks):
@@ -78,12 +78,27 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
         print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
 
         data.sort_index(inplace=True)
-        data.columns = data.columns.droplevel(1)
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.droplevel(1)
         data.reset_index(inplace=True)
         data.rename(columns={'index': 'Datetime'}, inplace=True)
         data.rename(columns={'Date': 'Datetime'}, inplace=True)
         data = pd.DataFrame(data)  
-    elif kucoin:
+    elif data_source == "kucoin":
+        # parse interval format
+        if "m" in interval:
+            interval = interval.replace("m", "min")
+        elif "h" in interval:
+            interval = interval.replace("h", "hour")
+        elif "d" in interval:
+            interval = interval.replace("d", "day")
+        elif "w" in interval:
+            interval = interval.replace("w", "week")
+        elif "M" in interval:
+            interval = interval.replace("M", "month")
+        else:
+            raise ValueError(f"Unknown interval: {interval}. Choose from '1m', '1h', '1d', '1w', '1M'.")
+
         data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         times = []
         
@@ -136,6 +151,46 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
         data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
         data.sort_values('Datetime', inplace=True)
         data.reset_index(drop=True, inplace=True)
+    elif data_source == "birdeye":
+        data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
+        times = []
+
+        chunksize = 1440
+        
+        progress_bar = tqdm(total=chunks, desc="BIRDEYE PROGRESS", ascii="#>")
+        end_time = datetime.now() - timedelta(minutes=chunksize*chunks) - timedelta(days=age_days)
+        start_time = end_time - timedelta(minutes=chunksize*chunks) - timedelta(days=age_days)
+        
+        url = f"https://public-api.birdeye.so/defi/v3/ohlcv?address={ticker}&type={interval}&currency=usd&time_from={start_time.timestamp()}&time_to={end_time.timestamp()}"
+
+        headers = {
+            "accept": "application/json",
+            "x-chain": "solana",
+            "X-API-KEY": os.getenv("BIRDEYE_API_KEY")
+        }
+
+        response = requests.get(url, headers=headers)
+        print(url, headers, response.json())
+        if data.empty:
+            data = temp_data
+        else:
+            data = pd.concat([data, temp_data])
+        times.append(start_time)
+        times.append(end_time)
+
+        progress_bar.update(1)
+        progress_bar.close()
+        
+        earliest = min(times)
+        latest = max(times)
+        difference = latest - earliest
+        print(f"{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
+        
+        data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
+        data.sort_values('Datetime', inplace=True)
+        data.reset_index(drop=True, inplace=True)
+    else:
+        raise ValueError(f"Unknown data_source: {data_source}. Choose from 'kucoin', 'birdeye', 'yfinance'.")
     
     if use_cache:
         try:
@@ -148,7 +203,7 @@ def fetch_data(ticker, chunks, interval, age_days, kucoin: bool = True, use_cach
                     "chunks": chunks,
                     "interval": interval,
                     "age_days": age_days,
-                    "kucoin": kucoin,
+                    "data_source": data_source,
                     "cached_time": str(datetime.now()),
                     "rows": len(data)
                 }, f, indent=2)
@@ -625,6 +680,4 @@ def loss_plot(loss_history):
     return fig
 
 if __name__ == "__main__":
-    data = fetch_data("BTC-USDT", 1, "1min", 0, kucoin=True)
-    out_df = prepare_data_reinforcement(data, lagged_length=20)
-    bad_data_check(out_df)
+    data = fetch_data(ticker="So11111111111111111111111111111111111111112", chunks=10, interval="1m", age_days=1, data_source="birdeye")
