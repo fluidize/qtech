@@ -46,15 +46,14 @@ def get_benchmark_total_return(close_prices: pd.Series) -> float:
     cum_return = (1 + returns).prod() - 1
     return cum_return
 
-
 def get_portfolio_value(position: pd.Series, close_prices: pd.Series, initial_capital: float) -> pd.Series:
     """Calculate portfolio value from position, close prices, and initial capital."""
     cumulative_returns = get_cumulative_returns(position, close_prices)
     result = initial_capital * cumulative_returns
     return result
 
-def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int = None, annualize: bool = True):
-    """Calculate Jensen's alpha and beta using regression, annualized and scaled by simulation days."""
+def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int = None, return_interval: str = None):
+    """Calculate annualized Jensen's alpha and beta using regression."""
     strategy_returns = get_returns(position, close_prices)
     market_returns = close_prices.pct_change()
 
@@ -71,18 +70,18 @@ def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int = N
     model = sm.OLS(y, X).fit()
     alpha = model.params[0]  # Intercept is Jensen's alpha
     beta = model.params[1]   # Slope is beta
-    if annualize and n_days > 0:
+    if n_days and n_days > 0:
         alpha = alpha * (365 / n_days)
     return alpha, beta
 
-def get_alpha(position: pd.Series, close_prices: pd.Series, n_days: int = None, annualize: bool = True) -> float:
+def get_alpha(position: pd.Series, close_prices: pd.Series, n_days: int = None, return_interval: str = None) -> float:
     """Return annualized Jensen's alpha."""
-    alpha, _ = get_alpha_beta(position, close_prices, annualize=annualize, n_days=n_days)
+    alpha, _ = get_alpha_beta(position, close_prices, n_days=n_days, return_interval=return_interval)
     return alpha
 
-def get_beta(position: pd.Series, close_prices: pd.Series) -> float:
+def get_beta(position: pd.Series, close_prices: pd.Series, n_days: int = None, return_interval: str = None) -> float:
     """Return beta from regression."""
-    _, beta = get_alpha_beta(position, close_prices, annualize=False)
+    _, beta = get_alpha_beta(position, close_prices, n_days=n_days, return_interval=return_interval)
     return beta
 
 def get_active_return(position: pd.Series, close_prices: pd.Series) -> pd.Series:
@@ -111,21 +110,56 @@ def get_max_drawdown(position: pd.Series, close_prices: pd.Series, initial_capit
     result = drawdown.min()
     return result
 
-def get_sharpe_ratio(position: pd.Series, close_prices: pd.Series, risk_free_rate: float = 0.00) -> float:
-    """Calculate per-period Sharpe ratio from position, close prices, and risk-free rate."""
+def get_sharpe_ratio(position: pd.Series, close_prices: pd.Series, return_interval: int, n_days: int, risk_free_rate: float = 0.00) -> float:
+    """Calculate annualized Sharpe ratio from position, close prices, and risk-free rate."""
     returns = get_returns(position, close_prices)
     excess_returns = returns - risk_free_rate
     result = excess_returns.mean() / excess_returns.std(ddof=1)
+
+    if return_interval == '1m':
+        bars_per_day = 1440
+    elif return_interval == '3m':
+        bars_per_day = 480
+    elif return_interval == '5m':
+        bars_per_day = 288
+    elif return_interval == '15m':
+        bars_per_day = 96
+    elif return_interval == '30m':
+        bars_per_day = 48
+    elif return_interval == '1h':
+        bars_per_day = 24
+    else:
+        bars_per_day = 1
+
+    result = result * np.sqrt(bars_per_day * 365/n_days)
+    
     return result
 
-def get_sortino_ratio(position: pd.Series, close_prices: pd.Series, risk_free_rate: float = 0.00) -> float:
-    """Calculate per-period Sortino ratio from position, close prices, and risk-free rate."""
+def get_sortino_ratio(position: pd.Series, close_prices: pd.Series, return_interval: str, n_days: int, risk_free_rate: float = 0.00) -> float:
+    """Calculate annualized Sortino ratio from position, close prices, and risk-free rate."""
     returns = get_returns(position, close_prices)
     excess_returns = returns - risk_free_rate
     downside_returns = excess_returns[excess_returns < 0]
     if downside_returns.std(ddof=1) == 0:
         return float('nan')
     result = excess_returns.mean() / downside_returns.std(ddof=1)
+
+    if return_interval == '1m':
+        bars_per_day = 1440
+    elif return_interval == '3m':
+        bars_per_day = 480
+    elif return_interval == '5m':
+        bars_per_day = 288
+    elif return_interval == '15m':
+        bars_per_day = 96
+    elif return_interval == '30m':
+        bars_per_day = 48
+    elif return_interval == '1h':
+        bars_per_day = 24
+    else:
+        bars_per_day = 1
+
+    result = result * np.sqrt(bars_per_day * 365/n_days)
     return result
 
 def get_trade_pnls(position: pd.Series, close_prices: pd.Series) -> List[float]:
@@ -237,11 +271,28 @@ def get_breakeven_rate_from_pnls(pnl_list: List[float]) -> float:
     result = 1 / (rr_ratio + 1) if rr_ratio > 0 else 0
     return result
 
-def get_information_ratio(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate information ratio from position and close prices (per-period, not annualized)."""
+def get_information_ratio(position: pd.Series, close_prices: pd.Series, return_interval: str, n_days: int) -> float:
+    """Calculate annualized information ratio from position and close prices."""
     active_returns = get_active_return(position, close_prices).dropna()
     mean_active_return = active_returns.mean()
     tracking_error = active_returns.std(ddof=1)
     if tracking_error == 0:
         return float('nan')
-    return mean_active_return / tracking_error
+
+    if return_interval == '1m':
+        bars_per_day = 1440
+    elif return_interval == '3m':
+        bars_per_day = 480
+    elif return_interval == '5m':
+        bars_per_day = 288
+    elif return_interval == '15m':
+        bars_per_day = 96
+    elif return_interval == '30m':
+        bars_per_day = 48
+    elif return_interval == '1h':
+        bars_per_day = 24
+    else:
+        bars_per_day = 1
+
+    result = (mean_active_return / tracking_error) * np.sqrt(bars_per_day * 365/n_days)
+    return result
