@@ -11,7 +11,7 @@ sys.path.append("trading")
 import model_tools as mt
 import technical_analysis as ta
 
-data = mt.fetch_data(ticker="BTC-USDT", interval="1hour", chunks=10, age_days=0)
+data = mt.fetch_data(ticker="BTC-USDT", interval="1day", chunks=100, age_days=0)
 
 import numpy as np
 from scipy.stats import norm
@@ -40,7 +40,7 @@ class VolatilityAnalysis:
 
     def get_historical_volatility(self) -> float:
         """Unscaled historical volatility (returns float or last value of Series)"""
-        hv = ta.historical_volatility(ta.log_return(self.data['Close']), df=self.data)
+        hv = ta.historical_volatility(ta.log_return(self.data['Close']), df=self.data, output_period=365)
         if isinstance(hv, pd.Series):
             return hv.iloc[-1]
         return float(hv)
@@ -68,37 +68,42 @@ class VolatilityAnalysis:
             print(f"Parameters: S={S}, K={K}, T={T}, market_price={market_price}")
             return None
 
-    def plot_volatility_bands(self, forecast_days: int = 30):
+    def plot_volatility_bands(self):
         """
-        Plotly: Plot candlesticks for the full data and overlay 1σ, 2σ, 3σ volatility bands for the next forecast_days.
+        Plotly: Plot candlesticks for the full data in log space and overlay 1σ, 2σ, 3σ volatility bands for the next days_to_contract_expiry.
         Bands are calculated using historical volatility (log returns, annualized).
         """
         import plotly.graph_objects as go
         df = self.data.copy()
-        last_close = df['Close'].iloc[-1]
+        # Compute log prices
+        df['log_Open'] = np.log(df['Open'])
+        df['log_High'] = np.log(df['High'])
+        df['log_Low'] = np.log(df['Low'])
+        df['log_Close'] = np.log(df['Close'])
+        last_log_close = df['log_Close'].iloc[-1]
         hist_vol = self.get_historical_volatility()
-        daily_vol = hist_vol / np.sqrt(252)
-        days = np.arange(1, forecast_days + 1)
+        daily_vol = hist_vol / np.sqrt(365)
+        days = np.arange(1, self.days_to_contract_expiry + 1)
         band_colors = ['#66c2a5', '#fc8d62', '#8da0cb']
-        future_dates = pd.date_range(df['Datetime'].iloc[-1], periods=forecast_days+1, freq='D')[1:]
-        # Candlestick trace
+        future_dates = pd.date_range(df['Datetime'].iloc[-1], periods=self.days_to_contract_expiry+1, freq='D')[1:]
+        # Candlestick trace in log space
         fig = go.Figure(data=[
             go.Candlestick(
                 x=df['Datetime'],
-                open=df['Open'],
-                high=df['High'],
-                low=df['Low'],
-                close=df['Close'],
-                name='Candles',
+                open=df['log_Open'],
+                high=df['log_High'],
+                low=df['log_Low'],
+                close=df['log_Close'],
+                name='Log Candles',
                 increasing_line_color='green',
                 decreasing_line_color='red',
                 showlegend=False
             )
         ])
-        # Overlay bands for the next N days
+        # Overlay bands for the next N days (already in log space)
         for k, color in zip([1,2,3], band_colors):
-            upper = last_close * np.exp(k * daily_vol * np.sqrt(days))
-            lower = last_close * np.exp(-k * daily_vol * np.sqrt(days))
+            upper = last_log_close + k * daily_vol * np.sqrt(days)
+            lower = last_log_close - k * daily_vol * np.sqrt(days)
             fig.add_trace(go.Scatter(
                 x=future_dates, y=upper, mode='lines',
                 line=dict(color=color, dash='dash'),
@@ -110,13 +115,13 @@ class VolatilityAnalysis:
                 name=f'-{k}σ',
             ))
         fig.update_layout(
-            title='Volatility Bands (Plotly)',
-            yaxis_title='Price',
+            title='Volatility Bands (Log Price, Plotly)',
+            yaxis_title='log(Price)',
             xaxis_title='Date',
             xaxis_rangeslider_visible=False,
             legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
         )
         fig.show()
 
-VA = VolatilityAnalysis(data, 300)
+VA = VolatilityAnalysis(data, 15)
 VA.plot_volatility_bands()
