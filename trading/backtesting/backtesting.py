@@ -252,7 +252,24 @@ class VectorizedBacktesting:
         summary = self.get_performance_metrics()
 
         if not advanced:
-            fig = go.Figure()
+            from plotly.subplots import make_subplots
+            
+            # Create subplot with secondary y-axis
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            # Add candlestick chart on primary y-axis (original price scale)
+            fig.add_trace(
+                go.Candlestick(
+                    x=self.data.index,
+                    open=self.data['Open'],
+                    high=self.data['High'],
+                    low=self.data['Low'],
+                    close=self.data['Close'],
+                    name='Price',
+                    yaxis='y'
+                ),
+                secondary_y=False
+            )
             
             portfolio_value = self.data['Portfolio_Value'].values
             # Calculate asset value using the same reinvestment logic as the strategy
@@ -263,19 +280,59 @@ class VectorizedBacktesting:
                 asset_linear_profit = (self.initial_capital * self.data['Return']).cumsum()
                 asset_value = self.initial_capital + asset_linear_profit
 
-            fig.add_trace(go.Scatter(
-                x=self.data.index,
-                y=portfolio_value,
-                mode='lines',
-                name='Strategy Portfolio',
-            ))
+            # Add portfolio performance on secondary y-axis
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=portfolio_value,
+                    mode='lines',
+                    name='Strategy Portfolio',
+                    line=dict(width=2),
+                    yaxis='y2'
+                ),
+                secondary_y=True
+            )
             
-            fig.add_trace(go.Scatter(
-                x=self.data.index,
-                y=asset_value,
-                mode='lines',
-                name=f'Buy & Hold ({"Compound" if self.reinvest else "Linear"})'
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=asset_value,
+                    mode='lines',
+                    name=f'Buy & Hold ({"Compound" if self.reinvest else "Linear"})',
+                    line=dict(dash='dash', width=2),
+                    yaxis='y2'
+                ),
+                secondary_y=True
+            )
+
+            # Add support/resistance levels on primary y-axis (original price scale)
+            support_levels, resistance_levels = smc.support_resistance_levels(
+                self.data['Open'], self.data['High'], self.data['Low'], self.data['Close']
+            )
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=support_levels,
+                    mode='lines',
+                    name='Support',
+                    line=dict(color='green', dash='dot'),
+                    yaxis='y'
+                ),
+                secondary_y=False
+            )
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=resistance_levels,
+                    mode='lines',
+                    name='Resistance',
+                    line=dict(color='red', dash='dot'),
+                    yaxis='y'
+                ),
+                secondary_y=False
+            )
 
             position_changes = np.diff(self.data['Position'].values)
             
@@ -283,9 +340,9 @@ class VectorizedBacktesting:
             long_entries = []
             short_entries = []
             flats = []
-            long_entry_values = []
-            short_entry_values = []
-            flat_values = []
+            long_entry_prices = []
+            short_entry_prices = []
+            flat_prices = []
             
             for i in range(len(position_changes)):
                 if position_changes[i] != 0:  # Any position change
@@ -293,60 +350,83 @@ class VectorizedBacktesting:
                     current_pos = self.data['Position'].iloc[i + 1]
                     
                     if i < len(self.data):
+                        # Use price data for signal markers (on primary y-axis)
+                        price_at_signal = self.data['Close'].iloc[i]
+                        
                         if current_pos == 3 and prev_pos != 3:
                             long_entries.append(self.data.index[i])
-                            long_entry_values.append(asset_value.iloc[i])
+                            long_entry_prices.append(price_at_signal)
                         elif current_pos == 1 and prev_pos != 1:
                             short_entries.append(self.data.index[i])
-                            short_entry_values.append(asset_value.iloc[i])
+                            short_entry_prices.append(price_at_signal)
                         elif current_pos == 2 and prev_pos != 2:
                             flats.append(self.data.index[i])
-                            flat_values.append(asset_value.iloc[i])
+                            flat_prices.append(price_at_signal)
 
-            # Add long entry signals (green triangles up)
+            # Add long entry signals (green triangles up) on price axis
             if long_entries:
-                fig.add_trace(go.Scatter(
-                    x=long_entries,
-                    y=long_entry_values,
-                    mode='markers',
-                    name='Long Entry',
-                    marker=dict(color='green', size=10, symbol='triangle-up')
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=long_entries,
+                        y=long_entry_prices,
+                        mode='markers',
+                        name='Long Entry',
+                        marker=dict(color='green', size=10, symbol='triangle-up'),
+                        yaxis='y'
+                    ),
+                    secondary_y=False
+                )
 
-            # Add short entry signals (red triangles down) 
+            # Add short entry signals (red triangles down) on price axis
             if short_entries:
-                fig.add_trace(go.Scatter(
-                    x=short_entries,
-                    y=short_entry_values,
-                    mode='markers',
-                    name='Short Entry',
-                    marker=dict(color='red', size=10, symbol='triangle-down')
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=short_entries,
+                        y=short_entry_prices,
+                        mode='markers',
+                        name='Short Entry',
+                        marker=dict(color='red', size=10, symbol='triangle-down'),
+                        yaxis='y'
+                    ),
+                    secondary_y=False
+                )
 
-            # Add flat signals (yellow circles)
+            # Add flat signals (yellow circles) on price axis
             if flats:
-                fig.add_trace(go.Scatter(
-                    x=flats,
-                    y=flat_values,
-                    mode='markers',
-                    name='Exit to Flat',
-                    marker=dict(color='yellow', size=8, symbol='circle')
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=flats,
+                        y=flat_prices,
+                        mode='markers',
+                        name='Exit to Flat',
+                        marker=dict(color='yellow', size=8, symbol='circle'),
+                        yaxis='y'
+                    ),
+                    secondary_y=False
+                )
             
+            # Update layout for dual y-axes
             fig.update_layout(
-                title=f'{self.symbol} {self.chunks} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | BE: {summary["Breakeven_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
+                title=f'{self.symbol} {self.chunks} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis_title='Date',
-                yaxis_title='Value',
                 showlegend=True,
                 template="plotly_dark",
                 legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1,
-                        xanchor="right",
-                        x=1
-                        )
-                    )
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1,
+                    xanchor="right",
+                    x=1
+                ),
+                # xaxis=dict(
+                #     rangeslider=dict(visible=False),
+                #     rangeselector=dict(visible=False)
+                # )
+            )
+            
+            # Set y-axes titles
+            fig.update_yaxes(title_text="Price ($)", secondary_y=False)
+            fig.update_yaxes(title_text="Portfolio Value ($)", secondary_y=True)
         else: # Advanced Plotting
             start = time.time()
             fig = go.Figure().set_subplots(
@@ -758,8 +838,9 @@ class Strategy:
         support_pct_distance = (data['Close'] - support) / support
         resistance_pct_distance = (resistance - data['Close']) / resistance
 
-        buy_conditions = support_pct_distance > buy_threshold
-        sell_conditions = resistance_pct_distance > sell_threshold
+        #trigger off bounces
+        buy_conditions = support_pct_distance >= buy_threshold
+        sell_conditions = resistance_pct_distance >= sell_threshold
         signals[buy_conditions] = 3
         signals[sell_conditions] = 1
         return signals
@@ -827,7 +908,7 @@ if __name__ == "__main__":
     backtest.fetch_data(
         symbol="BTC-USDT",
         chunks=10,
-        interval="15m",
+        interval="5m",
         age_days=0
     )
     
@@ -839,7 +920,7 @@ if __name__ == "__main__":
     #                       lower_zscore_threshold=-0.33,
     #                       upper_zscore_threshold=0.101)
 
-    backtest.run_strategy(Strategy.perfect_strategy)
+    backtest.run_strategy(Strategy.sr_strategy)
 
     print(backtest.get_performance_metrics())
     
