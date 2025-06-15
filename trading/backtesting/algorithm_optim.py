@@ -12,13 +12,13 @@ import sys
 from backtesting import VectorizedBacktesting, Strategy
 import optuna
 
-class AlgorithmGridSearch:
+class GridSearch:
     def __init__(
         self,
         engine: VectorizedBacktesting,
         strategy_func: Callable,
         param_grid: Dict[str, List[Any]],
-        metric: str = "Total Return",
+        metric: str = "Total_Return",
     ):
         """
         Initialize the grid search framework.
@@ -136,8 +136,8 @@ class AlgorithmGridSearch:
         self.engine.run_strategy(self.strategy_func, **best_params)
         return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
 
-class AlgorithmBayesianOptimization:
-    def __init__(self, engine: VectorizedBacktesting, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total Return", n_trials: int = 30, direction: str = "maximize"):
+class BayesianOptimizer:
+    def __init__(self, engine: VectorizedBacktesting, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize"):
         self.engine = engine
         self.strategy_func = strategy_func
         self.param_space = param_space  # e.g., {"fast_period": (1, 50), "slow_period": (1, 50)}
@@ -173,6 +173,7 @@ class AlgorithmBayesianOptimization:
         float_exceptions = [
             {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold", "momentum_threshold"]},
             {"strategy": "ETHBTC_trader", "params": ["lower_zscore_threshold", "upper_zscore_threshold"]},
+            {"strategy": "sr_strategy", "params": ["buy_threshold", "sell_threshold"]},
         ] #float exceptions
         
         fixed_param_exceptions = [
@@ -195,7 +196,7 @@ class AlgorithmBayesianOptimization:
 
     def run(self, save_params: bool = False):
         study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
-        study.optimize(self.objective_function, n_trials=self.n_trials, callbacks=[self.save_callback])
+        study.optimize(self.objective_function, n_trials=self.n_trials)
         self.best_params = study.best_params
         self.best_metrics = study.best_value
         if save_params:
@@ -212,9 +213,9 @@ class AlgorithmBayesianOptimization:
     def get_best_metrics(self):
         return self.best_metrics
 
-class AlgorithmAssignmentOptimizer:
+class AssignmentOptimizer:
     """ Instead of optimizing the algorithm itself, find the best pair fit for the given algorithm."""
-    def __init__(self, engine: VectorizedBacktesting, pairs: List[str], chunks: int, interval: str, age_days: int, strategy_func: Callable, params: Dict[str, List[Any]], metric: str = "Total Return"):
+    def __init__(self, engine: VectorizedBacktesting, pairs: List[str], chunks: int, interval: str, age_days: int, strategy_func: Callable, params: Dict[str, List[Any]], metric: str = "Total_Return"):
         self.engine = engine
         self.pairs = pairs
         self.chunks = chunks
@@ -263,33 +264,144 @@ class AlgorithmAssignmentOptimizer:
         self.engine.run_strategy(self.strategy_func, **self.params)
         return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
 
+class AlgorithmOptimizer:
+    def __init__(self, symbol: str, chunks: int, age_days: int):
+        self.engine = VectorizedBacktesting(
+            instance_name="AlgorithmOptimizer",
+            initial_capital=10000,
+            slippage_pct=0.03,
+            commission_pct=0.001,
+            reinvest=False
+        )
+
+        self.symbol = symbol
+        self.chunks = chunks
+        self.age_days = age_days
+        self.results = {}
+        self.strategy_func = None
+
+    def optimize(self, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize", save_params: bool = False):
+        self.strategy_func = strategy_func
+        
+        timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+        console = Console()
+        table = Table(title="Timeframe Optimization Results")
+        table.add_column("Timeframe", style="cyan")
+        table.add_column("Best Metric", style="green")
+        table.add_column("Best Parameters", style="blue")
+
+        for timeframe in timeframes:
+            console.print(f"\n[bold blue]Optimizing for {timeframe} timeframe...[/bold blue]")
+            
+            self.engine.fetch_data(
+                symbol=self.symbol,
+                chunks=self.chunks,
+                interval=timeframe,
+                age_days=self.age_days
+            )
+
+            bayesian_op = BayesianOptimizer(
+                engine=self.engine,
+                strategy_func=strategy_func,
+                param_space=param_space,
+                metric=metric,
+                n_trials=n_trials,
+                direction=direction
+            )
+
+            best_metric = bayesian_op.run(save_params=False)
+            best_params = bayesian_op.get_best_params()
+            
+            self.results[timeframe] = {
+                "best_metric": best_metric,
+                "best_params": best_params
+            }
+
+            table.add_row(
+                timeframe,
+                f"{best_metric:.2%}",
+                str(best_params)
+            )
+
+        console.print("\n")
+        console.print(table)
+        
+        # Print sorted results by metric
+        sorted_results = sorted(
+            self.results.items(),
+            key=lambda x: x[1]["best_metric"],
+            reverse=True
+        )
+        
+        console.print("\n[bold green]Timeframe Performance Ranking:[/bold green]")
+        for i, (tf, result) in enumerate(sorted_results, 1):
+            console.print(f"{i}. {tf}: {result['best_metric']:.2%}")
+            
+        # Only save parameters for the best timeframe if save_params is True
+        if save_params:
+            best_timeframe = self.get_best_timeframe()
+            best_params = self.results[best_timeframe]["best_params"]
+            with open(f"{self.symbol}-{best_timeframe}-{strategy_func.__name__}-{metric}-{n_trials}trials-params.json", "w") as f:
+                json.dump(best_params, f)
+            
+        return self.results
+
+    def get_best_timeframe(self) -> str:
+        if not self.results:
+            raise ValueError("No optimization results available. Run optimize() first.")
+        
+        return max(self.results.items(), key=lambda x: x[1]["best_metric"])[0]
+
+    def get_best_params_with_timeframe(self) -> tuple[Dict[str, Any], str]:
+        if not self.results:
+            raise ValueError("No optimization results available. Run optimize() first.")
+        
+        best_timeframe = self.get_best_timeframe()
+        best_params = self.results[best_timeframe]["best_params"]
+        
+        return best_params, best_timeframe
+
+    def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
+        if not self.results:
+            raise ValueError("No optimization results available. Run optimize() first.")
+        
+        best_timeframe = self.get_best_timeframe()
+        best_params = self.results[best_timeframe]["best_params"]
+        
+        self.engine.fetch_data(
+            symbol="BTC-USDT",
+            chunks=100,
+            interval=best_timeframe,
+            age_days=0
+        )
+        
+        self.engine.run_strategy(self.strategy_func, **best_params)
+        return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
 
 if __name__ == "__main__":
-    vb = VectorizedBacktesting(
-        initial_capital=10000.0,
-        reinvest=True,  # Test with compound returns
-    )
-    vb.fetch_data(
+    A = AlgorithmOptimizer(
         symbol="BTC-USDT",
-        chunks=100,
-        interval="5min",
-        age_days=0,
+        chunks=365,
+        age_days=0
+    )
+    
+    A.optimize(
+        strategy_func=Strategy.sr_strategy,
+        param_space={
+            "window":(2,40),
+            "buy_threshold":(0.0001,0.01),
+            "sell_threshold":(0.0001,0.01)
+        },
+        metric="Alpha",
+        n_trials=300,
+        direction="maximize",
+        save_params=False
     )
 
-    bayes_opt = AlgorithmBayesianOptimization(
-        engine=vb,
-        strategy_func=Strategy.ETHBTC_trader,
-        param_space={
-            "chunks": (100,),      # Fixed value - will always use 100
-            "interval": ("5min",), # Fixed value - will always use "5min"  
-            "age_days": (0,),      # Fixed value - will always use 0
-            "lower_zscore_threshold": (-5, 0),
-            "upper_zscore_threshold": (0, 5),
-        },
-        metric="Total_Return",
-        n_trials=250,
-        direction="maximize",
-    )
-    bayes_opt.run(save_params=True)
-    bayes_opt.plot_best_performance(advanced=True)
-    print(bayes_opt.get_best_params())
+    A.plot_best_performance(advanced=False)
+    A.plot_best_performance(advanced=True)
+
+    best_params, best_tf = A.get_best_params_with_timeframe()
+    print(f"\nBest timeframe: {best_tf}")
+    print(f"Best parameters: {best_params}")
+
