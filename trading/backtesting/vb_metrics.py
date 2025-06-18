@@ -52,21 +52,18 @@ def get_portfolio_value(position: pd.Series, close_prices: pd.Series, initial_ca
     result = initial_capital * cumulative_returns
     return result
 
-def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int, return_interval: str = None):
-    """Calculate annualized Jensen's alpha and beta using regression."""
-    strategy_returns = get_returns(position, close_prices)
-    market_returns = close_prices.pct_change()
-
+def get_alpha_beta(strategy_returns: pd.Series, market_returns: pd.Series, n_days: int, return_interval: str = None):
+    """Calculate annualized Jensen's alpha and beta using regression with actual strategy returns."""
     # Align time
     common_index = strategy_returns.dropna().index.intersection(market_returns.dropna().index)
-    strategy_returns = strategy_returns.loc[common_index]
-    market_returns = market_returns.loc[common_index]
+    strategy_returns_aligned = strategy_returns.loc[common_index]
+    market_returns_aligned = market_returns.loc[common_index]
 
-    if len(strategy_returns) < 2 or len(market_returns) < 2:
+    if len(strategy_returns_aligned) < 2 or len(market_returns_aligned) < 2:
         return float('nan'), float('nan')
 
-    X = sm.add_constant(market_returns.values)
-    y = strategy_returns.values
+    X = sm.add_constant(market_returns_aligned.values)
+    y = strategy_returns_aligned.values
     model = sm.OLS(y, X).fit()
     alpha = model.params[0]  # Intercept is Jensen's alpha
     beta = model.params[1]   # Slope is beta
@@ -91,14 +88,14 @@ def get_alpha_beta(position: pd.Series, close_prices: pd.Series, n_days: int, re
 
     return alpha, beta
 
-def get_alpha(position: pd.Series, close_prices: pd.Series, n_days: int, return_interval: str = None) -> float:
-    """Return annualized Jensen's alpha."""
-    alpha, _ = get_alpha_beta(position, close_prices, n_days=n_days, return_interval=return_interval)
+def get_alpha(strategy_returns: pd.Series, market_returns: pd.Series, n_days: int, return_interval: str = None) -> float:
+    """Return annualized Jensen's alpha using actual strategy returns."""
+    alpha, _ = get_alpha_beta(strategy_returns, market_returns, n_days=n_days, return_interval=return_interval)
     return alpha
 
-def get_beta(position: pd.Series, close_prices: pd.Series, n_days: int, return_interval: str = None) -> float:
-    """Return beta from regression."""
-    _, beta = get_alpha_beta(position, close_prices, n_days=n_days, return_interval=return_interval)
+def get_beta(strategy_returns: pd.Series, market_returns: pd.Series, n_days: int, return_interval: str = None) -> float:
+    """Return beta from regression using actual strategy returns."""
+    _, beta = get_alpha_beta(strategy_returns, market_returns, n_days=n_days, return_interval=return_interval)
     return beta
 
 def get_active_return(position: pd.Series, close_prices: pd.Series) -> pd.Series:
@@ -127,10 +124,12 @@ def get_max_drawdown(position: pd.Series, close_prices: pd.Series, initial_capit
     result = drawdown.min()
     return result
 
-def get_sharpe_ratio(position: pd.Series, close_prices: pd.Series, return_interval: int, n_days: int, risk_free_rate: float = 0.00) -> float:
-    """Calculate annualized Sharpe ratio from position, close prices, and risk-free rate."""
-    returns = get_returns(position, close_prices)
-    excess_returns = returns - risk_free_rate
+def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, n_days: int, risk_free_rate: float = 0.00) -> float:
+    """Calculate annualized Sharpe ratio using actual strategy returns that include costs."""
+    excess_returns = strategy_returns - risk_free_rate
+    if excess_returns.std(ddof=1) == 0:
+        return float('nan')
+    
     result = excess_returns.mean() / excess_returns.std(ddof=1)
 
     if return_interval == '1m':
@@ -152,12 +151,11 @@ def get_sharpe_ratio(position: pd.Series, close_prices: pd.Series, return_interv
     
     return result
 
-def get_sortino_ratio(position: pd.Series, close_prices: pd.Series, return_interval: str, n_days: int, risk_free_rate: float = 0.00) -> float:
-    """Calculate annualized Sortino ratio from position, close prices, and risk-free rate."""
-    returns = get_returns(position, close_prices)
-    excess_returns = returns - risk_free_rate
+def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days: int, risk_free_rate: float = 0.00) -> float:
+    """Calculate annualized Sortino ratio using actual strategy returns that include costs."""
+    excess_returns = strategy_returns - risk_free_rate
     downside_returns = excess_returns[excess_returns < 0]
-    if downside_returns.std(ddof=1) == 0:
+    if len(downside_returns) == 0 or downside_returns.std(ddof=1) == 0:
         return float('nan')
     result = excess_returns.mean() / downside_returns.std(ddof=1)
 
@@ -288,9 +286,16 @@ def get_breakeven_rate_from_pnls(pnl_list: List[float]) -> float:
     result = 1 / (rr_ratio + 1) if rr_ratio > 0 else 0
     return result
 
-def get_information_ratio(position: pd.Series, close_prices: pd.Series, return_interval: str, n_days: int) -> float:
-    """Calculate annualized information ratio from position and close prices."""
-    active_returns = get_active_return(position, close_prices).dropna()
+def get_information_ratio(strategy_returns: pd.Series, market_returns: pd.Series, return_interval: str, n_days: int) -> float:
+    """Calculate annualized information ratio using actual strategy returns that include costs."""
+    # Align the series
+    common_index = strategy_returns.index.intersection(market_returns.index)
+    strategy_aligned = strategy_returns.loc[common_index]
+    market_aligned = market_returns.loc[common_index]
+    
+    active_returns = strategy_aligned - market_aligned
+    active_returns = active_returns.dropna()
+    
     mean_active_return = active_returns.mean()
     tracking_error = active_returns.std(ddof=1)
     if tracking_error == 0:
