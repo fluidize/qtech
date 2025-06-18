@@ -269,8 +269,8 @@ class AlgorithmOptimizer:
         self.engine = VectorizedBacktesting(
             instance_name="AlgorithmOptimizer",
             initial_capital=10000,
-            slippage_pct=0.03,
-            commission_pct=0.001,
+            slippage_pct=0.005,
+            commission_pct=0.00,
             reinvest=False
         )
 
@@ -381,7 +381,7 @@ class AlgorithmOptimizer:
 if __name__ == "__main__":
     A = AlgorithmOptimizer(
         symbol="BTC-USDT",
-        chunks=365,
+        chunks=3,
         age_days=0
     )
     
