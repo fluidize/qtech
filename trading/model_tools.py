@@ -151,46 +151,9 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
         data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
         data.sort_values('Datetime', inplace=True)
         data.reset_index(drop=True, inplace=True)
-    elif data_source == "birdeye":
-        data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
-        times = []
 
-        chunksize = 1440
-        
-        progress_bar = tqdm(total=chunks, desc="BIRDEYE PROGRESS", ascii="#>")
-        end_time = datetime.now() - timedelta(minutes=chunksize*chunks) - timedelta(days=age_days)
-        start_time = end_time - timedelta(minutes=chunksize*chunks) - timedelta(days=age_days)
-        
-        url = f"https://public-api.birdeye.so/defi/v3/ohlcv?address={ticker}&type={interval}&currency=usd&time_from={start_time.timestamp()}&time_to={end_time.timestamp()}"
-
-        headers = {
-            "accept": "application/json",
-            "x-chain": "solana",
-            "X-API-KEY": os.getenv("BIRDEYE_API_KEY")
-        }
-
-        response = requests.get(url, headers=headers)
-        print(url, headers, response.json())
-        if data.empty:
-            data = temp_data
-        else:
-            data = pd.concat([data, temp_data])
-        times.append(start_time)
-        times.append(end_time)
-
-        progress_bar.update(1)
-        progress_bar.close()
-        
-        earliest = min(times)
-        latest = max(times)
-        difference = latest - earliest
-        print(f"{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
-        
-        data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
-        data.sort_values('Datetime', inplace=True)
-        data.reset_index(drop=True, inplace=True)
     else:
-        raise ValueError(f"Unknown data_source: {data_source}. Choose from 'kucoin', 'birdeye', 'yfinance'.")
+        raise ValueError(f"Unknown data_source: {data_source}. Choose from 'kucoin', 'hyperliquid', 'yfinance'.")
     
     if use_cache:
         try:
@@ -680,4 +643,4 @@ def loss_plot(loss_history):
     return fig
 
 if __name__ == "__main__":
-    data = fetch_data(ticker="So11111111111111111111111111111111111111112", chunks=10, interval="1m", age_days=1, data_source="birdeye")
+    data = fetch_data(ticker="ETH", chunks=10, interval="1m", age_days=1, data_source="hyperliquid")
