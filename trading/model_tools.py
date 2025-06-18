@@ -83,7 +83,8 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
         data.reset_index(inplace=True)
         data.rename(columns={'index': 'Datetime'}, inplace=True)
         data.rename(columns={'Date': 'Datetime'}, inplace=True)
-        data = pd.DataFrame(data)  
+        data = pd.DataFrame(data)
+        
     elif data_source == "kucoin":
         # parse interval format
         if "m" in interval:
@@ -152,8 +153,103 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
         data.sort_values('Datetime', inplace=True)
         data.reset_index(drop=True, inplace=True)
 
+    elif data_source == "binance":
+        # Parse interval format for Binance
+        if "min" in interval:
+            interval = interval.replace("min", "m")
+        elif "hour" in interval:
+            interval = interval.replace("hour", "h")
+        elif "day" in interval:
+            interval = interval.replace("day", "d")
+        elif "week" in interval:
+            interval = interval.replace("week", "w")
+        elif "month" in interval:
+            interval = interval.replace("month", "M")
+        
+        # Format symbol for Binance (remove hyphen if present)
+        binance_symbol = ticker.replace('-', '').upper()
+        
+        data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
+        times = []
+        
+        # Binance limits: 1000 klines per request
+        # Calculate chunk size based on interval
+        if interval == "1m":
+            chunk_minutes = 1000  # 1000 minutes per chunk
+        elif interval == "5m":
+            chunk_minutes = 5000  # 5000 minutes per chunk
+        elif interval == "15m":
+            chunk_minutes = 15000  # 15000 minutes per chunk
+        elif interval == "1h":
+            chunk_minutes = 60000  # 60000 minutes per chunk
+        elif interval == "4h":
+            chunk_minutes = 240000  # 240000 minutes per chunk
+        elif interval == "1d":
+            chunk_minutes = 1440000  # 1440000 minutes per chunk
+        else:
+            chunk_minutes = 1000  # Default fallback
+        
+        progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS", ascii="#>")
+        for x in range(chunks):
+            end_time = datetime.now() - timedelta(minutes=chunk_minutes*x) - timedelta(days=age_days)
+            start_time = end_time - timedelta(minutes=chunk_minutes)
+            
+            # Binance API parameters
+            params = {
+                "symbol": binance_symbol,
+                "interval": interval,
+                "startTime": int(start_time.timestamp() * 1000),  # Binance uses milliseconds
+                "endTime": int(end_time.timestamp() * 1000),
+                "limit": 1000
+            }
+            
+            try:
+                response = requests.get("https://api.binance.com/api/v3/klines", params=params)
+                response.raise_for_status()
+                request_data = response.json()
+            except Exception as e:
+                print(f"[red]Error fetching {binance_symbol} from Binance: {e}[/red]")
+                continue
+            
+            records = []
+            for kline in request_data:
+                records.append({
+                    "Datetime": int(kline[0]) / 1000,  # Convert from milliseconds to seconds
+                    "Open": float(kline[1]),
+                    "High": float(kline[2]),
+                    "Low": float(kline[3]),
+                    "Close": float(kline[4]),
+                    "Volume": float(kline[5])
+                })
+            
+            temp_data = pd.DataFrame(records)
+            if not temp_data.empty:
+                if data.empty:
+                    data = temp_data
+                else:
+                    data = pd.concat([data, temp_data])
+            
+            times.append(start_time)
+            times.append(end_time)
+            progress_bar.update(1)
+        
+        progress_bar.close()
+        
+        if not data.empty:
+            earliest = min(times)
+            latest = max(times)
+            difference = latest - earliest
+            print(f"{binance_symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
+            
+            # Convert timestamp to datetime
+            data["Datetime"] = pd.to_datetime(data['Datetime'], unit='s')
+            data.sort_values('Datetime', inplace=True)
+            data.reset_index(drop=True, inplace=True)
+        else:
+            print(f"[red]No data retrieved for {binance_symbol}[/red]")
+    
     else:
-        raise ValueError(f"Unknown data_source: {data_source}. Choose from 'kucoin', 'hyperliquid', 'yfinance'.")
+        raise ValueError(f"Unknown data_source: {data_source}. Choose from 'binance', 'kucoin', 'yfinance'.")
     
     if use_cache:
         try:
@@ -643,4 +739,5 @@ def loss_plot(loss_history):
     return fig
 
 if __name__ == "__main__":
-    data = fetch_data(ticker="ETH", chunks=10, interval="1m", age_days=1, data_source="hyperliquid")
+    data = fetch_data(ticker="ETH-USDT", chunks=10, interval="1m", age_days=1, data_source="binance")
+    print(data)
