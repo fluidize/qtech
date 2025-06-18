@@ -206,15 +206,15 @@ class VectorizedBacktesting:
         drawdown = (portfolio_value - peak) / peak
         max_drawdown = drawdown.min()
         
-        # Calculate Sharpe, Sortino, and Information ratios using updated metrics functions
-        sharpe_ratio = metrics.get_sharpe_ratio(position, open_prices, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
-        sortino_ratio = metrics.get_sortino_ratio(position, open_prices, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
-        info_ratio = metrics.get_information_ratio(position, open_prices, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+        # Calculate Sharpe, Sortino, and Information ratios using strategy returns that include costs
+        sharpe_ratio = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+        sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+        info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
 
-        # Calculate Alpha and Beta using regression (these should work the same for both modes)
+        # Calculate Alpha and Beta using strategy returns vs market returns
         if len(strategy_returns) >= 2 and len(asset_returns) >= 2:
             try:
-                alpha, beta = metrics.get_alpha_beta(position, open_prices, n_days=self.n_days, return_interval=self.interval)
+                alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
             except Exception:
                 alpha, beta = float('nan'), float('nan')
         else:
@@ -831,16 +831,32 @@ class Strategy:
         return signals
     
     @staticmethod
-    def sr_strategy(data: pd.DataFrame, window: int = 10, buy_threshold: float = 0.005, sell_threshold: float = 0.005) -> pd.Series:
+    def sr_strategy(data: pd.DataFrame, window: int = 12, buy_threshold: float = 0.005, sell_threshold: float = 0.005) -> pd.Series:
         signals = pd.Series(0, index=data.index)
         support, resistance = smc.support_resistance_levels(data['Open'], data['High'], data['Low'], data['Close'], window=window)
         
         support_pct_distance = (data['Close'] - support) / support
         resistance_pct_distance = (resistance - data['Close']) / resistance
 
+        bullish_rejection_wick_ratio = (data[['Open', 'Close']].min(axis=1) - data['Low']) / (data['High'] - data['Low'] + 1e-9)
+        bearish_rejection_wick_ratio = (data['High'] - data[['Open', 'Close']].max(axis=1)) / (data['High'] - data['Low'] + 1e-9)
+        
+        recent_low = data['Low'].rolling(window=window).min().shift(1)
+        recent_high = data['High'].rolling(window=window).max().shift(1)
+
+        bullish_liquidity_sweep = ((bullish_rejection_wick_ratio > bearish_rejection_wick_ratio) & 
+                                   (bullish_rejection_wick_ratio > 0.5) &
+                                   (data['Low'] < recent_low))
+        bearish_liquidity_sweep = ((bearish_rejection_wick_ratio > bullish_rejection_wick_ratio) & 
+                                   (bearish_rejection_wick_ratio > 0.5) &
+                                   (data['High'] > recent_high)) 
+
+        support_bounce = (support_pct_distance >= buy_threshold) & (data['Close'] > support)
+        resistance_bounce = (resistance_pct_distance >= sell_threshold) & (data['Close'] < resistance)
+
         #trigger off bounces
-        buy_conditions = support_pct_distance >= buy_threshold
-        sell_conditions = resistance_pct_distance >= sell_threshold
+        buy_conditions = support_bounce & ~bearish_liquidity_sweep
+        sell_conditions = resistance_bounce & ~bullish_liquidity_sweep
         signals[buy_conditions] = 3
         signals[sell_conditions] = 1
         return signals
@@ -907,7 +923,7 @@ if __name__ == "__main__":
     )
     backtest.fetch_data(
         symbol="BTC-USDT",
-        chunks=10,
+        chunks=30,
         interval="5m",
         age_days=0
     )
