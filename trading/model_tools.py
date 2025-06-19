@@ -172,27 +172,13 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
         data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         times = []
         
-        # Binance limits: 1000 klines per request
-        # Calculate chunk size based on interval
-        if interval == "1m":
-            chunk_minutes = 1000  # 1000 minutes per chunk
-        elif interval == "5m":
-            chunk_minutes = 5000  # 5000 minutes per chunk
-        elif interval == "15m":
-            chunk_minutes = 15000  # 15000 minutes per chunk
-        elif interval == "1h":
-            chunk_minutes = 60000  # 60000 minutes per chunk
-        elif interval == "4h":
-            chunk_minutes = 240000  # 240000 minutes per chunk
-        elif interval == "1d":
-            chunk_minutes = 1440000  # 1440000 minutes per chunk
-        else:
-            chunk_minutes = 1000  # Default fallback
-        
+        # Each chunk represents exactly 1 day (correct)
+        chunk_minutes = 1440
+
         progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS", ascii="#>")
         for x in range(chunks):
             end_time = datetime.now() - timedelta(minutes=chunk_minutes*x) - timedelta(days=age_days)
-            start_time = end_time - timedelta(minutes=chunk_minutes)
+            start_time = end_time - timedelta(minutes=chunk_minutes) - timedelta(days=age_days)
             
             # Binance API parameters
             params = {
@@ -209,7 +195,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
                 request_data = response.json()
             except Exception as e:
                 print(f"[red]Error fetching {binance_symbol} from Binance: {e}[/red]")
-                continue
+                break
             
             records = []
             for kline in request_data:
