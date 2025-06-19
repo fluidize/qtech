@@ -88,14 +88,14 @@ class BinanceProvider(BaseDataProvider):
                 logger.debug(f"Processing Binance kline: {kline}")
                 
                 return {
-                    'timestamp': datetime.fromtimestamp(int(kline['t']) / 1000),
-                    'open': float(kline['o']),
-                    'high': float(kline['h']),
-                    'low': float(kline['l']),
-                    'close': float(kline['c']),
-                    'volume': float(kline['q']), #Volume in quote asset
-                    'is_closed': kline['x'],  # Whether this kline is closed
-                    'provider': 'binance'
+                    'Timestamp': datetime.fromtimestamp(int(kline['t']) / 1000),
+                    'Open': float(kline['o']),
+                    'High': float(kline['h']),
+                    'Low': float(kline['l']),
+                    'Close': float(kline['c']),
+                    'Volume': float(kline['q']), #Volume in quote asset
+                    'Is_Closed': kline['x'],  # Whether this kline is closed
+                    'Provider': 'binance'
                 }
         except Exception as e:
             logger.error(f"Error processing Binance message: {e}")

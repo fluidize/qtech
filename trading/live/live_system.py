@@ -28,7 +28,7 @@ from data_provider_factory import DataProviderFactory
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 class LiveTradingSystem:
     def __init__(
@@ -74,6 +74,7 @@ class LiveTradingSystem:
         self.running = False
         self.last_signal = 2  # Start with flat position
         self.signal_history = deque(maxlen=100)
+        self.last_data_is_closed = False  # Track if last candle was closed
         
         # Console for rich output
         self.console = Console()
@@ -115,79 +116,95 @@ class LiveTradingSystem:
             'Volume': volume
         }
     
-    def _update_current_candle(self, market_data: Dict):
-        """Update the current minute candle with new market data."""
+    def _update_current_candle(self, market_data: Dict) -> bool:
+        """Update the current minute candle with new market data.
+        Returns True if a closed candle was processed, False otherwise."""
         logger.debug(f"Updating candle with data: {market_data}")
         
         # Handle complete OHLC data (like Binance klines)
-        if all(key in market_data for key in ['open', 'high', 'low', 'close']):
+        if all(key in market_data for key in ['Open', 'High', 'Low', 'Close']):
             candle = {
-                'Datetime': market_data['timestamp'],
-                'Open': market_data['open'],
-                'High': market_data['high'],
-                'Low': market_data['low'],
-                'Close': market_data['close'],
-                'Volume': market_data['volume']
+                'Datetime': market_data['Timestamp'],
+                'Open': market_data['Open'],
+                'High': market_data['High'],
+                'Low': market_data['Low'],
+                'Close': market_data['Close'],
+                'Volume': market_data['Volume'],
+                'Is_Closed': market_data['Is_Closed']
             }
             
+            # Always add to buffer (both open and closed candles)
             if len(self.data_buffer) == 0:
                 self.data_buffer.append(candle)
-                logger.info(f"Created first candle from OHLC: {candle}")
+                logger.info(f"Created first candle: {candle}")
             else:
                 current_candle = self.data_buffer[-1]
                 current_minute = current_candle['Datetime'].replace(second=0, microsecond=0)
-                new_minute = market_data['timestamp'].replace(second=0, microsecond=0)
+                new_minute = market_data['Timestamp'].replace(second=0, microsecond=0)
                 
                 if current_minute == new_minute:
+                    # Update existing candle
                     self.data_buffer[-1] = candle
                     logger.debug(f"Updated existing candle: {current_candle['Close']} -> {candle['Close']}")
                 else:
+                    # Add new candle
                     self.data_buffer.append(candle)
-                    logger.info(f"Added new candle: {candle}")
-                    logger.info(f"Buffer now has {len(self.data_buffer)} candles")
+                    logger.debug(f"Added new candle: {candle}")
+            
+            # Detect transition from open to closed candle
+            candle_just_closed = (not self.last_data_is_closed) and (candle['Is_Closed'])
+            self.last_data_is_closed = candle['Is_Closed']
+            
+            return candle_just_closed
         
         # Handle tick data (like KuCoin price updates)
-        elif 'price' in market_data:
+        elif 'Price' in market_data:
             if len(self.data_buffer) == 0:
                 candle = self._create_ohlcv_from_tick(
-                    market_data['price'], 
-                    market_data.get('volume', 0),
-                    market_data['timestamp']
+                    market_data['Price'], 
+                    market_data.get('Volume', 0),
+                    market_data['Timestamp']
                 )
                 self.data_buffer.append(candle)
                 logger.info(f"Created first candle from tick: {candle}")
+                return False
             else:
                 current_candle = self.data_buffer[-1]
                 current_minute = current_candle['Datetime'].replace(second=0, microsecond=0)
-                tick_minute = market_data['timestamp'].replace(second=0, microsecond=0)
+                tick_minute = market_data['Timestamp'].replace(second=0, microsecond=0)
                 
                 if tick_minute == current_minute:
+                    # Update current candle
                     old_close = current_candle['Close']
-                    current_candle['High'] = max(current_candle['High'], market_data['price'])
-                    current_candle['Low'] = min(current_candle['Low'], market_data['price'])
-                    current_candle['Close'] = market_data['price']
-                    current_candle['Volume'] += market_data.get('volume', 0)
+                    current_candle['High'] = max(current_candle['High'], market_data['Price'])
+                    current_candle['Low'] = min(current_candle['Low'], market_data['Price'])
+                    current_candle['Close'] = market_data['Price']
+                    current_candle['Volume'] += market_data.get('Volume', 0)
                     logger.debug(f"Updated candle with tick: {old_close} -> {current_candle['Close']}")
+                    return False
                 else:
+                    # Close current candle and create new one
                     candle = self._create_ohlcv_from_tick(
-                        market_data['price'],
-                        market_data.get('volume', 0),
-                        market_data['timestamp']
+                        market_data['Price'],
+                        market_data.get('Volume', 0),
+                        market_data['Timestamp']
                     )
                     self.data_buffer.append(candle)
                     logger.info(f"Created new candle from tick: {candle}")
-                    logger.info(f"Buffer now has {len(self.data_buffer)} candles")
+                    return True  # New candle created
         else:
             logger.warning(f"Unhandled market data format: {market_data}")
+            return False
     
     def _update_dataframe(self):
-        """Convert buffer to DataFrame for strategy processing."""
-        if len(self.data_buffer) < 10:  # Need minimum data for indicators
-            return
-            
-        self.current_data = pd.DataFrame(list(self.data_buffer))
+        """Convert only closed candles from buffer to DataFrame for strategy processing."""
+        # Filter only closed candles for DataFrame
+        closed_candles = [candle for candle in self.data_buffer if candle.get('Is_Closed', True)]
+        
+        self.current_data = pd.DataFrame(closed_candles)
         self.current_data.set_index('Datetime', inplace=True)
         self.current_data = self.current_data.sort_index()
+        logger.debug(f"Updated DataFrame with {len(closed_candles)} closed candles")
     
     def _run_strategy(self) -> int:
         """Run the trading strategy on current data."""
@@ -277,7 +294,7 @@ class LiveTradingSystem:
         
         self.console.print(f"[{color}]{timestamp} | {self.symbol} {self.interval} | {action} @ ${price:.4f}[/{color}]")
     
-    async def _websocket_handler(self):
+    async def _websocket_signal_handler(self):
         """Handle WebSocket connection and message processing."""
         try:
             logger.info(f"Attempting to connect to WebSocket: {self.provider.ws_url}")
@@ -294,23 +311,24 @@ class LiveTradingSystem:
                 else:
                     logger.info("No subscription message needed for this provider")
                 
-                logger.info("🔄 Starting message processing loop...")   
+                logger.info("Starting message processing loop...")   
                 
                 while self.running:
                     try:
                         message = await asyncio.wait_for(ws.recv(), timeout=30)
                         data = json.loads(message)
                         
-                        # Process message using provider
                         market_data = self.provider.process_message(data)
                         
                         if market_data:
-                            self._update_current_candle(market_data)
-                            self._update_dataframe()
+                            # Update buffer with new candle data
+                            candle_closed = self._update_current_candle(market_data)
                             
-                            # Run strategy and check for signals
-                            new_signal = self._run_strategy()
-                            self._handle_signal_change(new_signal)
+                            # Only update DataFrame and run strategy on closed candles
+                            if candle_closed:
+                                self._update_dataframe()
+                                new_signal = self._run_strategy()
+                                self._handle_signal_change(new_signal)
                     
                     except asyncio.TimeoutError:
                         logger.debug("WebSocket timeout - pinging...")
@@ -366,9 +384,8 @@ class LiveTradingSystem:
                 connection_attempts += 1
                 logger.info(f"WebSocket connection attempt {connection_attempts}/{max_attempts}")
                 
-                await self._websocket_handler()
+                await self._websocket_signal_handler()
                 
-                # If we get here, the connection was closed but we should retry
                 if self.running:
                     logger.warning(f"WebSocket disconnected, retrying in 10 seconds... (attempt {connection_attempts})")
                     await asyncio.sleep(10)
@@ -482,7 +499,7 @@ async def run_simple_system():
         interval="1m",
         data_source="binance",
         buffer_size=200,
-        strategy_func=Strategy.macd_strategy,
+        strategy_func=Strategy.sr_strategy,
         strategy_params={'fast_period': 12, 'slow_period': 26, 'signal_period': 9},
         signal_callback=example_signal_callback
     )
