@@ -297,7 +297,8 @@ class AlgorithmOptimizer:
                 symbol=self.symbol,
                 chunks=self.chunks,
                 interval=timeframe,
-                age_days=self.age_days
+                age_days=self.age_days,
+                data_source="binance"
             )
 
             bayesian_op = BayesianOptimizer(
