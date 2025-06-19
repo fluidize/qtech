@@ -93,7 +93,7 @@ class BinanceProvider(BaseDataProvider):
                     'high': float(kline['h']),
                     'low': float(kline['l']),
                     'close': float(kline['c']),
-                    'volume': float(kline['v']),
+                    'volume': float(kline['q']), #Volume in quote asset
                     'is_closed': kline['x'],  # Whether this kline is closed
                     'provider': 'binance'
                 }

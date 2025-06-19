@@ -28,14 +28,13 @@ from data_provider_factory import DataProviderFactory
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Set debug level for this module only when needed
-# Uncomment the next line to enable debug logging for troubleshooting:
-# logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG)
 
 class LiveTradingSystem:
     def __init__(
         self,
         symbol: str = "BTCUSDT",
+        interval: str = "1m",
         data_source: str = "binance",
         buffer_size: int = 500,
         strategy_func: Callable = None,
@@ -54,6 +53,7 @@ class LiveTradingSystem:
             signal_callback: Function to call when new signal is generated
         """
         self.symbol = symbol
+        self.interval = interval
         self.data_source = data_source
         self.buffer_size = buffer_size
         self.strategy_func = strategy_func or Strategy.ema_cross_strategy
@@ -65,7 +65,7 @@ class LiveTradingSystem:
         self.current_data = pd.DataFrame()
         
         # Data provider
-        self.provider = DataProviderFactory.create_provider(data_source, symbol)
+        self.provider = DataProviderFactory.create_provider(data_source, symbol=symbol, interval=interval)
         
         # WebSocket connection
         self.connection = None
@@ -86,9 +86,10 @@ class LiveTradingSystem:
         try:
             # Setup provider connection
             await self.provider.setup_connection()
+            logger.info("Provider connection setup completed")
             
             # Bootstrap with historical data
-            historical_data = self.provider.get_historical_data(limit=60)
+            historical_data = self.provider.get_historical_data(limit=self.buffer_size)
             for candle in historical_data:
                 self.data_buffer.append(candle)
             
@@ -176,6 +177,8 @@ class LiveTradingSystem:
                     self.data_buffer.append(candle)
                     logger.info(f"Created new candle from tick: {candle}")
                     logger.info(f"Buffer now has {len(self.data_buffer)} candles")
+        else:
+            logger.warning(f"Unhandled market data format: {market_data}")
     
     def _update_dataframe(self):
         """Convert buffer to DataFrame for strategy processing."""
@@ -272,23 +275,30 @@ class LiveTradingSystem:
         else:
             color = 'blue'
         
-        self.console.print(f"[{color}]{timestamp} | {self.symbol} | {action} @ ${price:.4f}[/{color}]")
+        self.console.print(f"[{color}]{timestamp} | {self.symbol} {self.interval} | {action} @ ${price:.4f}[/{color}]")
     
     async def _websocket_handler(self):
         """Handle WebSocket connection and message processing."""
         try:
-            async with websockets.connect(self.provider.ws_url) as websocket:
-                self.connection = websocket
+            logger.info(f"Attempting to connect to WebSocket: {self.provider.ws_url}")
+            
+            async with websockets.connect(self.provider.ws_url) as ws:
+                self.connection = ws
                 logger.info(f"Connected to {self.data_source} WebSocket")
                 
                 # Subscribe to symbol if needed
                 subscribe_msg = self.provider.get_subscription_message()
                 if subscribe_msg:
-                    await websocket.send(json.dumps(subscribe_msg))
+                    logger.info(f"Sending subscription message: {subscribe_msg}")
+                    await ws.send(json.dumps(subscribe_msg))
+                else:
+                    logger.info("No subscription message needed for this provider")
+                
+                logger.info("🔄 Starting message processing loop...")   
                 
                 while self.running:
                     try:
-                        message = await asyncio.wait_for(websocket.recv(), timeout=30)
+                        message = await asyncio.wait_for(ws.recv(), timeout=30)
                         data = json.loads(message)
                         
                         # Process message using provider
@@ -303,10 +313,10 @@ class LiveTradingSystem:
                             self._handle_signal_change(new_signal)
                     
                     except asyncio.TimeoutError:
-                        # Send ping to keep connection alive if needed
+                        logger.debug("WebSocket timeout - pinging...")
                         ping_msg = self.provider.get_ping_message()
                         if ping_msg:
-                            await websocket.send(json.dumps(ping_msg))
+                            await ws.send(json.dumps(ping_msg))
                     
                     except websockets.exceptions.ConnectionClosed:
                         logger.warning("WebSocket connection closed, attempting to reconnect...")
@@ -316,32 +326,71 @@ class LiveTradingSystem:
                         logger.error(f"Error in WebSocket handler: {e}")
                         await asyncio.sleep(1)
         
+        except websockets.exceptions.InvalidURI as e:
+            logger.error(f"Invalid WebSocket URI: {self.provider.ws_url}")
+            logger.error(f"URI Error: {e}")
+        except websockets.exceptions.WebSocketException as e:
+            logger.error(f"WebSocket connection error: {e}")
+            logger.error(f"WebSocket Error type: {type(e).__name__}")
         except Exception as e:
-            logger.error(f"WebSocket connection failed: {e}")
-            if self.running:
-                logger.info("Attempting to reconnect in 5 seconds...")
-                await asyncio.sleep(5)
+            logger.error(f"Fatal error in WebSocket handler: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            
+        if self.running:
+            logger.info("Attempting to reconnect in 5 seconds...")
+            await asyncio.sleep(5)
     
     async def start(self):
         """Start the live trading system."""
         self.running = True
         self.console.print(f"[green]Starting Live Trading System for {self.symbol}[/green]")
         self.console.print(f"[blue]Data Source: {self.data_source}[/blue]")
+        self.console.print(f"[blue]Interval: {self.interval}[/blue]")
         self.console.print(f"[blue]Strategy: {self.strategy_func.__name__}[/blue]")
         self.console.print(f"[blue]Parameters: {self.strategy_params}[/blue]")
         
         # Initialize provider if not already done
         if not self._initialized:
+            self.console.print("[yellow]Initializing data provider...[/yellow]")
             await self._initialize_provider()
             self._initialized = True
+            self.console.print("[green]Data provider initialized successfully[/green]")
         
-        while self.running:
+        self.console.print("[yellow]Starting WebSocket connection...[/yellow]")
+        
+        connection_attempts = 0
+        max_attempts = 5
+        
+        while self.running and connection_attempts < max_attempts:
             try:
+                connection_attempts += 1
+                logger.info(f"WebSocket connection attempt {connection_attempts}/{max_attempts}")
+                
                 await self._websocket_handler()
-            except Exception as e:
-                logger.error(f"Fatal error in trading system: {e}")
+                
+                # If we get here, the connection was closed but we should retry
                 if self.running:
-                    await asyncio.sleep(10)  # Wait before retry
+                    logger.warning(f"WebSocket disconnected, retrying in 10 seconds... (attempt {connection_attempts})")
+                    await asyncio.sleep(10)
+                    
+            except Exception as e:
+                logger.error(f"Fatal error in trading system (attempt {connection_attempts}): {e}")
+                logger.error(f"Error type: {type(e).__name__}")
+                
+                if connection_attempts >= max_attempts:
+                    logger.error(f"Max connection attempts ({max_attempts}) reached. Stopping.")
+                    self.running = False
+                    break
+                    
+                if self.running:
+                    wait_time = min(30, connection_attempts * 5)  # Exponential backoff
+                    logger.info(f"Waiting {wait_time} seconds before retry...")
+                    await asyncio.sleep(wait_time)
+        
+        if connection_attempts >= max_attempts:
+            self.console.print("[red]Failed to establish stable connection after maximum attempts[/red]")
+        else:
+            self.console.print("[yellow]Trading system stopped[/yellow]")
     
     def stop(self):
         """Stop the live trading system."""
@@ -420,53 +469,17 @@ def example_signal_callback(signal_info: Dict):
     """Example callback function for handling trading signals."""
     print(f"🚨 TRADING SIGNAL: {signal_info['action']} at ${signal_info['current_price']:.4f}")
     
-    # Here you could:
     # - Send notifications (email, SMS, Discord, etc.)
     # - Execute trades through a broker API
     # - Log to database
     # - Update a dashboard
-
-async def run_live_system():
-    """Example of running the live trading system."""
-    
-    # Initialize the system
-    system = LiveTradingSystem(
-        symbol="BTCUSDT",
-        data_source="binance",  # or "kucoin"
-        buffer_size=200,
-        strategy_func=Strategy.macd_strategy,
-        strategy_params={'fast_period': 12, 'slow_period': 26, 'signal_period': 9},
-        signal_callback=example_signal_callback
-    )
-    
-    monitor = LiveTradingMonitor(system)
-    
-    async def display_status():
-        """Async function to display status updates."""
-        while system.running:
-            await asyncio.sleep(5)  # Update every 5 seconds
-            try:
-                monitor.console.clear()
-                monitor.console.print(monitor.create_status_table())
-                monitor.display_recent_signals()
-            except Exception as e:
-                logger.error(f"Error displaying status: {e}")
-    
-    try:
-        # Run both the trading system and status display concurrently
-        await asyncio.gather(
-            system.start(),
-            display_status()
-        )
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-        system.stop()
 
 async def run_simple_system():
     """Simple version without status display - just signal logging."""
     
     system = LiveTradingSystem(
         symbol="BTCUSDT",
+        interval="1m",
         data_source="binance",
         buffer_size=200,
         strategy_func=Strategy.macd_strategy,
@@ -479,42 +492,6 @@ async def run_simple_system():
     except KeyboardInterrupt:
         print("\nShutting down...")
         system.stop()
-
-async def test_binance_bootstrap():
-    """Test Binance data bootstrap."""
-    print("Testing Binance bootstrap...")
-    
-    system = LiveTradingSystem(
-        symbol="BTCUSDT",
-        data_source="binance",
-        buffer_size=200,
-        strategy_func=Strategy.macd_strategy,
-        strategy_params={'fast_period': 12, 'slow_period': 26, 'signal_period': 9}
-    )
-    
-    # Initialize the provider
-    await system._initialize_provider()
-    system._initialized = True
-    
-    status = system.get_current_status()
-    print(f"Status after bootstrap: {status}")
-    
-    if system.data_buffer:
-        print(f"First candle: {system.data_buffer[0]}")
-        print(f"Last candle: {system.data_buffer[-1]}")
-        print(f"Sample OHLC values:")
-        for i, candle in enumerate(list(system.data_buffer)[-3:]):
-            print(f"  Candle {i}: O={candle['Open']:.2f}, H={candle['High']:.2f}, L={candle['Low']:.2f}, C={candle['Close']:.2f}")
-        
-    if not system.current_data.empty:
-        print(f"DataFrame shape: {system.current_data.shape}")
-        print(f"DataFrame tail:\n{system.current_data.tail()}")
-        
-        # Test strategy
-        signal = system._run_strategy()
-        print(f"Current signal: {signal}")
-    
-    return system
 
 if __name__ == "__main__":
     # Choose one:

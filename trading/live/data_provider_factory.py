@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from trading.live.providers import BaseDataProvider
+from providers import BaseDataProvider
 from providers import BinanceProvider
 from providers import KuCoinProvider
 
