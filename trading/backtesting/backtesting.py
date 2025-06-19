@@ -407,7 +407,7 @@ class VectorizedBacktesting:
             
             # Update layout for dual y-axes
             fig.update_layout(
-                title=f'{self.symbol} {self.chunks} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
+                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis_title='Date',
                 showlegend=True,
                 template="plotly_dark",
@@ -917,7 +917,7 @@ class Strategy:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400,
-        slippage_pct=0.0,
+        slippage_pct=0.00,
         commission_pct=0.0,
         reinvest=True
     )
@@ -925,7 +925,8 @@ if __name__ == "__main__":
         symbol="BTC-USDT",
         chunks=30,
         interval="5m",
-        age_days=0
+        age_days=0,
+        data_source="binance"
     )
     
     # backtest.run_strategy(Strategy.ETHBTC_trader, 
