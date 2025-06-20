@@ -9,8 +9,11 @@ from tqdm import tqdm
 import numpy as np
 import sys
 
-from backtesting import VectorizedBacktesting, Strategy
+from backtesting import VectorizedBacktesting
+import strategy
 import optuna
+
+optuna.logging.set_verbosity(optuna.logging.WARNING) #disable optuna printing
 
 class GridSearch:
     def __init__(
@@ -24,7 +27,7 @@ class GridSearch:
         Initialize the grid search framework.
         
         Args:
-            backtest: VectorizedBacktesting instance
+            backtest: VectorizedBacktesting instance with data loaded
             strategy_func: The strategy function to optimize
             param_grid: Dictionary of parameters to search
             metric: Performance metric to optimize (default: Total Return)
@@ -130,11 +133,11 @@ class GridSearch:
         best_result = max(self.results, key=lambda x: x["metrics"][self.metric])
         return best_result["metrics"]
 
-    def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
+    def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
         """Plot the performance of the best parameter combination."""
         best_params = self.get_best_params()
         self.engine.run_strategy(self.strategy_func, **best_params)
-        return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
+        return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class BayesianOptimizer:
     def __init__(self, engine: VectorizedBacktesting, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize"):
@@ -160,6 +163,10 @@ class BayesianOptimizer:
 
             self.engine.run_strategy(self.strategy_func, **param_dict)
             metrics = self.engine.get_performance_metrics()
+
+            if metrics[self.metric] == np.nan:
+                return -1000 if self.direction == "maximize" else 1000
+
             return metrics[self.metric]
         
         self.objective_function = objective
@@ -173,7 +180,8 @@ class BayesianOptimizer:
         float_exceptions = [
             {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold", "momentum_threshold"]},
             {"strategy": "ETHBTC_trader", "params": ["lower_zscore_threshold", "upper_zscore_threshold"]},
-            {"strategy": "sr_strategy", "params": ["buy_threshold", "sell_threshold"]},
+            {"strategy": "sr_strategy", "params": ["threshold", "rejection_ratio_threshold"]},
+            {"strategy": "ma_trend_strategy", "params": ["pct_band", "adx_ma_threshold"]},
         ] #float exceptions
         
         fixed_param_exceptions = [
@@ -196,16 +204,16 @@ class BayesianOptimizer:
 
     def run(self, save_params: bool = False):
         study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
-        study.optimize(self.objective_function, n_trials=self.n_trials)
+        study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=True)
         self.best_params = study.best_params
         self.best_metrics = study.best_value
         if save_params:
             self.save_params(study.best_trial)
         return self.best_metrics
 
-    def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
+    def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
         self.engine.run_strategy(self.strategy_func, **self.best_params)
-        return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
+        return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
     def get_best_params(self):
         return self.best_params
@@ -254,7 +262,7 @@ class AssignmentOptimizer:
     def get_best_pair(self) -> str:
         return max(self.results, key=lambda x: self.results[x][self.metric])
 
-    def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
+    def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
         self.engine.fetch_data(
             symbol=self.get_best_pair(),
             chunks=self.chunks,
@@ -262,10 +270,10 @@ class AssignmentOptimizer:
             age_days=self.age_days
         )
         self.engine.run_strategy(self.strategy_func, **self.params)
-        return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
+        return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class AlgorithmOptimizer:
-    def __init__(self, symbol: str, chunks: int, age_days: int):
+    def __init__(self, symbol: str, chunks: int, age_days: int, data_source: str = "binance"):
         self.engine = VectorizedBacktesting(
             instance_name="AlgorithmOptimizer",
             initial_capital=10000,
@@ -279,6 +287,7 @@ class AlgorithmOptimizer:
         self.age_days = age_days
         self.results = {}
         self.strategy_func = None
+        self.data_source = data_source
 
     def optimize(self, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize", save_params: bool = False):
         self.strategy_func = strategy_func
@@ -298,8 +307,9 @@ class AlgorithmOptimizer:
                 chunks=self.chunks,
                 interval=timeframe,
                 age_days=self.age_days,
-                data_source="binance"
+                data_source=self.data_source
             )
+            print(self.engine.data)
 
             bayesian_op = BayesianOptimizer(
                 engine=self.engine,
@@ -362,7 +372,7 @@ class AlgorithmOptimizer:
         
         return best_params, best_timeframe
 
-    def plot_best_performance(self, show_graph: bool = True, advanced: bool = False):
+    def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
         if not self.results:
             raise ValueError("No optimization results available. Run optimize() first.")
         
@@ -373,36 +383,69 @@ class AlgorithmOptimizer:
             symbol="BTC-USDT",
             chunks=100,
             interval=best_timeframe,
-            age_days=0
+            age_days=0,
+            data_source=self.data_source
         )
         
         self.engine.run_strategy(self.strategy_func, **best_params)
-        return self.engine.plot_performance(show_graph=show_graph, advanced=advanced)
+        return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 if __name__ == "__main__":
-    A = AlgorithmOptimizer(
-        symbol="BTC-USDT",
-        chunks=3,
-        age_days=0
+    vb = VectorizedBacktesting(
+        instance_name="AlgorithmOptimizer",
+        initial_capital=10000,
+        slippage_pct=0.01,
+        commission_pct=0.00,
+        reinvest=False
     )
-    
-    A.optimize(
-        strategy_func=Strategy.sr_strategy,
+    vb.fetch_data(
+        symbol="SOL-USDT",
+        chunks=365,
+        interval="5m",
+        age_days=0,
+        data_source="binance"
+    )
+    BO = BayesianOptimizer(
+        engine=vb,
+        strategy_func=strategy.ma_trend_strategy,
         param_space={
-            "window":(2,40),
-            "buy_threshold":(0.0001,0.01),
-            "sell_threshold":(0.0001,0.01)
+            "band_period":(2,200),
+            "pct_band":(0.001,0.05),
+            "adx_ma_period":(2,40),
         },
         metric="Alpha",
-        n_trials=300,
-        direction="maximize",
-        save_params=False
+        n_trials=1000,
+        direction="maximize"
     )
+    BO.run(save_params=False)
+    BO.plot_best_performance(extended=False)
+    print(BO.get_best_params())
 
-    A.plot_best_performance(advanced=False)
-    A.plot_best_performance(advanced=True)
+# if __name__ == "__main__":
+#     A = AlgorithmOptimizer(
+#         symbol="BTC-USDT",
+#         chunks=100,
+#         age_days=0,
+#         data_source="kucoin"
+#     )
+    
+#     A.optimize(
+#         strategy_func=Strategy.ma_reversal_strategy,
+#         param_space={
+#             "atr_period":(2,40),
+#             "ma_period":(2,40),
+#             "atr_multiplier":(0.1, 2)
+#         },
+#         metric="Total_Return",
+#         n_trials=300,
+#         direction="maximize",
+#         save_params=False
+#     )
 
-    best_params, best_tf = A.get_best_params_with_timeframe()
-    print(f"\nBest timeframe: {best_tf}")
-    print(f"Best parameters: {best_params}")
+#     A.plot_best_performance(extended=False)
+#     A.plot_best_performance(extended=True)
+
+#     best_params, best_tf = A.get_best_params_with_timeframe()
+#     print(f"\nBest timeframe: {best_tf}")
+#     print(f"Best parameters: {best_params}")
 

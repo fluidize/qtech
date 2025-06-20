@@ -20,7 +20,7 @@ sys.path.append("trading")
 sys.path.append("trading/backtesting")
 sys.path.append("trading/live")
 
-from backtesting import Strategy
+import strategy
 import technical_analysis as ta
 from data_provider_factory import DataProviderFactory
 
@@ -33,7 +33,7 @@ logger.setLevel(logging.INFO)
 class LiveTradingSystem:
     def __init__(
         self,
-        symbol: str = "BTCUSDT",
+        symbol: str = "BTC-USDT",
         interval: str = "1m",
         data_source: str = "binance",
         buffer_size: int = 500,
@@ -61,8 +61,8 @@ class LiveTradingSystem:
         self.signal_callback = signal_callback
         
         # Data storage
-        self.data_buffer = deque(maxlen=buffer_size)
-        self.current_data = pd.DataFrame()
+        self.data_buffer = deque(maxlen=buffer_size) #stores all data bootstrap + WSS feed
+        self.current_data = pd.DataFrame() #stores only closed candles for strategy processing
         
         # Data provider
         self.provider = DataProviderFactory.create_provider(data_source, symbol=symbol, interval=interval)
@@ -231,7 +231,7 @@ class LiveTradingSystem:
             return self.last_signal
     
     def _handle_signal_change(self, new_signal: int):
-        """Handle when strategy generates a new signal."""
+        """Handle when strategy generates a new signal. Adds signal info to instance log and prints to console."""
         if new_signal != self.last_signal:
             # Get current price from buffer or dataframe
             current_price = 0
@@ -292,7 +292,7 @@ class LiveTradingSystem:
         else:
             color = 'blue'
         
-        self.console.print(f"[{color}]{timestamp} | {self.symbol} {self.interval} | {action} @ ${price:.4f}[/{color}]")
+        self.console.print(f"[{color}]{timestamp} | {self.symbol} {self.interval} | {action} @ ${price:.2f}[/{color}]")
     
     async def _websocket_signal_handler(self):
         """Handle WebSocket connection and message processing."""
@@ -311,7 +311,8 @@ class LiveTradingSystem:
                 else:
                     logger.info("No subscription message needed for this provider")
                 
-                logger.info("Starting message processing loop...")   
+                logger.info("Starting message processing loop...")
+                self.timeprint("Websocket connection established", color="green")
                 
                 while self.running:
                     try:
@@ -327,6 +328,7 @@ class LiveTradingSystem:
                             # Only update DataFrame and run strategy on closed candles
                             if candle_closed:
                                 self._update_dataframe()
+                                self.timeprint(f"Candle Closed | {self.current_data['Close'].iloc[-1]:.2f}", color="blue")
                                 new_signal = self._run_strategy()
                                 self._handle_signal_change(new_signal)
                     
@@ -361,20 +363,20 @@ class LiveTradingSystem:
     async def start(self):
         """Start the live trading system."""
         self.running = True
-        self.console.print(f"[green]Starting Live Trading System for {self.symbol}[/green]")
-        self.console.print(f"[blue]Data Source: {self.data_source}[/blue]")
-        self.console.print(f"[blue]Interval: {self.interval}[/blue]")
-        self.console.print(f"[blue]Strategy: {self.strategy_func.__name__}[/blue]")
-        self.console.print(f"[blue]Parameters: {self.strategy_params}[/blue]")
+        self.timeprint(f"Starting Live Trading System for {self.symbol}", color="green")
+        self.timeprint(f"Data Source: {self.data_source}", color="blue")
+        self.timeprint(f"Interval: {self.interval}", color="blue")
+        self.timeprint(f"Strategy: {self.strategy_func.__name__}", color="blue")
+        self.timeprint(f"Parameters: {self.strategy_params}", color="blue")
         
         # Initialize provider if not already done
         if not self._initialized:
-            self.console.print("[yellow]Initializing data provider...[/yellow]")
+            self.timeprint("Initializing data provider...", color="yellow")
             await self._initialize_provider()
             self._initialized = True
-            self.console.print("[green]Data provider initialized successfully[/green]")
+            self.timeprint("Data provider initialized successfully", color="green")
         
-        self.console.print("[yellow]Starting WebSocket connection...[/yellow]")
+        self.timeprint("Starting WebSocket connection...", color="yellow")
         
         connection_attempts = 0
         max_attempts = 5
@@ -384,7 +386,7 @@ class LiveTradingSystem:
                 connection_attempts += 1
                 logger.info(f"WebSocket connection attempt {connection_attempts}/{max_attempts}")
                 
-                await self._websocket_signal_handler()
+                await self._websocket_signal_handler() #where all the signal gen and callbacks happen
                 
                 if self.running:
                     logger.warning(f"WebSocket disconnected, retrying in 10 seconds... (attempt {connection_attempts})")
@@ -405,14 +407,14 @@ class LiveTradingSystem:
                     await asyncio.sleep(wait_time)
         
         if connection_attempts >= max_attempts:
-            self.console.print("[red]Failed to establish stable connection after maximum attempts[/red]")
+            self.timeprint("Failed to establish stable connection after maximum attempts", color="red")
         else:
-            self.console.print("[yellow]Trading system stopped[/yellow]")
+            self.timeprint("Trading system stopped", color="yellow")
     
     def stop(self):
         """Stop the live trading system."""
         self.running = False
-        self.console.print("[red]Stopping Live Trading System[/red]")
+        self.timeprint("Stopping Live Trading System", color="red")
     
     def get_current_status(self) -> Dict:
         """Get current system status."""
@@ -436,6 +438,10 @@ class LiveTradingSystem:
     def get_recent_signals(self, count: int = 10) -> List[Dict]:
         """Get recent trading signals."""
         return list(self.signal_history)[-count:]
+
+    def timeprint(self, text, color="white"):
+        now = datetime.now().strftime("%H:%M:%S")
+        self.console.print(f"[{color}]{now} | {text}[/{color}]")
 
 class LiveTradingMonitor:
     """Monitor and display live trading system status."""
@@ -481,27 +487,492 @@ class LiveTradingMonitor:
         
         self.console.print(table)
 
-# Example usage functions
-def example_signal_callback(signal_info: Dict):
-    """Example callback function for handling trading signals."""
-    print(f"🚨 TRADING SIGNAL: {signal_info['action']} at ${signal_info['current_price']:.4f}")
+class SimulatedPortfolio:
+    """Simulated portfolio for backtesting algorithms in real-time."""
     
-    # - Send notifications (email, SMS, Discord, etc.)
-    # - Execute trades through a broker API
-    # - Log to database
-    # - Update a dashboard
+    def __init__(self, initial_balance: float = 10000.0, slippage_rate: float = 0.001):
+        """
+        Initialize simulated portfolio.
+        
+        Args:
+            initial_balance: Starting portfolio value in USD
+            slippage_rate: Slippage rate per trade (0.001 = 0.1% price impact)
+        """
+        self.initial_balance = initial_balance
+        self.slippage_rate = slippage_rate
+        
+        # Portfolio state
+        self.cash = initial_balance
+        self.position = 0.0  # Current position size (positive = long, negative = short)
+        self.entry_price = 0.0
+        self.entry_time = None
+        
+        # Tracking
+        self.trade_history = []
+        self.portfolio_values = []
+        self.total_trades = 0
+        self.winning_trades = 0
+        self.total_pnl = 0.0
+        self.total_slippage_cost = 0.0
+        
+        # Current state
+        self.current_price = 0.0
+        self.last_update_time = None
+    
+    def get_portfolio_value(self, current_price: float) -> float:
+        """Calculate current portfolio value including unrealized P&L."""
+        if self.position == 0:
+            return self.cash
+        
+        # For long positions: value = cash + (position * current_price)
+        # For short positions: value = cash + (position * (2 * entry_price - current_price))
+        if self.position > 0:  # Long
+            position_value = self.position * current_price
+        else:  # Short
+            # Short position value = initial_cash_received + (entry_price - current_price) * position_size
+            position_value = self.position * current_price  # This is negative for shorts
+        
+        return self.cash + position_value
+    
+    def get_position_value(self, current_price: float) -> float:
+        """Calculate current position value at market price."""
+        return self.position * current_price
+    
+    def get_unrealized_pnl(self, current_price: float) -> float:
+        """Calculate unrealized P&L."""
+        if self.position == 0 or self.entry_price == 0:
+            return 0.0
+        
+        if self.position > 0:  # Long position
+            return (current_price - self.entry_price) * self.position
+        else:  # Short position
+            return (self.entry_price - current_price) * abs(self.position)
+    
+    def _calculate_execution_price(self, market_price: float, is_buy: bool) -> float:
+        """
+        Calculate execution price with slippage.
+        
+        Args:
+            market_price: Current market price
+            is_buy: True if buying, False if selling
+            
+        Returns:
+            Execution price after slippage
+        """
+        if is_buy:
+            # When buying, slippage increases the price (worse execution)
+            return market_price * (1 + self.slippage_rate)
+        else:
+            # When selling, slippage decreases the price (worse execution)
+            return market_price * (1 - self.slippage_rate)
+    
+    def execute_trade(self, signal: int, current_price: float, timestamp: datetime) -> Dict:
+        """
+        Execute a simulated trade based on signal.
+        
+        Args:
+            signal: 0=HOLD, 1=SHORT, 2=FLAT, 3=LONG
+            current_price: Current market price
+            timestamp: Trade timestamp
+            
+        Returns:
+            Dict with trade details
+        """
+        self.current_price = current_price
+        self.last_update_time = timestamp
+        
+        # Calculate current portfolio value before trade
+        pre_trade_value = self.get_portfolio_value(current_price)
+        
+        trade_info = {
+            'timestamp': timestamp,
+            'signal': signal,
+            'market_price': current_price,
+            'execution_price': current_price,
+            'pre_trade_value': pre_trade_value,
+            'action': 'HOLD',
+            'position_change': 0.0,
+            'slippage': 0.0,
+            'slippage_cost': 0.0,
+            'post_trade_value': pre_trade_value,
+            'unrealized_pnl': 0.0
+        }
+        
+        # Determine action based on signal
+        if signal == 3:  # LONG
+            if self.position <= 0:  # Need to buy
+                trade_info['action'] = 'BUY'
+                if self.position < 0:  # Close short first
+                    trade_info['action'] = 'COVER_AND_BUY'
+                    self._close_position(current_price, timestamp, trade_info)
+                
+                # Calculate position size (use 95% of available cash)
+                available_cash = self.cash * 0.95
+                
+                # Calculate execution price with slippage (buying = higher price)
+                execution_price = self._calculate_execution_price(current_price, is_buy=True)
+                position_size = available_cash / execution_price
+                
+                # Total cost including slippage
+                total_cost = position_size * execution_price
+                slippage_cost = position_size * (execution_price - current_price)
+                
+                if total_cost <= available_cash:
+                    self.position = position_size
+                    self.cash -= total_cost
+                    self.entry_price = execution_price
+                    self.entry_time = timestamp
+                    self.total_slippage_cost += slippage_cost
+                    
+                    trade_info['position_change'] = position_size
+                    trade_info['execution_price'] = execution_price
+                    trade_info['slippage'] = execution_price - current_price
+                    trade_info['slippage_cost'] = slippage_cost
+                
+        elif signal == 1:  # SHORT
+            if self.position >= 0:  # Need to sell short
+                trade_info['action'] = 'SELL_SHORT'
+                if self.position > 0:  # Close long first
+                    trade_info['action'] = 'SELL_AND_SHORT'
+                    self._close_position(current_price, timestamp, trade_info)
+                
+                # Calculate short position size (use 95% of available cash as collateral)
+                available_cash = self.cash * 0.95
+                
+                # Calculate execution price with slippage (selling = lower price)
+                execution_price = self._calculate_execution_price(current_price, is_buy=False)
+                position_size = available_cash / current_price  # Size based on market price
+                
+                # Cash received from short sale (less slippage)
+                cash_received = position_size * execution_price
+                slippage_cost = position_size * (current_price - execution_price)
+                
+                if cash_received > 0:
+                    self.position = -position_size  # Negative for short
+                    self.cash += cash_received
+                    self.entry_price = execution_price
+                    self.entry_time = timestamp
+                    self.total_slippage_cost += slippage_cost
+                    
+                    trade_info['position_change'] = -position_size
+                    trade_info['execution_price'] = execution_price
+                    trade_info['slippage'] = current_price - execution_price
+                    trade_info['slippage_cost'] = slippage_cost
+                
+        elif signal == 2:  # FLAT
+            if self.position != 0:  # Need to close position
+                trade_info['action'] = 'CLOSE_POSITION'
+                self._close_position(current_price, timestamp, trade_info)
+        
+        # Calculate post-trade values
+        trade_info['post_trade_value'] = self.get_portfolio_value(current_price)
+        trade_info['unrealized_pnl'] = self.get_unrealized_pnl(current_price)
+        
+        # Update tracking
+        self.portfolio_values.append({
+            'timestamp': timestamp,
+            'value': trade_info['post_trade_value'],
+            'cash': self.cash,
+            'position': self.position,
+            'position_value': self.get_position_value(current_price),
+            'unrealized_pnl': trade_info['unrealized_pnl']
+        })
+        
+        # Log trade if there was an action
+        if trade_info['action'] != 'HOLD':
+            self.trade_history.append(trade_info)
+            self.total_trades += 1
+            
+            # Track realized P&L when position is closed
+            if trade_info['action'] in ['CLOSE_POSITION', 'COVER_AND_BUY', 'SELL_AND_SHORT']:
+                realized_pnl = trade_info.get('realized_pnl', 0)
+                self.total_pnl += realized_pnl
+                if realized_pnl > 0:
+                    self.winning_trades += 1
+        
+        return trade_info
+    
+    def _close_position(self, current_price: float, timestamp: datetime, trade_info: Dict):
+        """Close current position and update trade info."""
+        if self.position == 0:
+            return
+        
+        # Calculate execution price with slippage
+        is_buy = self.position < 0  # If short position, we need to buy to cover
+        execution_price = self._calculate_execution_price(current_price, is_buy=is_buy)
+        
+        # Calculate slippage cost
+        slippage_cost = abs(self.position) * abs(execution_price - current_price)
+        self.total_slippage_cost += slippage_cost
+        
+        # Calculate realized P&L and update cash
+        if self.position > 0:  # Closing long position (selling)
+            # Sell at execution price (with slippage)
+            cash_received = self.position * execution_price
+            self.cash += cash_received
+            realized_pnl = (execution_price - self.entry_price) * self.position
+        else:  # Closing short position (buying to cover)
+            # Buy to cover at execution price (with slippage)
+            cash_spent = abs(self.position) * execution_price
+            self.cash -= cash_spent
+            realized_pnl = (self.entry_price - execution_price) * abs(self.position)
+        
+        # Reset position
+        self.position = 0.0
+        self.entry_price = 0.0
+        self.entry_time = None
+        
+        # Update trade info
+        trade_info['slippage_cost'] = trade_info.get('slippage_cost', 0) + slippage_cost
+        trade_info['realized_pnl'] = realized_pnl
+        trade_info['execution_price'] = execution_price
+    
+    def get_statistics(self) -> Dict:
+        """Get portfolio statistics."""
+        if not self.portfolio_values:
+            current_value = self.initial_balance
+        else:
+            current_value = self.portfolio_values[-1]['value']
+        
+        total_return = ((current_value - self.initial_balance) / self.initial_balance) * 100
+        win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
+        
+        return {
+            'initial_balance': self.initial_balance,
+            'current_value': current_value,
+            'total_return_pct': total_return,
+            'total_trades': self.total_trades,
+            'winning_trades': self.winning_trades,
+            'win_rate_pct': win_rate,
+            'total_pnl': self.total_pnl,
+            'total_slippage_cost': self.total_slippage_cost,
+            'current_position': self.position,
+            'current_cash': self.cash
+        }
+    
+    def log_portfolio_status(self, console, timestamp: datetime, current_price: float):
+        """Log current portfolio status."""
+        stats = self.get_statistics()
+        portfolio_value = self.get_portfolio_value(current_price)
+        unrealized_pnl = self.get_unrealized_pnl(current_price)
+        
+        # Color based on performance
+        if stats.get('total_return_pct', 0) > 0:
+            color = "green"
+        elif stats.get('total_return_pct', 0) < 0:
+            color = "red"
+        else:
+            color = "yellow"
+        
+        # Position status
+        if self.position > 0:
+            position_status = f"LONG {self.position:.4f}"
+        elif self.position < 0:
+            position_status = f"SHORT {abs(self.position):.4f}"
+        else:
+            position_status = "FLAT"
+        
+        console.print(f"[{color}]{timestamp.strftime('%H:%M:%S')} | Portfolio: ${portfolio_value:.2f} | {position_status} | Unrealized P&L: ${unrealized_pnl:.2f} | Total Return: {stats.get('total_return_pct', 0):.2f}% | Slippage: ${stats.get('total_slippage_cost', 0):.2f}[/{color}]")
+
+# Example usage functions
+def create_portfolio_callback(portfolio: SimulatedPortfolio, console=None):
+    """
+    Create a callback function that uses SimulatedPortfolio for live trading simulation.
+    
+    Args:
+        portfolio: SimulatedPortfolio instance
+        console: Rich console for output (optional)
+    
+    Returns:
+        Callback function that can be used with LiveTradingSystem
+    """
+    def portfolio_signal_callback(signal_info: Dict):
+        """Callback function that executes trades in the simulated portfolio."""
+        timestamp = signal_info['timestamp']
+        current_price = signal_info['current_price']
+        new_signal = signal_info['new_signal']
+        
+        # Execute trade in portfolio
+        trade_result = portfolio.execute_trade(new_signal, current_price, timestamp)
+        
+        # Log the trade execution
+        if trade_result['action'] != 'HOLD':
+            action = trade_result['action']
+            position_change = trade_result['position_change']
+            commission = trade_result['slippage_cost']
+            post_value = trade_result['post_trade_value']
+            
+            # Color coding for different actions
+            if 'BUY' in action or 'LONG' in action:
+                color = 'green'
+            elif 'SELL' in action or 'SHORT' in action:
+                color = 'red'
+            elif 'CLOSE' in action:
+                color = 'yellow'
+            else:
+                color = 'blue'
+            
+            if console:
+                console.print(f"[{color}]{timestamp.strftime('%H:%M:%S')} | EXECUTED: {action} | Position: {position_change:+.4f} | Slippage: ${commission:.2f} | Portfolio: ${post_value:.2f}[/{color}]")
+            else:
+                print(f"{timestamp.strftime('%H:%M:%S')} | EXECUTED: {action} | Position: {position_change:+.4f} | Slippage: ${commission:.2f} | Portfolio: ${post_value:.2f}")
+        
+        # Log portfolio status periodically (every 10 trades or when position changes)
+        if len(portfolio.trade_history) % 10 == 0 or trade_result['action'] != 'HOLD':
+            if console:
+                portfolio.log_portfolio_status(console, timestamp, current_price)
+            else:
+                stats = portfolio.get_statistics()
+                portfolio_value = portfolio.get_portfolio_value(current_price)
+                unrealized_pnl = portfolio.get_unrealized_pnl(current_price)
+                print(f"{timestamp.strftime('%H:%M:%S')} | Portfolio: ${portfolio_value:.2f} | Unrealized P&L: ${unrealized_pnl:.2f} | Total Return: {stats.get('total_return_pct', 0):.2f}%")
+    
+    return portfolio_signal_callback
+
+def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, console=None, log_interval: int = 5):
+    """
+    Create an enhanced callback with more detailed logging and statistics.
+    
+    Args:
+        portfolio: SimulatedPortfolio instance
+        console: Rich console for output (optional)
+        log_interval: How often to log detailed statistics (every N trades)
+    
+    Returns:
+        Enhanced callback function
+    """
+    trade_count = 0
+    
+    def enhanced_portfolio_callback(signal_info: Dict):
+        nonlocal trade_count
+        
+        timestamp = signal_info['timestamp']
+        current_price = signal_info['current_price']
+        new_signal = signal_info['new_signal']
+        
+        # Execute trade
+        trade_result = portfolio.execute_trade(new_signal, current_price, timestamp)
+        
+        # Log trade execution
+        if trade_result['action'] != 'HOLD':
+            trade_count += 1
+            action = trade_result['action']
+            position_change = trade_result['position_change']
+            slippage_cost = trade_result['slippage_cost']
+            post_value = trade_result['post_trade_value']
+            execution_price = trade_result['execution_price']
+            
+            # Enhanced trade logging
+            if console:
+                # Create a detailed trade log
+                trade_color = 'green' if 'BUY' in action else 'red' if 'SELL' in action else 'yellow'
+                console.print(f"[{trade_color}]{timestamp.strftime('%H:%M:%S')} | TRADE #{trade_count} | {action}[/{trade_color}]")
+                console.print(f"[{trade_color}]  Market: ${current_price:.2f} | Execution: ${execution_price:.2f} | Position: {position_change:+.4f} | Slippage: ${slippage_cost:.2f}[/{trade_color}]")
+                
+                # Log portfolio value change
+                pre_value = trade_result['pre_trade_value']
+                value_change = post_value - pre_value
+                value_color = 'green' if value_change >= 0 else 'red'
+                console.print(f"[{value_color}]  Portfolio: ${pre_value:.2f} → ${post_value:.2f} (${value_change:+.2f})[/{value_color}]")
+                
+                # Log realized P&L if position was closed
+                if 'realized_pnl' in trade_result:
+                    realized_pnl = trade_result['realized_pnl']
+                    pnl_color = 'green' if realized_pnl >= 0 else 'red'
+                    console.print(f"[{pnl_color}]  Realized P&L: ${realized_pnl:+.2f}[/{pnl_color}]")
+            else:
+                print(f"{timestamp.strftime('%H:%M:%S')} | TRADE #{trade_count} | {action} | Market: ${current_price:.2f} | Execution: ${execution_price:.2f} | Position: {position_change:+.4f}")
+        
+        # Log detailed statistics periodically
+        if trade_count > 0 and trade_count % log_interval == 0:
+            stats = portfolio.get_statistics()
+            if console:
+                console.print(f"[cyan]{'='*60}[/cyan]")
+                console.print(f"[cyan]PORTFOLIO STATISTICS (Trade #{trade_count})[/cyan]")
+                console.print(f"[cyan]{'='*60}[/cyan]")
+                console.print(f"Initial Balance: ${stats.get('initial_balance', 0):.2f}")
+                console.print(f"Current Value: ${stats.get('current_value', 0):.2f}")
+                console.print(f"Total Return: {stats.get('total_return_pct', 0):.2f}%")
+                console.print(f"Total Trades: {stats.get('total_trades', 0)}")
+                console.print(f"Win Rate: {stats.get('win_rate_pct', 0):.1f}%")
+                console.print(f"Total P&L: ${stats.get('total_pnl', 0):.2f}")
+                console.print(f"Total Slippage Cost: ${stats.get('total_slippage_cost', 0):.2f}")
+                console.print(f"Current Position: {stats.get('current_position', 0):.4f}")
+                console.print(f"Available Cash: ${stats.get('current_cash', 0):.2f}")
+                console.print(f"[cyan]{'='*60}[/cyan]")
+            else:
+                print(f"{'='*60}")
+                print(f"PORTFOLIO STATISTICS (Trade #{trade_count})")
+                print(f"{'='*60}")
+                print(f"Initial Balance: ${stats.get('initial_balance', 0):.2f}")
+                print(f"Current Value: ${stats.get('current_value', 0):.2f}")
+                print(f"Total Return: {stats.get('total_return_pct', 0):.2f}%")
+                print(f"Total Trades: {stats.get('total_trades', 0)}")
+                print(f"Win Rate: {stats.get('win_rate_pct', 0):.1f}%")
+                print(f"Total P&L: ${stats.get('total_pnl', 0):.2f}")
+                print(f"Total Slippage Cost: ${stats.get('total_slippage_cost', 0):.2f}")
+                print(f"{'='*60}")
+    
+    return enhanced_portfolio_callback
+
+async def run_portfolio_system():
+    """Run live trading system with simulated portfolio tracking."""
+    
+    # Create portfolio and console
+    portfolio = SimulatedPortfolio(initial_balance=10000.0, slippage_rate=0.001)
+    console = Console()
+    
+    # Create callback using portfolio
+    portfolio_callback = create_enhanced_portfolio_callback(portfolio, console, log_interval=5)
+    
+    # Create trading system
+    system = LiveTradingSystem(
+        symbol="BTCUSDT",
+        interval="1m",
+        data_source="binance",
+        buffer_size=500,
+        strategy_func=Strategy.sr_strategy,
+        strategy_params={'window': 12, 'threshold': 0.005, 'rejection_ratio_threshold': 0.5},
+        signal_callback=portfolio_callback
+    )
+    
+    console.print("[green]Starting Live Trading System with Portfolio Simulation[/green]")
+    console.print(f"[blue]Initial Balance: ${portfolio.initial_balance:.2f}[/blue]")
+    console.print(f"[blue]Slippage Rate: {portfolio.slippage_rate*100:.2f}%[/blue]")
+    console.print(f"[blue]Strategy: {system.strategy_func.__name__}[/blue]")
+    console.print(f"[blue]Parameters: {system.strategy_params}[/blue]")
+    console.print("[yellow]Press Ctrl+C to stop[/yellow]")
+    
+    try:
+        await system.start()
+    except KeyboardInterrupt:
+        console.print("\n[red]Shutting down...[/red]")
+        system.stop()
+        
+        # Final portfolio summary
+        final_stats = portfolio.get_statistics()
+        console.print(f"\n[cyan]{'='*60}[/cyan]")
+        console.print(f"[cyan]FINAL PORTFOLIO SUMMARY[/cyan]")
+        console.print(f"[cyan]{'='*60}[/cyan]")
+        console.print(f"Initial Balance: ${final_stats.get('initial_balance', 0):.2f}")
+        console.print(f"Final Value: ${final_stats.get('current_value', 0):.2f}")
+        console.print(f"Total Return: {final_stats.get('total_return_pct', 0):.2f}%")
+        console.print(f"Total Trades: {final_stats.get('total_trades', 0)}")
+        console.print(f"Win Rate: {final_stats.get('win_rate_pct', 0):.1f}%")
+        console.print(f"Total P&L: ${final_stats.get('total_pnl', 0):.2f}")
+        console.print(f"[cyan]{'='*60}[/cyan]")
 
 async def run_simple_system():
     """Simple version without status display - just signal logging."""
     
     system = LiveTradingSystem(
-        symbol="BTCUSDT",
+        symbol="BTC-USDT",
         interval="1m",
         data_source="binance",
-        buffer_size=200,
-        strategy_func=Strategy.sr_strategy,
+        buffer_size=500,
+        strategy_func=Strategy.macd_strategy,
         strategy_params={'fast_period': 12, 'slow_period': 26, 'signal_period': 9},
-        signal_callback=example_signal_callback
+        signal_callback=None
     )
     
     try:
@@ -512,6 +983,6 @@ async def run_simple_system():
 
 if __name__ == "__main__":
     # Choose one:
-    # asyncio.run(run_live_system())        # With status display
-    asyncio.run(run_simple_system())    # Simple version
+    asyncio.run(run_portfolio_system())    # With portfolio simulation
+    # asyncio.run(run_simple_syst5em())    # Simple version
     # asyncio.run(test_binance_bootstrap()) # Test data bootstrap only

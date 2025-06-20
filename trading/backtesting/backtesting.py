@@ -5,16 +5,12 @@ import torch
 import torch.nn.functional as F
 import plotly.graph_objects as go
 from rich import print
-from torch.utils.data import TensorDataset, DataLoader
-from tqdm import tqdm
-import sys
 
+import sys
 sys.path.append("trading")
 
 import model_tools as mt
-import technical_analysis as ta
-import smc_analysis as smc
-
+import strategy
 import vb_metrics as metrics
 
 class VectorizedBacktesting:
@@ -245,13 +241,13 @@ class VectorizedBacktesting:
             'Total_Trades': len(trade_pnls)
         }
 
-    def plot_performance(self, show_graph: bool = True, advanced: bool = False):
+    def plot_performance(self, show_graph: bool = True, extended: bool = False):
         if self.data is None or 'Portfolio_Value' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
         summary = self.get_performance_metrics()
 
-        if not advanced:
+        if not extended:
             from plotly.subplots import make_subplots
             
             # Create subplot with secondary y-axis
@@ -303,35 +299,6 @@ class VectorizedBacktesting:
                     yaxis='y2'
                 ),
                 secondary_y=True
-            )
-
-            # Add support/resistance levels on primary y-axis (original price scale)
-            support_levels, resistance_levels = smc.support_resistance_levels(
-                self.data['Open'], self.data['High'], self.data['Low'], self.data['Close']
-            )
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data.index,
-                    y=support_levels,
-                    mode='lines',
-                    name='Support',
-                    line=dict(color='green', dash='dot'),
-                    yaxis='y'
-                ),
-                secondary_y=False
-            )
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data.index,
-                    y=resistance_levels,
-                    mode='lines',
-                    name='Resistance',
-                    line=dict(color='red', dash='dot'),
-                    yaxis='y'
-                ),
-                secondary_y=False
             )
 
             position_changes = np.diff(self.data['Position'].values)
@@ -407,7 +374,7 @@ class VectorizedBacktesting:
             
             # Update layout for dual y-axes
             fig.update_layout(
-                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
+                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis_title='Date',
                 showlegend=True,
                 template="plotly_dark",
@@ -698,247 +665,23 @@ class VectorizedBacktesting:
         else:
             print(f"\n[green]No NaN values found[/green]")
 
-class Strategy:
-    @staticmethod
-    def hold_strategy(data: pd.DataFrame, signal: int = 3) -> pd.Series:
-        return pd.Series(signal, index=data.index)
-
-    @staticmethod
-    def perfect_strategy(data: pd.DataFrame) -> pd.Series:
-        """
-        Perfect strategy that uses only past information to predict future open-to-open returns.
-        
-        Uses Close[t-1] to predict return from Open[t] to Open[t+1]
-        Signal at Close[t-1] -> Execute at Open[t] -> Earn Open[t] to Open[t+1]
-        """
-        signals = pd.Series(2, index=data.index)
-        
-        if len(data) < 2:
-            return signals
-            
-        # For each bar, use only information available at the previous close
-        for i in range(1, len(data)):
-            # At close of bar i-1, predict return from Open[i] to Open[i+1]
-            if i < len(data) - 1:  # Make sure we have the next open
-                # This is the return we want to predict and capture
-                future_return = (data['Open'].iloc[i+1] - data['Open'].iloc[i]) / data['Open'].iloc[i]
-                
-                # "Perfect" prediction based on past data (in reality this would be a model)
-                if future_return > 0:
-                    signals.iloc[i] = 3  # Long
-                elif future_return < 0:
-                    signals.iloc[i] = 1  # Short
-                # else stay flat (2)
-        
-        return signals
-
-    @staticmethod
-    def ema_cross_strategy(data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        ema_fast = ta.ema(data['Close'], fast_period)
-        ema_slow = ta.ema(data['Close'], slow_period)
-        signals[ema_fast > ema_slow] = 3
-        signals[ema_fast < ema_slow] = 1
-        return signals
-
-    @staticmethod
-    def zscore_reversion_strategy(data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        zscore = ta.zscore(data['Close'])
-        signals[zscore < -1] = 3
-        signals[zscore > 1] = 1
-        return signals
-
-    @staticmethod
-    def zscore_momentum_strategy(data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        zscore = ta.zscore(data['Close'])
-        signals[zscore < -1] = 1
-        signals[zscore > 1] = 3
-        return signals
-
-    @staticmethod
-    def rsi_strategy(data: pd.DataFrame, oversold: int = 32, overbought: int = 72) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        rsi = ta.rsi(data['Close'])
-        signals[rsi < oversold] = 3
-        signals[rsi > overbought] = 1
-        return signals
-
-    @staticmethod
-    def macd_strategy(data: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        macd, signal = ta.macd(data['Close'], fastperiod=fast_period, slowperiod=slow_period, signalperiod=signal_period)
-        signals[macd > signal] = 3
-        signals[macd < signal] = 1
-        return signals
-
-    @staticmethod
-    def supertrend_strategy(data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=14, multiplier=3)
-        signals[data['Close'] > supertrend_line] = 3
-        signals[data['Close'] < supertrend_line] = 1
-        return signals
-
-    @staticmethod
-    def psar_strategy(data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
-        signals[data['Close'] > psar] = 3
-        signals[data['Close'] < psar] = 1
-        return signals
-
-    @staticmethod
-    def smc_strategy(data: pd.DataFrame) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        return signals
-
-    @staticmethod
-    def scalper_strategy(data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        fast_ema = ta.ema(data['Close'], fast_period)
-        slow_ema = ta.ema(data['Close'], slow_period)
-        adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'])
-        upper_wick = data['High'] - np.maximum(data['Open'], data['Close'])
-        lower_wick = np.minimum(data['Open'], data['Close']) - data['Low']
-        momentum = ta.mom(data['Close'], momentum_period)
-        body_size = np.abs(data['Close'] - data['Open']) + 1e-9
-        upper_wick_ratio = upper_wick / body_size
-        lower_wick_ratio = lower_wick / body_size
-        is_liquidity_sweep_up = (upper_wick_ratio > lower_wick_ratio) & (upper_wick_ratio > wick_threshold)
-        is_liquidity_sweep_down = (lower_wick_ratio > upper_wick_ratio) & (lower_wick_ratio > wick_threshold)
-        buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_up | (momentum <= -momentum_threshold)
-        sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_down | (momentum >= momentum_threshold)
-        signals[buy_conditions] = 3
-        signals[sell_conditions] = 1
-        return signals
-
-    @staticmethod
-    def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days, zscore_window: int = 20, lower_zscore_threshold: float = -1, upper_zscore_threshold: float = 1) -> pd.Series:
-        signals = pd.Series(2, index=data.index)
-        eth_price = mt.fetch_data('ETH-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
-        btc_price = mt.fetch_data('BTC-USDT', chunks=chunks, interval=interval, age_days=age_days, kucoin=True)
-        ethbtc_ratio = eth_price[['Open', 'High', 'Low', 'Close']] / btc_price[['Open', 'High', 'Low', 'Close']]
-        
-        zscore = ta.zscore(ethbtc_ratio['Open'], timeperiod=zscore_window)
-
-        #follow ethbtc ratio breakouts
-        buy_conditions = zscore > upper_zscore_threshold
-        sell_conditions = zscore < lower_zscore_threshold
-        signals[buy_conditions] = 3
-        signals[sell_conditions] = 2
-        return signals
-    
-    @staticmethod
-    def sr_strategy(data: pd.DataFrame, window: int = 12, buy_threshold: float = 0.005, sell_threshold: float = 0.005) -> pd.Series:
-        signals = pd.Series(0, index=data.index)
-        support, resistance = smc.support_resistance_levels(data['Open'], data['High'], data['Low'], data['Close'], window=window)
-        
-        support_pct_distance = (data['Close'] - support) / support
-        resistance_pct_distance = (resistance - data['Close']) / resistance
-
-        bullish_rejection_wick_ratio = (data[['Open', 'Close']].min(axis=1) - data['Low']) / (data['High'] - data['Low'] + 1e-9)
-        bearish_rejection_wick_ratio = (data['High'] - data[['Open', 'Close']].max(axis=1)) / (data['High'] - data['Low'] + 1e-9)
-        
-        recent_low = data['Low'].rolling(window=window).min().shift(1)
-        recent_high = data['High'].rolling(window=window).max().shift(1)
-
-        bullish_liquidity_sweep = ((bullish_rejection_wick_ratio > bearish_rejection_wick_ratio) & 
-                                   (bullish_rejection_wick_ratio > 0.5) &
-                                   (data['Low'] < recent_low))
-        bearish_liquidity_sweep = ((bearish_rejection_wick_ratio > bullish_rejection_wick_ratio) & 
-                                   (bearish_rejection_wick_ratio > 0.5) &
-                                   (data['High'] > recent_high)) 
-
-        support_bounce = (support_pct_distance >= buy_threshold) & (data['Close'] > support)
-        resistance_bounce = (resistance_pct_distance >= sell_threshold) & (data['Close'] < resistance)
-
-        #trigger off bounces
-        buy_conditions = support_bounce & ~bearish_liquidity_sweep
-        sell_conditions = resistance_bounce & ~bullish_liquidity_sweep
-        signals[buy_conditions] = 3
-        signals[sell_conditions] = 1
-        return signals
-    
-    @staticmethod
-    def nn_strategy(data: pd.DataFrame, batch_size: int = 64, check_consistency: bool = False) -> pd.Series:
-        from brains.time_series.single_predictors.classifier_model import load_model
-        MODEL_PATH = r"trading\BTC-USDT_1min_5_38features.pth"
-        signals = pd.Series(2, index=data.index)
-        model = load_model(MODEL_PATH)
-        model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-        model.eval()
-        selected_features = model.selected_features
-        features_df, _ = mt.prepare_data_classifier(data[['Open', 'High', 'Low', 'Close', 'Volume']], lagged_length=5)
-        missing_features = [f for f in selected_features if f not in features_df.columns]
-        if missing_features:
-            print(f"Warning: Missing {len(missing_features)} features: {missing_features[:5]}...")
-            available_features = [f for f in selected_features if f in features_df.columns]
-            features_df = features_df[available_features]
-        else:
-            features_df = features_df[selected_features]
-        X = torch.tensor(features_df.values, dtype=torch.float32).to(model.DEVICE)
-        X_seq = X.unsqueeze(1)
-        dataset = TensorDataset(X_seq)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-        position_values = np.zeros(len(features_df))
-        with torch.no_grad():
-            idx = 0
-            for batch in tqdm(dataloader, desc="NN Strategy Batching"):
-                batch_x = batch[0]
-                outputs = model(batch_x)
-                probs = F.softmax(outputs, dim=2)
-                actions = torch.argmax(probs, dim=2).cpu().numpy().flatten()
-                for i, action in enumerate(actions):
-                    if action == 3:
-                        position_values[idx + i] = 3
-                    elif action == 1:
-                        position_values[idx + i] = 1
-                    else:
-                        position_values[idx + i] = 2
-                idx += len(actions)
-        signals.iloc[len(data)-len(position_values):] = position_values
-        signals = signals.ffill().fillna(2)
-        if check_consistency:
-            with torch.no_grad():
-                single_preds = []
-                for i in range(min(32, len(X))):
-                    x_single = X[i].unsqueeze(0).unsqueeze(0)
-                    out = model(x_single)
-                    prob = F.softmax(out, dim=2)
-                    act = torch.argmax(prob, dim=2).item()
-                    single_preds.append(act)
-                batch_preds = position_values[:len(single_preds)]
-                if not np.all(batch_preds == np.array([3 if a==3 else 1 if a==1 else 2 for a in single_preds])):
-                    print("[red]WARNING: Batch and single inference results differ![red]")
-        return signals
-
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400,
-        slippage_pct=0.00,
+        slippage_pct=0.005,
         commission_pct=0.0,
-        reinvest=True
+        reinvest=False
     )
     backtest.fetch_data(
-        symbol="BTC-USDT",
-        chunks=30,
+        symbol="SOL-USDT",
+        chunks=365,
         interval="5m",
         age_days=0,
         data_source="binance"
     )
     
-    # backtest.run_strategy(Strategy.ETHBTC_trader, 
-    #                       verbose=True, 
-    #                       chunks=backtest.chunks, 
-    #                       interval=backtest.interval, 
-    #                       age_days=backtest.age_days,
-    #                       lower_zscore_threshold=-0.33,
-    #                       upper_zscore_threshold=0.101)
-
-    backtest.run_strategy(Strategy.sr_strategy)
-
+    #backtest.run_strategy(strategy.ma_breakout_strategy, verbose=True, atr_period=14, ma_period=2, pct_band=0.0035)
+    backtest.run_strategy(strategy.ma_trend_strategy, verbose=True, band_period=2, pct_band=0.002, adx_ma_period=32)
     print(backtest.get_performance_metrics())
     
-    backtest.plot_performance(advanced=False)
+    backtest.plot_performance(extended=False)
