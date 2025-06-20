@@ -166,8 +166,8 @@ def ma_trend_strategy(data: pd.DataFrame, band_period: int = 2, pct_band: float 
     adx_ma = ta.sma(adx, adx_ma_period)
     adx_ma_diff = (adx - adx_ma) / adx_ma #under the assumption that adx will begin to rise when a cascade hits
 
-    buy_conditions = (data['Close'] > upper_band) & (adx_ma_diff < 0)
-    sell_conditions = (data['Close'] < lower_band) & (adx_ma_diff < 0)
+    buy_conditions = (data['Close'] > upper_band)
+    sell_conditions = (data['Close'] < lower_band)
 
     signals[buy_conditions] = 3
     signals[sell_conditions] = 1

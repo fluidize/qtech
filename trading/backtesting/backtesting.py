@@ -668,13 +668,13 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400,
-        slippage_pct=0.005,
+        slippage_pct=0.01,
         commission_pct=0.0,
         reinvest=False
     )
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=365,
+        chunks=30,
         interval="5m",
         age_days=0,
         data_source="binance"
