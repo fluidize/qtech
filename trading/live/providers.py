@@ -77,6 +77,18 @@ class BinanceProvider(BaseDataProvider):
         formatted_symbol = self.format_symbol(self.symbol).lower()
         self.ws_url = f"{self.ws_base_url}/{formatted_symbol}@kline_{self.interval}"
         
+        # Test WebSocket connection latency
+        try:
+            import websockets
+            ws_test_start = time.time()
+            async with websockets.connect(self.ws_url) as ws:
+                # Wait for first message to establish connection
+                await asyncio.wait_for(ws.recv(), timeout=5)
+                ws_latency = (time.time() - ws_test_start) * 1000  # Convert to milliseconds
+                logger.info(f"Binance WebSocket latency: {ws_latency:.2f}ms")
+        except Exception as e:
+            logger.warning(f"Could not measure WebSocket latency: {e}")
+        
         logger.info(f"Binance WebSocket URL set: {self.ws_url}")
         logger.info(f"Using symbol: {formatted_symbol} interval: {self.interval}")
     
