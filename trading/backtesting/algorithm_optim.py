@@ -181,7 +181,7 @@ class BayesianOptimizer:
             {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold", "momentum_threshold"]},
             {"strategy": "ETHBTC_trader", "params": ["lower_zscore_threshold", "upper_zscore_threshold"]},
             {"strategy": "sr_strategy", "params": ["threshold", "rejection_ratio_threshold"]},
-            {"strategy": "ma_trend_strategy", "params": ["pct_band", "adx_ma_threshold"]},
+            {"strategy": "trend_strategy", "params": ["pct_band"]},
         ] #float exceptions
         
         fixed_param_exceptions = [
@@ -390,62 +390,62 @@ class AlgorithmOptimizer:
         self.engine.run_strategy(self.strategy_func, **best_params)
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
+# if __name__ == "__main__":
+#     vb = VectorizedBacktesting(
+#         instance_name="AlgorithmOptimizer",
+#         initial_capital=10000,
+#         slippage_pct=0.005,
+#         commission_pct=0.00,
+#         reinvest=False
+#     )
+#     vb.fetch_data(
+#         symbol="SOL-USDT",
+#         chunks=10,
+#         interval="5m",
+#         age_days=0,
+#         data_source="binance"
+#     )
+#     BO = BayesianOptimizer(
+#         engine=vb,
+#         strategy_func=strategy.trend_strategy,
+#         param_space={
+#             "atr_period":(2,200),
+#             "ma_period":(2,200),
+#             "pct_band":(0.001,0.01),
+#         },
+#         metric="Sharpe_Ratio",
+#         n_trials=500,
+#         direction="maximize"
+#     )
+#     BO.run(save_params=False)
+#     BO.plot_best_performance(extended=False)
+#     print(BO.get_best_params())
+
 if __name__ == "__main__":
-    vb = VectorizedBacktesting(
-        instance_name="AlgorithmOptimizer",
-        initial_capital=10000,
-        slippage_pct=0.003,
-        commission_pct=0.00,
-        reinvest=False
-    )
-    vb.fetch_data(
-        symbol="SOL-USDT",
-        chunks=10,
-        interval="5m",
+    A = AlgorithmOptimizer(
+        symbol="BTC-USDT",
+        chunks=100,
         age_days=0,
         data_source="binance"
     )
-    BO = BayesianOptimizer(
-        engine=vb,
-        strategy_func=strategy.ma_trend_strategy,
-        param_space={
-            "band_period":(2,200),
-            "pct_band":(0.001,0.01),
-            "adx_ma_period":(2,40),
-        },
-        metric="Sharpe_Ratio",
-        n_trials=500,
-        direction="maximize"
-    )
-    BO.run(save_params=False)
-    BO.plot_best_performance(extended=False)
-    print(BO.get_best_params())
-
-# if __name__ == "__main__":
-#     A = AlgorithmOptimizer(
-#         symbol="BTC-USDT",
-#         chunks=100,
-#         age_days=0,
-#         data_source="kucoin"
-#     )
     
-#     A.optimize(
-#         strategy_func=Strategy.ma_reversal_strategy,
-#         param_space={
-#             "atr_period":(2,40),
-#             "ma_period":(2,40),
-#             "atr_multiplier":(0.1, 2)
-#         },
-#         metric="Total_Return",
-#         n_trials=300,
-#         direction="maximize",
-#         save_params=False
-#     )
+    A.optimize(
+        strategy_func=strategy.trend_strategy,
+        param_space={
+            "atr_period":(2,40),
+            "ma_period":(2,40),
+            "pct_band":(0.001,0.01)
+        },
+        metric="Total_Return",
+        n_trials=300,
+        direction="maximize",
+        save_params=False
+    )
 
-#     A.plot_best_performance(extended=False)
-#     A.plot_best_performance(extended=True)
+    A.plot_best_performance(extended=False)
+    A.plot_best_performance(extended=True)
 
-#     best_params, best_tf = A.get_best_params_with_timeframe()
-#     print(f"\nBest timeframe: {best_tf}")
-#     print(f"Best parameters: {best_params}")
+    best_params, best_tf = A.get_best_params_with_timeframe()
+    print(f"\nBest timeframe: {best_tf}")
+    print(f"Best parameters: {best_params}")
 

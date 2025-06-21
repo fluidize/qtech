@@ -301,6 +301,20 @@ class VectorizedBacktesting:
                 secondary_y=True
             )
 
+            # Add rolling returns line (30-period rolling window)
+            rolling_returns = self.data['Strategy_Returns'].rolling(window=30).mean() * 100  # Convert to percentage
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=rolling_returns,
+                    mode='lines',
+                    name='Rolling Returns (30-period)',
+                    line=dict(color='orange', width=1, dash='dot'),
+                    yaxis='y2'
+                ),
+                secondary_y=True
+            )
+
             position_changes = np.diff(self.data['Position'].values)
             
             # Separate different types of position changes
@@ -385,10 +399,10 @@ class VectorizedBacktesting:
                     xanchor="right",
                     x=1
                 ),
-                # xaxis=dict(
-                #     rangeslider=dict(visible=False),
-                #     rangeselector=dict(visible=False)
-                # )
+                xaxis=dict(
+                    rangeslider=dict(visible=False),
+                    rangeselector=dict(visible=False)
+                )
             )
             
             # Set y-axes titles
@@ -668,19 +682,19 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400,
-        slippage_pct=0.005,
+        slippage_pct=0.01,
         commission_pct=0.0,
         reinvest=False
-    )
+    )   
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=10,
-        interval="1m",
+        chunks=365,
+        interval="5m",
         age_days=0,
-        data_source="kucoin"
+        data_source="binance"
     )
     
-    backtest.run_strategy(strategy.scalper_strategy, verbose=True)
+    backtest.run_strategy(strategy.trend_strategy, verbose=True)
     
     print(backtest.get_performance_metrics())
     
