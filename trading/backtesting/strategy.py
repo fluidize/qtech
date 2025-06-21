@@ -84,64 +84,43 @@ def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days, data_source: s
     signals[sell_conditions] = 2
     return signals
 
-def sr_strategy(data: pd.DataFrame, window: int = 12, threshold: float = 0.005, rejection_ratio_threshold: float = 0.5) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
-    volatility = ta.volatility(data['Close'], timeperiod=20)
+def trend_strategy(data: pd.DataFrame,
+                sr_window: int = 12,
+                supertrend_window: int = 12,
+                supertrend_multiplier: float = 4) -> pd.Series:
+    """Follows trend with a variety of breakout and momentum strategies."""
     
-    support, resistance = smc.support_resistance_levels(data['Open'], data['High'], data['Low'], data['Close'], window=window)
-    
-    support_pct_distance = (data['Close'] - support) / support
-    resistance_pct_distance = (resistance - data['Close']) / resistance
-
-    bullish_rejection_wick_ratio = (data[['Open', 'Close']].min(axis=1) - data['Low']) / (data['High'] - data['Low'] + 1e-9)
-    bearish_rejection_wick_ratio = (data['High'] - data[['Open', 'Close']].max(axis=1)) / (data['High'] - data['Low'] + 1e-9)
-    
-    recent_low = data['Low'].rolling(window=window).min().shift(1)
-    recent_high = data['High'].rolling(window=window).max().shift(1)
-
-    bullish_liquidity_sweep = ((bullish_rejection_wick_ratio > bearish_rejection_wick_ratio) & 
-                                (bullish_rejection_wick_ratio > rejection_ratio_threshold) &
-                                (data['Low'] < recent_low))
-    bearish_liquidity_sweep = ((bearish_rejection_wick_ratio > bullish_rejection_wick_ratio) & 
-                                (bearish_rejection_wick_ratio > rejection_ratio_threshold) &
-                                (data['High'] > recent_high)) 
-
-    support_bounce = (support_pct_distance >= threshold) & (data['Close'] > support)
-    resistance_bounce = (resistance_pct_distance >= threshold) & (data['Close'] < resistance)
-
-    #trigger off bounces
-    buy_conditions = support_bounce | (~bearish_liquidity_sweep & (volatility > 70))
-    sell_conditions = resistance_bounce | (~bullish_liquidity_sweep & (volatility > 70))
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 1
-    return signals
-
-def ma_trend_strategy(data: pd.DataFrame, band_period: int = 2, pct_band: float = 0.002, adx_ma_period: int = 32) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
-    hlc3 = (data['High'] + data['Low'] + data['Close']) / 3
-    upper_band = ta.ema(data['Close'], band_period) + data['Close'] * pct_band
-    lower_band = ta.ema(data['Close'], band_period) - data['Close'] * pct_band
-
-    adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'])
-    adx_ma = ta.sma(adx, adx_ma_period)
-    adx_ma_diff = (adx - adx_ma) / adx_ma #under the assumption that adx will begin to rise when a cascade hits
-
-    buy_conditions = (data['Close'] > upper_band)
-    sell_conditions = (data['Close'] < lower_band)
-
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 1
-    return signals
-
-def ma_super_trend_strategy(data: pd.DataFrame, period: int = 14, multiplier: float = 3) -> pd.Series:
     signals = pd.Series(0, index=data.index)
-    ma1 = ta.sma(data['Close'], 20)
-    ma2 = ta.sma(data['Close'], 50)
-    ma3 = ta.sma(data['Close'], 100)
+    macd, macd_signal, macd_hist = ta.macd_dema(data['Close'], fastperiod=12, slowperiod=26, signalperiod=9)
+    ao = ta.awesome_oscillator(data['High'], data['Low'], fast_period=5, slow_period=34)
 
-    buy_conditions = (ma1 > ma2) & (ma2 > ma3)
-    sell_conditions = (ma1 < ma2) | (ma2 < ma3)
+    support, resistance = smc.support_resistance_levels(data['Open'], data['High'], data['Low'], data['Close'], window=sr_window)
+    supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=supertrend_window, multiplier=supertrend_multiplier)
+    
+    #breakout trend following conditions
+    breakout_buy_conditions = (data['Close'] > resistance.shift(1)) & (supertrend == 1)
+    breakout_sell_conditions = (data['Close'] < support.shift(1)) & (supertrend == -1)
+    #momentum mean reversion conditions
+    momentum_buy_conditions = (np.sign(macd_hist)-np.sign(macd_hist.shift(1)) >= 0)
+    momentum_sell_conditions = (np.sign(macd_hist)-np.sign(macd_hist.shift(1)) <= 0)
 
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 2
+    signals[breakout_buy_conditions & momentum_buy_conditions] = 3
+    signals[breakout_sell_conditions & momentum_sell_conditions] = 1
+    return signals
+
+def macd_dema_analysis(data: pd.DataFrame) -> pd.Series:
+
+    signals = pd.Series(0, index=data.index)
+    macd, macd_signal, macd_hist = ta.macd_dema(data['Close'], fastperiod=12, slowperiod=26, signalperiod=9)
+    cci = ta.cci(data['High'], data['Low'], data['Close'], timeperiod=20)
+    cci_ma = ta.sma(cci, timeperiod=14)
+
+    macd_buy_conditions = (np.sign(macd_hist)-np.sign(macd_hist.shift(1)) >= 0) & (macd_hist > 0.01)
+    macd_sell_conditions = (np.sign(macd_hist)-np.sign(macd_hist.shift(1)) <= 0) & (macd_hist < -0.01)
+    cci_buy_conditions = (cci < -150) & (cci_ma < -150)
+    cci_sell_conditions = (cci > 150) & (cci_ma > 150)
+
+    signals[macd_buy_conditions & cci_buy_conditions] = 3
+    signals[macd_sell_conditions & cci_sell_conditions] = 1
+
     return signals
