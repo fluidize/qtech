@@ -24,11 +24,20 @@ def rsi(series: pd.Series, timeperiod: int = 14) -> pd.Series:
 
 def macd(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> tuple[pd.Series, pd.Series]:
     """Moving Average Convergence Divergence"""
-    exp1 = series.ewm(span=fastperiod, adjust=False).mean()
-    exp2 = series.ewm(span=slowperiod, adjust=False).mean()
+    exp1 = ema(series, fastperiod)
+    exp2 = ema(series, slowperiod)
     macd = exp1 - exp2
-    signal = macd.ewm(span=signalperiod, adjust=False).mean()
-    return macd, signal
+    signal = ema(macd, signalperiod)
+    hist = macd - signal
+    return macd, signal, hist
+def macd_dema(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> tuple[pd.Series, pd.Series]:
+    """Moving Average Convergence Divergence with DEMA"""
+    exp1 = dema(series, fastperiod)
+    exp2 = dema(series, slowperiod)
+    macd = exp1 - exp2
+    signal = dema(macd, signalperiod)
+    hist = macd - signal
+    return macd, signal, hist
 
 def bbands(series: pd.Series, timeperiod: int = 20, nbdevup: int = 2, nbdevdn: int = 2) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Bollinger Bands"""
