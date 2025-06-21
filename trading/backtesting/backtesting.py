@@ -80,16 +80,29 @@ class VectorizedBacktesting:
                 if large_gaps.any():
                     print(f"[yellow]Warning: {large_gaps.sum()} large time gaps detected[/yellow]")
 
-    def _apply_trading_costs(self, returns: pd.Series, position_changes: pd.Series) -> pd.Series:
-        """Apply slippage and commissions to returns."""
+    def _apply_trading_costs(self, returns: pd.Series, position_changes: pd.Series, positions: pd.Series) -> pd.Series:
+        """Apply slippage and commissions to returns based on position change type."""
         if self.slippage_pct == 0 and self.commission_pct == 0:
             return returns
             
         costs = pd.Series(0.0, index=returns.index)
-        trade_mask = position_changes != 0
+        total_cost_per_trade = self.slippage_pct + self.commission_pct
         
-        # Apply costs only when position changes (trades occur)
-        costs[trade_mask] = self.slippage_pct + self.commission_pct
+        # Apply costs based on position change type
+        for i in range(1, len(positions)):
+            prev_pos = positions.iloc[i-1]
+            curr_pos = positions.iloc[i]
+            
+            if prev_pos != curr_pos:  # Position changed
+                if prev_pos == 2:  # From flat
+                    # Flat → Long or Flat → Short: single cost
+                    costs.iloc[i] = total_cost_per_trade
+                elif curr_pos == 2:  # To flat
+                    # Long → Flat or Short → Flat: single cost
+                    costs.iloc[i] = total_cost_per_trade
+                else:
+                    # Direct switch: Long → Short or Short → Long: double cost
+                    costs.iloc[i] = total_cost_per_trade * 2
         
         # Subtract costs from returns
         adjusted_returns = returns - costs
@@ -150,7 +163,7 @@ class VectorizedBacktesting:
         if self.slippage_pct == 0 and self.commission_pct == 0:
             self.data['Strategy_Returns'] = base_returns
         else:
-            self.data['Strategy_Returns'] = self._apply_trading_costs(base_returns, position_changes)
+            self.data['Strategy_Returns'] = self._apply_trading_costs(base_returns, position_changes, position)
         
         # Calculate cumulative returns and portfolio value based on reinvestment setting
         if self.reinvest:
@@ -171,6 +184,7 @@ class VectorizedBacktesting:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
             if self.slippage_pct > 0 or self.commission_pct > 0:
                 print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission per trade[/blue]")
+                print(f"[blue]Direct position switches (Long↔Short) incur double costs[/blue]")
             print(f"[cyan]Return calculation mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}[/cyan]")
 
         return self.data
@@ -682,7 +696,7 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400,
-        slippage_pct=0.01,
+        slippage_pct=0.005,
         commission_pct=0.0,
         reinvest=False
     )   
