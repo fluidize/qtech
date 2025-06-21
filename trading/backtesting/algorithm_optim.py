@@ -394,13 +394,13 @@ if __name__ == "__main__":
     vb = VectorizedBacktesting(
         instance_name="AlgorithmOptimizer",
         initial_capital=10000,
-        slippage_pct=0.01,
+        slippage_pct=0.003,
         commission_pct=0.00,
         reinvest=False
     )
     vb.fetch_data(
         symbol="SOL-USDT",
-        chunks=365,
+        chunks=10,
         interval="5m",
         age_days=0,
         data_source="binance"
@@ -410,11 +410,11 @@ if __name__ == "__main__":
         strategy_func=strategy.ma_trend_strategy,
         param_space={
             "band_period":(2,200),
-            "pct_band":(0.001,0.05),
+            "pct_band":(0.001,0.01),
             "adx_ma_period":(2,40),
         },
-        metric="Alpha",
-        n_trials=1000,
+        metric="Sharpe_Ratio",
+        n_trials=500,
         direction="maximize"
     )
     BO.run(save_params=False)

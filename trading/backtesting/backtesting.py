@@ -668,20 +668,20 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400,
-        slippage_pct=0.01,
+        slippage_pct=0.005,
         commission_pct=0.0,
         reinvest=False
     )
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=30,
-        interval="5m",
+        chunks=10,
+        interval="1m",
         age_days=0,
-        data_source="binance"
+        data_source="kucoin"
     )
     
-    #backtest.run_strategy(strategy.ma_breakout_strategy, verbose=True, atr_period=14, ma_period=2, pct_band=0.0035)
-    backtest.run_strategy(strategy.ma_trend_strategy, verbose=True, band_period=2, pct_band=0.002, adx_ma_period=32)
+    backtest.run_strategy(strategy.scalper_strategy, verbose=True)
+    
     print(backtest.get_performance_metrics())
     
     backtest.plot_performance(extended=False)

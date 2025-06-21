@@ -65,28 +65,33 @@ def get_alpha_beta(strategy_returns: pd.Series, market_returns: pd.Series, n_day
     X = sm.add_constant(market_returns_aligned.values)
     y = strategy_returns_aligned.values
     model = sm.OLS(y, X).fit()
-    alpha = model.params[0]  # Intercept is Jensen's alpha
+    alpha = model.params[0]  # Intercept is Jensen's alpha (per period)
     beta = model.params[1]   # Slope is beta
 
+    # Annualize alpha properly
     if return_interval == '1m':
-        bars_per_day = 1440
+        periods_per_year = 365 * 24 * 60  # 525,600 minutes per year
     elif return_interval == '3m':
-        bars_per_day = 480
+        periods_per_year = 365 * 24 * 20  # 175,200 3-minute periods per year
     elif return_interval == '5m':
-        bars_per_day = 288
+        periods_per_year = 365 * 24 * 12  # 105,120 5-minute periods per year
     elif return_interval == '15m':
-        bars_per_day = 96
+        periods_per_year = 365 * 24 * 4   # 35,040 15-minute periods per year
     elif return_interval == '30m':
-        bars_per_day = 48
+        periods_per_year = 365 * 24 * 2   # 17,520 30-minute periods per year
     elif return_interval == '1h':
-        bars_per_day = 24
+        periods_per_year = 365 * 24       # 8,760 hours per year
+    elif return_interval == '4h':
+        periods_per_year = 365 * 6        # 2,190 4-hour periods per year
+    elif return_interval == '1d':
+        periods_per_year = 365             # 365 days per year
     else:
-        bars_per_day = 1
+        periods_per_year = 252  # Default to trading days
 
-    if n_days and n_days > 0:
-        alpha = alpha * (bars_per_day * 365/n_days)
+    # Annualize alpha: alpha_annual = alpha_per_period * periods_per_year
+    alpha_annualized = alpha * periods_per_year
 
-    return alpha, beta
+    return alpha_annualized, beta
 
 def get_alpha(strategy_returns: pd.Series, market_returns: pd.Series, n_days: int, return_interval: str = None) -> float:
     """Return annualized Jensen's alpha using actual strategy returns."""
@@ -130,26 +135,33 @@ def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, n_days: 
     if excess_returns.std(ddof=1) == 0:
         return float('nan')
     
-    result = excess_returns.mean() / excess_returns.std(ddof=1)
+    # Calculate per-period Sharpe ratio
+    sharpe_per_period = excess_returns.mean() / excess_returns.std(ddof=1)
 
+    # Determine periods per year for annualization
     if return_interval == '1m':
-        bars_per_day = 1440
+        periods_per_year = 365 * 24 * 60  # 525,600 minutes per year
     elif return_interval == '3m':
-        bars_per_day = 480
+        periods_per_year = 365 * 24 * 20  # 175,200 3-minute periods per year
     elif return_interval == '5m':
-        bars_per_day = 288
+        periods_per_year = 365 * 24 * 12  # 105,120 5-minute periods per year
     elif return_interval == '15m':
-        bars_per_day = 96
+        periods_per_year = 365 * 24 * 4   # 35,040 15-minute periods per year
     elif return_interval == '30m':
-        bars_per_day = 48
+        periods_per_year = 365 * 24 * 2   # 17,520 30-minute periods per year
     elif return_interval == '1h':
-        bars_per_day = 24
+        periods_per_year = 365 * 24       # 8,760 hours per year
+    elif return_interval == '4h':
+        periods_per_year = 365 * 6        # 2,190 4-hour periods per year
+    elif return_interval == '1d':
+        periods_per_year = 365             # 365 days per year
     else:
-        bars_per_day = 1
+        periods_per_year = 252  # Default to trading days
 
-    result = result * np.sqrt(bars_per_day * 365/n_days)
+    # Annualize Sharpe ratio: sharpe_annual = sharpe_per_period * sqrt(periods_per_year)
+    sharpe_annualized = sharpe_per_period * np.sqrt(periods_per_year)
     
-    return result
+    return sharpe_annualized
 
 def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days: int, risk_free_rate: float = 0.00) -> float:
     """Calculate annualized Sortino ratio using actual strategy returns that include costs."""
@@ -157,25 +169,34 @@ def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days:
     downside_returns = excess_returns[excess_returns < 0]
     if len(downside_returns) == 0 or downside_returns.std(ddof=1) == 0:
         return float('nan')
-    result = excess_returns.mean() / downside_returns.std(ddof=1)
+    
+    # Calculate per-period Sortino ratio
+    sortino_per_period = excess_returns.mean() / downside_returns.std(ddof=1)
 
+    # Determine periods per year for annualization
     if return_interval == '1m':
-        bars_per_day = 1440
+        periods_per_year = 365 * 24 * 60  # 525,600 minutes per year
     elif return_interval == '3m':
-        bars_per_day = 480
+        periods_per_year = 365 * 24 * 20  # 175,200 3-minute periods per year
     elif return_interval == '5m':
-        bars_per_day = 288
+        periods_per_year = 365 * 24 * 12  # 105,120 5-minute periods per year
     elif return_interval == '15m':
-        bars_per_day = 96
+        periods_per_year = 365 * 24 * 4   # 35,040 15-minute periods per year
     elif return_interval == '30m':
-        bars_per_day = 48
+        periods_per_year = 365 * 24 * 2   # 17,520 30-minute periods per year
     elif return_interval == '1h':
-        bars_per_day = 24
+        periods_per_year = 365 * 24       # 8,760 hours per year
+    elif return_interval == '4h':
+        periods_per_year = 365 * 6        # 2,190 4-hour periods per year
+    elif return_interval == '1d':
+        periods_per_year = 365             # 365 days per year
     else:
-        bars_per_day = 1
+        periods_per_year = 252  # Default to trading days
 
-    result = result * np.sqrt(bars_per_day * 365/n_days)
-    return result
+    # Annualize Sortino ratio: sortino_annual = sortino_per_period * sqrt(periods_per_year)
+    sortino_annualized = sortino_per_period * np.sqrt(periods_per_year)
+    
+    return sortino_annualized
 
 def get_trade_pnls(position: pd.Series, close_prices: pd.Series) -> List[float]:
     """Calculate P&L for each trade from position and close prices."""
@@ -301,20 +322,30 @@ def get_information_ratio(strategy_returns: pd.Series, market_returns: pd.Series
     if tracking_error == 0:
         return float('nan')
 
-    if return_interval == '1m':
-        bars_per_day = 1440
-    elif return_interval == '3m':
-        bars_per_day = 480
-    elif return_interval == '5m':
-        bars_per_day = 288
-    elif return_interval == '15m':
-        bars_per_day = 96
-    elif return_interval == '30m':
-        bars_per_day = 48
-    elif return_interval == '1h':
-        bars_per_day = 24
-    else:
-        bars_per_day = 1
+    # Calculate per-period information ratio
+    info_ratio_per_period = mean_active_return / tracking_error
 
-    result = (mean_active_return / tracking_error) * np.sqrt(bars_per_day * 365/n_days)
-    return result
+    # Determine periods per year for annualization
+    if return_interval == '1m':
+        periods_per_year = 365 * 24 * 60  # 525,600 minutes per year
+    elif return_interval == '3m':
+        periods_per_year = 365 * 24 * 20  # 175,200 3-minute periods per year
+    elif return_interval == '5m':
+        periods_per_year = 365 * 24 * 12  # 105,120 5-minute periods per year
+    elif return_interval == '15m':
+        periods_per_year = 365 * 24 * 4   # 35,040 15-minute periods per year
+    elif return_interval == '30m':
+        periods_per_year = 365 * 24 * 2   # 17,520 30-minute periods per year
+    elif return_interval == '1h':
+        periods_per_year = 365 * 24       # 8,760 hours per year
+    elif return_interval == '4h':
+        periods_per_year = 365 * 6        # 2,190 4-hour periods per year
+    elif return_interval == '1d':
+        periods_per_year = 365             # 365 days per year
+    else:
+        periods_per_year = 252  # Default to trading days
+
+    # Annualize information ratio: IR_annual = IR_per_period * sqrt(periods_per_year)
+    info_ratio_annualized = info_ratio_per_period * np.sqrt(periods_per_year)
+    
+    return info_ratio_annualized

@@ -36,75 +36,35 @@ def perfect_strategy(data: pd.DataFrame) -> pd.Series:
     
     return signals
 
-def ema_cross_strategy(data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
-    ema_fast = ta.ema(data['Close'], fast_period)
-    ema_slow = ta.ema(data['Close'], slow_period)
-    signals[ema_fast > ema_slow] = 3
-    signals[ema_fast < ema_slow] = 1
-    return signals
-
-def zscore_reversion_strategy(data: pd.DataFrame) -> pd.Series:
+def zscore_reversion_strategy(data: pd.DataFrame, zscore_threshold: float = 1) -> pd.Series:
     signals = pd.Series(2, index=data.index)
     zscore = ta.zscore(data['Close'])
     signals[zscore < -1] = 3
     signals[zscore > 1] = 1
     return signals
 
-def zscore_momentum_strategy(data: pd.DataFrame) -> pd.Series:
+def zscore_momentum_strategy(data: pd.DataFrame, zscore_threshold: float = 1) -> pd.Series:
     signals = pd.Series(0, index=data.index)
     zscore = ta.zscore(data['Close'])
-    signals[zscore < -1] = 1
-    signals[zscore > 1] = 3
-    return signals
-
-def rsi_strategy(data: pd.DataFrame, oversold: int = 32, overbought: int = 72) -> pd.Series:
-    signals = pd.Series(0, index=data.index)
-    rsi = ta.rsi(data['Close'])
-    signals[rsi < oversold] = 3
-    signals[rsi > overbought] = 1
-    return signals
-
-def macd_strategy(data: pd.DataFrame, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
-    macd, signal = ta.macd(data['Close'], fastperiod=fast_period, slowperiod=slow_period, signalperiod=signal_period)
-    signals[macd > signal] = 3
-    signals[macd < signal] = 1
-    return signals
-
-def supertrend_strategy(data: pd.DataFrame, period: int = 14, multiplier: float = 3) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
-    supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=period, multiplier=multiplier)
-    signals[data['Close'] > supertrend_line] = 3
-    signals[data['Close'] < supertrend_line] = 1
-    return signals
-
-def psar_strategy(data: pd.DataFrame) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
-    psar = ta.psar(data['High'], data['Low'], acceleration_start=0.02, acceleration_step=0.02, max_acceleration=0.2)
-    signals[data['Close'] > psar] = 3
-    signals[data['Close'] < psar] = 1
+    signals[zscore > zscore_threshold] = 3
+    signals[zscore < -zscore_threshold] = 1
     return signals
 
 def smc_strategy(data: pd.DataFrame) -> pd.Series:
     signals = pd.Series(2, index=data.index)
     return signals
 
-def scalper_strategy(data: pd.DataFrame, fast_period: int = 9, slow_period: int = 26, adx_threshold: int = 25, momentum_period: int = 10, momentum_threshold: float = 0.75, wick_threshold: float = 0.5) -> pd.Series:
+def scalper_strategy(data: pd.DataFrame) -> pd.Series:
+    """Trades frequently, good for testing."""
     signals = pd.Series(2, index=data.index)
-    fast_ema = ta.ema(data['Close'], fast_period)
-    slow_ema = ta.ema(data['Close'], slow_period)
-    adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'])
-    upper_wick = data['High'] - np.maximum(data['Open'], data['Close'])
-    lower_wick = np.minimum(data['Open'], data['Close']) - data['Low']
-    momentum = ta.mom(data['Close'], momentum_period)
-    body_size = np.abs(data['Close'] - data['Open']) + 1e-9
-    upper_wick_ratio = upper_wick / body_size
-    lower_wick_ratio = lower_wick / body_size
-    is_liquidity_sweep_up = (upper_wick_ratio > lower_wick_ratio) & (upper_wick_ratio > wick_threshold)
-    is_liquidity_sweep_down = (lower_wick_ratio > upper_wick_ratio) & (lower_wick_ratio > wick_threshold)
-    buy_conditions = (fast_ema > slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_up | (momentum <= -momentum_threshold)
-    sell_conditions = (fast_ema < slow_ema) & (adx > adx_threshold) & ~is_liquidity_sweep_down | (momentum >= momentum_threshold)
+    fast_ema = ta.ema(data['Close'], 3)
+    slow_ema = ta.ema(data['Close'], 8)
+
+    rolling_vol = data['Volume'].rolling(window=10).mean()
+
+    buy_conditions = (fast_ema > slow_ema) & (data['Volume'] > rolling_vol * 3)
+    sell_conditions = (fast_ema < slow_ema) & (data['Volume'] > rolling_vol * 3)
+
     signals[buy_conditions] = 3
     signals[sell_conditions] = 1
     return signals
@@ -150,17 +110,17 @@ def sr_strategy(data: pd.DataFrame, window: int = 12, threshold: float = 0.005, 
     resistance_bounce = (resistance_pct_distance >= threshold) & (data['Close'] < resistance)
 
     #trigger off bounces
-    buy_conditions = support_bounce & ~bearish_liquidity_sweep & (volatility > 70)
-    sell_conditions = resistance_bounce & ~bullish_liquidity_sweep & (volatility > 70)
+    buy_conditions = support_bounce | (~bearish_liquidity_sweep & (volatility > 70))
+    sell_conditions = resistance_bounce | (~bullish_liquidity_sweep & (volatility > 70))
     signals[buy_conditions] = 3
     signals[sell_conditions] = 1
     return signals
 
 def ma_trend_strategy(data: pd.DataFrame, band_period: int = 2, pct_band: float = 0.002, adx_ma_period: int = 32) -> pd.Series:
-    signals = pd.Series(0, index=data.index)
+    signals = pd.Series(2, index=data.index)
     hlc3 = (data['High'] + data['Low'] + data['Close']) / 3
-    upper_band = ta.ema(data['Close'], band_period) + hlc3 * pct_band
-    lower_band = ta.ema(data['Close'], band_period) - hlc3 * pct_band
+    upper_band = ta.ema(data['Close'], band_period) + data['Close'] * pct_band
+    lower_band = ta.ema(data['Close'], band_period) - data['Close'] * pct_band
 
     adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'])
     adx_ma = ta.sma(adx, adx_ma_period)
@@ -171,4 +131,17 @@ def ma_trend_strategy(data: pd.DataFrame, band_period: int = 2, pct_band: float 
 
     signals[buy_conditions] = 3
     signals[sell_conditions] = 1
+    return signals
+
+def ma_super_trend_strategy(data: pd.DataFrame, period: int = 14, multiplier: float = 3) -> pd.Series:
+    signals = pd.Series(0, index=data.index)
+    ma1 = ta.sma(data['Close'], 20)
+    ma2 = ta.sma(data['Close'], 50)
+    ma3 = ta.sma(data['Close'], 100)
+
+    buy_conditions = (ma1 > ma2) & (ma2 > ma3)
+    sell_conditions = (ma1 < ma2) | (ma2 < ma3)
+
+    signals[buy_conditions] = 3
+    signals[sell_conditions] = 2
     return signals

@@ -28,11 +28,10 @@ async def run_single_coin_test():
     # Create trading system
     system = LiveTradingSystem(
         symbol="SOL-USDT",
-        interval="5m",
+        interval="1m",
         data_source="binance",
         buffer_size=500,
-        strategy_func=strategy.ma_trend_strategy,
-        strategy_params={'band_period': 2, 'pct_band': 0.002, 'adx_ma_period': 32},
+        strategy_func=strategy.scalper_strategy,
         signal_callback=callback
     )
     
