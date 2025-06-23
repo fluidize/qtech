@@ -181,7 +181,8 @@ class BayesianOptimizer:
             {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold", "momentum_threshold"]},
             {"strategy": "ETHBTC_trader", "params": ["lower_zscore_threshold", "upper_zscore_threshold"]},
             {"strategy": "sr_strategy", "params": ["threshold", "rejection_ratio_threshold"]},
-            {"strategy": "trend_strategy", "params": ["pct_band"]},
+            {"strategy": "trend_strategy", "params": ["supertrend_multiplier"]},
+            {"strategy": "zscore_momentum_strategy", "params": ["zscore_threshold"]},
         ] #float exceptions
         
         fixed_param_exceptions = [
@@ -273,12 +274,12 @@ class AssignmentOptimizer:
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class AlgorithmOptimizer:
-    def __init__(self, symbol: str, chunks: int, age_days: int, data_source: str = "binance"):
+    def __init__(self, symbol: str, chunks: int, age_days: int, slippage_pct: float = 0.005, commission_pct: float = 0.00, data_source: str = "binance", timeframes: List[str] = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]):
         self.engine = VectorizedBacktesting(
             instance_name="AlgorithmOptimizer",
             initial_capital=10000,
-            slippage_pct=0.005,
-            commission_pct=0.00,
+            slippage_pct=slippage_pct,
+            commission_pct=commission_pct,
             reinvest=False
         )
 
@@ -288,18 +289,17 @@ class AlgorithmOptimizer:
         self.results = {}
         self.strategy_func = None
         self.data_source = data_source
-
+        self.timeframes = timeframes
     def optimize(self, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize", save_params: bool = False):
         self.strategy_func = strategy_func
         
-        timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
         console = Console()
         table = Table(title="Timeframe Optimization Results")
         table.add_column("Timeframe", style="cyan")
         table.add_column("Best Metric", style="green")
         table.add_column("Best Parameters", style="blue")
 
-        for timeframe in timeframes:
+        for timeframe in self.timeframes:
             console.print(f"\n[bold blue]Optimizing for {timeframe} timeframe...[/bold blue]")
             
             self.engine.fetch_data(
@@ -309,7 +309,6 @@ class AlgorithmOptimizer:
                 age_days=self.age_days,
                 data_source=self.data_source
             )
-            print(self.engine.data)
 
             bayesian_op = BayesianOptimizer(
                 engine=self.engine,
@@ -380,8 +379,8 @@ class AlgorithmOptimizer:
         best_params = self.results[best_timeframe]["best_params"]
         
         self.engine.fetch_data(
-            symbol="BTC-USDT",
-            chunks=100,
+            symbol=self.symbol,
+            chunks=self.chunks,
             interval=best_timeframe,
             age_days=0,
             data_source=self.data_source
@@ -423,20 +422,22 @@ class AlgorithmOptimizer:
 
 if __name__ == "__main__":
     A = AlgorithmOptimizer(
-        symbol="BTC-USDT",
+        symbol="SOL-USDT",
         chunks=100,
         age_days=0,
-        data_source="binance"
+        slippage_pct=0.01,
+        commission_pct=0.00,
+        data_source="binance",
+        timeframes=["30m", "1h", "4h", "1d"]
     )
     
     A.optimize(
         strategy_func=strategy.trend_strategy,
         param_space={
-            "atr_period":(2,40),
-            "ma_period":(2,40),
-            "pct_band":(0.001,0.01)
+            "supertrend_window":(2,100),
+            "supertrend_multiplier":(0.5,4)
         },
-        metric="Total_Return",
+        metric="Sharpe_Ratio",
         n_trials=300,
         direction="maximize",
         save_params=False
