@@ -113,7 +113,7 @@ async def run_single_coin_test(webhook_url: str = None):
         
     system = LiveTradingSystem(
         symbol="SOL-USDT",
-        interval="5m",
+        interval="1m",
         data_source="binance",
         buffer_size=500,
         strategy_func=strategy.signal_spam,
