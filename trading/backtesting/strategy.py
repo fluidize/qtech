@@ -8,6 +8,12 @@ import numpy as np
 def hold_strategy(data: pd.DataFrame, signal: int = 3) -> pd.Series:
     return pd.Series(signal, index=data.index)
 
+def signal_spam(data: pd.DataFrame) -> pd.Series:
+    signals = pd.Series(2, index=data.index)
+    signals[data['Close'] > data['Open']] = 3
+    signals[data['Close'] < data['Open']] = 1
+    return signals
+
 def perfect_strategy(data: pd.DataFrame) -> pd.Series:
     """
     Perfect strategy that uses only past information to predict future open-to-open returns.
@@ -43,11 +49,12 @@ def zscore_reversion_strategy(data: pd.DataFrame, zscore_threshold: float = 1) -
     signals[zscore > 1] = 1
     return signals
 
-def zscore_momentum_strategy(data: pd.DataFrame, zscore_threshold: float = 1) -> pd.Series:
+def zscore_momentum_strategy(data: pd.DataFrame, zscore_threshold: float = 0.1) -> pd.Series:
     signals = pd.Series(0, index=data.index)
+
     zscore = ta.zscore(data['Close'])
     signals[zscore > zscore_threshold] = 3
-    signals[zscore < -zscore_threshold] = 1
+    signals[zscore < -zscore_threshold] = 2
     return signals
 
 def smc_strategy(data: pd.DataFrame) -> pd.Series:
@@ -85,27 +92,17 @@ def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days, data_source: s
     return signals
 
 def trend_strategy(data: pd.DataFrame,
-                sr_window: int = 12,
-                supertrend_window: int = 12,
-                supertrend_multiplier: float = 4) -> pd.Series:
-    """Follows trend with a variety of breakout and momentum strategies."""
-    
+                supertrend_window: int = 52,
+                supertrend_multiplier: float = 0.5,
+                ) -> pd.Series:
     signals = pd.Series(0, index=data.index)
-    macd, macd_signal, macd_hist = ta.macd_dema(data['Close'], fastperiod=12, slowperiod=26, signalperiod=9)
-    ao = ta.awesome_oscillator(data['High'], data['Low'], fast_period=5, slow_period=34)
-
-    support, resistance = smc.support_resistance_levels(data['Open'], data['High'], data['Low'], data['Close'], window=sr_window)
     supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=supertrend_window, multiplier=supertrend_multiplier)
-    
-    #breakout trend following conditions
-    breakout_buy_conditions = (data['Close'] > resistance.shift(1)) & (supertrend == 1)
-    breakout_sell_conditions = (data['Close'] < support.shift(1)) & (supertrend == -1)
-    #momentum mean reversion conditions
-    momentum_buy_conditions = (np.sign(macd_hist)-np.sign(macd_hist.shift(1)) >= 0)
-    momentum_sell_conditions = (np.sign(macd_hist)-np.sign(macd_hist.shift(1)) <= 0)
 
-    signals[breakout_buy_conditions & momentum_buy_conditions] = 3
-    signals[breakout_sell_conditions & momentum_sell_conditions] = 1
+    supertrend_buy_conditions = (supertrend == 1)
+    supertrend_sell_conditions = (supertrend == -1)
+
+    signals[supertrend_buy_conditions] = 3
+    signals[supertrend_sell_conditions] = 2
     return signals
 
 def macd_dema_analysis(data: pd.DataFrame) -> pd.Series:

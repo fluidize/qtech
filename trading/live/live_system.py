@@ -155,7 +155,7 @@ class LiveTradingSystem:
             candle_just_closed = (not self.last_data_is_closed) and (candle['Is_Closed'])
             self.last_data_is_closed = candle['Is_Closed']
             
-            return candle_just_closed
+            return candle_just_closed, candle
         
         # Handle tick data (like KuCoin price updates)
         elif 'Price' in market_data:
@@ -167,7 +167,7 @@ class LiveTradingSystem:
                 )
                 self.data_buffer.append(candle)
                 logger.info(f"Created first candle from tick: {candle}")
-                return False
+                return False, candle
             else:
                 current_candle = self.data_buffer[-1]
                 current_minute = current_candle['Datetime'].replace(second=0, microsecond=0)
@@ -181,7 +181,7 @@ class LiveTradingSystem:
                     current_candle['Close'] = market_data['Price']
                     current_candle['Volume'] += market_data.get('Volume', 0)
                     logger.debug(f"Updated candle with tick: {old_close} -> {current_candle['Close']}")
-                    return False
+                    return False, current_candle
                 else:
                     # Close current candle and create new one
                     candle = self._create_ohlcv_from_tick(
@@ -191,10 +191,10 @@ class LiveTradingSystem:
                     )
                     self.data_buffer.append(candle)
                     logger.info(f"Created new candle from tick: {candle}")
-                    return True  # New candle created
+                    return True, candle  # New candle created
         else:
             logger.warning(f"Unhandled market data format: {market_data}")
-            return False
+            return False, None
     
     def _update_dataframe(self):
         """Convert only closed candles from buffer to DataFrame for strategy processing."""
@@ -323,7 +323,7 @@ class LiveTradingSystem:
                         
                         if market_data:
                             # Update buffer with new candle data
-                            candle_closed = self._update_current_candle(market_data)
+                            candle_closed, candle = self._update_current_candle(market_data)
                             
                             # Only update DataFrame and run strategy on closed candles
                             if candle_closed:
@@ -439,9 +439,9 @@ class LiveTradingSystem:
         """Get recent trading signals."""
         return list(self.signal_history)[-count:]
 
-    def timeprint(self, text, color="white"):
+    def timeprint(self, text, color="white", end="\n"):
         now = datetime.now().strftime("%H:%M:%S")
-        self.console.print(f"[{color}]{now} | {text}[/{color}]")
+        self.console.print(f"[{color}]{now} | {text}[/{color}]", end=end)
 
 class LiveTradingMonitor:
     """Monitor and display live trading system status."""
@@ -829,7 +829,7 @@ async def run_simple_system():
         interval="1m",
         data_source="binance",
         buffer_size=500,
-        strategy_func=Strategy.macd_strategy,
+        strategy_func=strategy.trend_strategy,
         strategy_params={'fast_period': 12, 'slow_period': 26, 'signal_period': 9},
         signal_callback=None
     )

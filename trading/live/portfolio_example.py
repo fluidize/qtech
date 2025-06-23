@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import sys
 from rich.console import Console
@@ -101,22 +102,22 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, console=No
 
     return enhanced_portfolio_callback
 
-async def run_single_coin_test():
+async def run_single_coin_test(webhook_url: str = None):
     """Run a single coin portfolio test."""
     
     # Create portfolio with $10,000 initial balance and 0.1% slippage
     portfolio = SimulatedPortfolio(initial_balance=10000.0, slippage_rate=0.001)
     console = Console()
     
-    webhook_url = input("Enter the webhook URL: ")
     callback = create_enhanced_portfolio_callback(portfolio, console, log_interval=1, webhook_url=webhook_url)
         
     system = LiveTradingSystem(
         symbol="SOL-USDT",
-        interval="1m",
+        interval="5m",
         data_source="binance",
         buffer_size=500,
-        strategy_func=strategy.scalper_strategy,
+        strategy_func=strategy.signal_spam,
+        strategy_params={},
         signal_callback=callback
     )
     if webhook_url:
@@ -151,4 +152,7 @@ async def run_single_coin_test():
         console.print(f"[cyan]{'='*60}[/cyan]")
 
 if __name__ == "__main__":
-    asyncio.run(run_single_coin_test()) 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--webhook_url", type=str, default=None)
+    args = parser.parse_args()
+    asyncio.run(run_single_coin_test(args.webhook_url)) 

@@ -184,7 +184,6 @@ class VectorizedBacktesting:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
             if self.slippage_pct > 0 or self.commission_pct > 0:
                 print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission per trade[/blue]")
-                print(f"[blue]Direct position switches (Long↔Short) incur double costs[/blue]")
             print(f"[cyan]Return calculation mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}[/cyan]")
 
         return self.data
@@ -696,19 +695,19 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400,
-        slippage_pct=0.005,
+        slippage_pct=0.01,
         commission_pct=0.0,
         reinvest=False
     )   
     backtest.fetch_data(
         symbol="SOL-USDT",
         chunks=365,
-        interval="5m",
+        interval="1h",
         age_days=0,
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.trend_strategy, verbose=True)
+    backtest.run_strategy(strategy.signal_spam, verbose=True)
     
     print(backtest.get_performance_metrics())
     
