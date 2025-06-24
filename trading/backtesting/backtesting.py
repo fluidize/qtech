@@ -788,7 +788,7 @@ if __name__ == "__main__":
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.trend_strategy, verbose=True, supertrend_window=96, supertrend_multiplier=1)
+    backtest.run_strategy(strategy.trend_strategy, verbose=True, supertrend_window=24, supertrend_multiplier=1.2)
     
     print(backtest.get_performance_metrics())
     print(backtest.get_cost_summary())

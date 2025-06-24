@@ -72,7 +72,7 @@ class JupiterWalletHandler:
             
 
 if __name__ == "__main__":
-    jupiter = JupiterWalletHandler("2BmZhw6gq2VyyvQNhzbXSPp1riXVDQqfiBNPeALf54gsZ9Wh4bLzQrzbysRUgxZVmi862VcXTwFvcAnfC1KYwWsz")
+    jupiter = JupiterWalletHandler("2BmZhw6gq2VyyvQNhzbXSPp1riXVDQqfiBNPeALf54gsZ9Wh4bLzQrzbysRUgxZVmi862VcXTwFvcAnfC1KYwWsz") #placeholder
     result = jupiter.get_order(Token.SOL, Token.USDC, 1.0)
     if result:
         in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx = result

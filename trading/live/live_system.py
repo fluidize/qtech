@@ -60,9 +60,9 @@ class LiveTradingSystem:
         self.strategy_params = strategy_params or {}
         self.signal_callback = signal_callback
         
-        # Data storage
-        self.data_buffer = deque(maxlen=buffer_size) #stores all data bootstrap + WSS feed
-        self.current_data = pd.DataFrame() #stores only closed candles for strategy processing
+        # Data storage - buffer only contains closed candles
+        self.data_buffer = deque(maxlen=buffer_size)
+        self.current_data = pd.DataFrame()  # Will contain exactly what's in buffer
         
         # Data provider
         self.provider = DataProviderFactory.create_provider(data_source, symbol=symbol, interval=interval)
@@ -72,7 +72,7 @@ class LiveTradingSystem:
         
         # State management
         self.running = False
-        self.last_signal = 2  # Start with flat position
+        self.last_signal = 0  # Start with HOLD position (0) instead of FLAT (2)
         self.signal_history = deque(maxlen=100)
         self.last_data_is_closed = False  # Track if last candle was closed
         
@@ -116,9 +116,12 @@ class LiveTradingSystem:
             'Volume': volume
         }
     
-    def _update_current_candle(self, market_data: Dict) -> bool:
+    def _update_current_candle(self, market_data: Dict) -> tuple:
         """Update the current minute candle with new market data.
-        Returns True if a closed candle was processed, False otherwise."""
+        Returns (candle_closed, current_candle) where:
+        - candle_closed: True if a closed candle was processed, False otherwise
+        - current_candle: The current candle (either open or closed) for price display
+        """
         logger.debug(f"Updating candle with data: {market_data}")
         
         # Handle complete OHLC data (like Binance klines)
@@ -133,78 +136,91 @@ class LiveTradingSystem:
                 'Is_Closed': market_data['Is_Closed']
             }
             
-            # Always add to buffer (both open and closed candles)
-            if len(self.data_buffer) == 0:
-                self.data_buffer.append(candle)
-                logger.info(f"Created first candle: {candle}")
-            else:
-                current_candle = self.data_buffer[-1]
-                current_minute = current_candle['Datetime'].replace(second=0, microsecond=0)
-                new_minute = market_data['Timestamp'].replace(second=0, microsecond=0)
-                
-                if current_minute == new_minute:
-                    # Update existing candle
-                    self.data_buffer[-1] = candle
-                    logger.debug(f"Updated existing candle: {current_candle['Close']} -> {candle['Close']}")
-                else:
-                    # Add new candle
+            # Only add to buffer if candle is closed
+            if candle['Is_Closed']:
+                if len(self.data_buffer) == 0:
                     self.data_buffer.append(candle)
-                    logger.debug(f"Added new candle: {candle}")
-            
-            # Detect transition from open to closed candle
-            candle_just_closed = (not self.last_data_is_closed) and (candle['Is_Closed'])
-            self.last_data_is_closed = candle['Is_Closed']
-            
-            return candle_just_closed, candle
+                    logger.info(f"Added first closed candle to buffer: {candle}")
+                else:
+                    current_buffer_candle = self.data_buffer[-1]
+                    current_minute = current_buffer_candle['Datetime'].replace(second=0, microsecond=0)
+                    new_minute = market_data['Timestamp'].replace(second=0, microsecond=0)
+                    
+                    if current_minute == new_minute:
+                        # Update existing candle in buffer
+                        self.data_buffer[-1] = candle
+                        logger.debug(f"Updated existing closed candle in buffer: {current_buffer_candle['Close']} -> {candle['Close']}")
+                    else:
+                        # Add new closed candle to buffer
+                        self.data_buffer.append(candle)
+                        logger.debug(f"Added new closed candle to buffer: {candle}")
+                
+                # Detect transition from open to closed candle
+                candle_just_closed = not self.last_data_is_closed
+                self.last_data_is_closed = True
+                return candle_just_closed, candle
+            else:
+                # Candle is still open, just update tracking
+                self.last_data_is_closed = False
+                return False, candle
         
         # Handle tick data (like KuCoin price updates)
         elif 'Price' in market_data:
             if len(self.data_buffer) == 0:
+                # Create first candle
                 candle = self._create_ohlcv_from_tick(
                     market_data['Price'], 
                     market_data.get('Volume', 0),
                     market_data['Timestamp']
                 )
+                # For tick data, we'll treat the first candle as closed to bootstrap
+                candle['Is_Closed'] = True
                 self.data_buffer.append(candle)
                 logger.info(f"Created first candle from tick: {candle}")
                 return False, candle
             else:
-                current_candle = self.data_buffer[-1]
-                current_minute = current_candle['Datetime'].replace(second=0, microsecond=0)
+                # Get the last candle from buffer
+                last_candle = self.data_buffer[-1]
+                current_minute = last_candle['Datetime'].replace(second=0, microsecond=0)
                 tick_minute = market_data['Timestamp'].replace(second=0, microsecond=0)
                 
                 if tick_minute == current_minute:
-                    # Update current candle
-                    old_close = current_candle['Close']
-                    current_candle['High'] = max(current_candle['High'], market_data['Price'])
-                    current_candle['Low'] = min(current_candle['Low'], market_data['Price'])
-                    current_candle['Close'] = market_data['Price']
-                    current_candle['Volume'] += market_data.get('Volume', 0)
-                    logger.debug(f"Updated candle with tick: {old_close} -> {current_candle['Close']}")
-                    return False, current_candle
+                    # Update current candle in buffer (treating it as still forming)
+                    old_close = last_candle['Close']
+                    last_candle['High'] = max(last_candle['High'], market_data['Price'])
+                    last_candle['Low'] = min(last_candle['Low'], market_data['Price'])
+                    last_candle['Close'] = market_data['Price']
+                    last_candle['Volume'] += market_data.get('Volume', 0)
+                    logger.debug(f"Updated candle with tick: {old_close} -> {last_candle['Close']}")
+                    return False, last_candle
                 else:
-                    # Close current candle and create new one
-                    candle = self._create_ohlcv_from_tick(
+                    # Create new candle for new minute
+                    new_candle = self._create_ohlcv_from_tick(
                         market_data['Price'],
                         market_data.get('Volume', 0),
                         market_data['Timestamp']
                     )
-                    self.data_buffer.append(candle)
-                    logger.info(f"Created new candle from tick: {candle}")
-                    return True, candle  # New candle created
+                    new_candle['Is_Closed'] = True  # Mark as closed since minute changed
+                    self.data_buffer.append(new_candle)
+                    logger.info(f"Created new candle from tick: {new_candle}")
+                    return True, new_candle  # New candle created
         else:
             logger.warning(f"Unhandled market data format: {market_data}")
             return False, None
     
     def _update_dataframe(self):
-        """Convert only closed candles from buffer to DataFrame for strategy processing."""
-        # Filter only closed candles for DataFrame
-        closed_candles = [candle for candle in self.data_buffer if candle.get('Is_Closed', True)]
+        """Convert all candles from buffer to DataFrame for strategy processing.
+        Since buffer only contains closed candles, this ensures memory efficiency."""
+        if len(self.data_buffer) == 0:
+            self.current_data = pd.DataFrame()
+            logger.debug("No closed candles in buffer, DataFrame is empty")
+            return
         
-        self.current_data = pd.DataFrame(closed_candles)
+        # Convert all candles in buffer to DataFrame (all are closed)
+        self.current_data = pd.DataFrame(list(self.data_buffer))
         self.current_data.set_index('Datetime', inplace=True)
         self.current_data = self.current_data.sort_index()
-        logger.debug(f"Updated DataFrame with {len(closed_candles)} closed candles")
+        logger.debug(f"Updated DataFrame with {len(self.data_buffer)} closed candles from buffer")
     
     def _run_strategy(self) -> int:
         """Run the trading strategy on current data."""
@@ -233,7 +249,7 @@ class LiveTradingSystem:
     def _handle_signal_change(self, new_signal: int):
         """Handle when strategy generates a new signal. Adds signal info to instance log and prints to console."""
         if new_signal != self.last_signal:
-            # Get current price from buffer or dataframe
+            # Get current price from current_data, buffer, or dataframe
             current_price = 0
             if not self.current_data.empty:
                 current_price = self.current_data['Close'].iloc[-1]
@@ -272,6 +288,10 @@ class LiveTradingSystem:
         if new_signal == 2:  # Going to flat
             return f"CLOSE {old_name} → FLAT"
         elif old_signal == 2:  # Opening from flat
+            return f"OPEN {new_name}"
+        elif new_signal == 0:  # Going to hold
+            return f"HOLD {old_name} → HOLD"
+        elif old_signal == 0:  # Opening from hold
             return f"OPEN {new_name}"
         else:  # Direct switch
             return f"SWITCH {old_name} → {new_name}"
@@ -325,10 +345,18 @@ class LiveTradingSystem:
                             # Update buffer with new candle data
                             candle_closed, candle = self._update_current_candle(market_data)
                             
+                            # Show live price updates when candle is open (not closed)
+                            if not candle_closed and candle and 'Close' in candle:
+                                current_price = candle['Close']
+                                self.timeprint(f"Live Price | {self.symbol} | ${current_price:.2f}", color="cyan", end="\r")
+                                self.console.file.flush()  # Ensure output is displayed
+                            
                             # Only update DataFrame and run strategy on closed candles
                             if candle_closed:
                                 self._update_dataframe()
-                                self.timeprint(f"Candle Closed | {self.current_data['Close'].iloc[-1]:.2f}", color="blue")
+                                # Use the closed candle price for display
+                                closed_price = candle['Close']
+                                self.timeprint(f"Candle Closed | {self.symbol} | ${closed_price:.2f}", color="blue")
                                 new_signal = self._run_strategy()
                                 self._handle_signal_change(new_signal)
                     
@@ -418,7 +446,7 @@ class LiveTradingSystem:
     
     def get_current_status(self) -> Dict:
         """Get current system status."""
-        # Get last price from buffer or dataframe
+        # Get last price from current_data, buffer, or dataframe
         last_price = 0
         if not self.current_data.empty:
             last_price = self.current_data['Close'].iloc[-1]
@@ -548,25 +576,29 @@ class SimulatedPortfolio:
         else:  # Short position
             return (self.entry_price - current_price) * abs(self.position)
     
-    def _calculate_execution_price(self, market_price: float, is_buy: bool) -> float:
+    def _calculate_execution_price(self, market_price: float, is_buy: bool, slippage_rate: Optional[float] = None) -> float:
         """
         Calculate execution price with slippage.
         
         Args:
             market_price: Current market price
             is_buy: True if buying, False if selling
+            slippage_rate: Optional slippage rate to override class slippage_rate
             
         Returns:
             Execution price after slippage
         """
+        # Use provided slippage_rate or fallback to class slippage_rate
+        rate = slippage_rate if slippage_rate is not None else self.slippage_rate
+        
         if is_buy:
             # When buying, slippage increases the price (worse execution)
-            return market_price * (1 + self.slippage_rate)
+            return market_price * (1 + rate)
         else:
             # When selling, slippage decreases the price (worse execution)
-            return market_price * (1 - self.slippage_rate)
+            return market_price * (1 - rate)
     
-    def execute_trade(self, signal: int, current_price: float, timestamp: datetime) -> Dict:
+    def execute_trade(self, signal: int, current_price: float, timestamp: datetime, slippage_bps: Optional[float] = None) -> Dict:
         """
         Execute a simulated trade based on signal.
         
@@ -574,12 +606,16 @@ class SimulatedPortfolio:
             signal: 0=HOLD, 1=SHORT, 2=FLAT, 3=LONG
             current_price: Current market price
             timestamp: Trade timestamp
+            slippage_bps: Optional slippage in basis points (1 bps = 0.01%). If None, uses class slippage_rate
             
         Returns:
             Dict with trade details
         """
         self.current_price = current_price
         self.last_update_time = timestamp
+        
+        # Use provided slippage_bps or fallback to class slippage_rate
+        slippage_rate = slippage_bps / 10000 if slippage_bps is not None else self.slippage_rate
         
         # Calculate current portfolio value before trade
         pre_trade_value = self.get_portfolio_value(current_price)
@@ -595,22 +631,27 @@ class SimulatedPortfolio:
             'slippage': 0.0,
             'slippage_cost': 0.0,
             'post_trade_value': pre_trade_value,
-            'unrealized_pnl': 0.0
+            'unrealized_pnl': 0.0,
+            'slippage_bps_used': slippage_bps
         }
         
         # Determine action based on signal
-        if signal == 3:  # LONG
+        if signal == 0:  # HOLD
+            # Do nothing, maintain current position
+            trade_info['action'] = 'HOLD'
+            
+        elif signal == 3:  # LONG
             if self.position <= 0:  # Need to buy
                 trade_info['action'] = 'BUY'
                 if self.position < 0:  # Close short first
                     trade_info['action'] = 'COVER_AND_BUY'
-                    self._close_position(current_price, timestamp, trade_info)
+                    self._close_position(current_price, timestamp, trade_info, slippage_rate)
                 
-                # Calculate position size (use 95% of available cash)
-                available_cash = self.cash * 0.95
+                # Use all available cash for position
+                available_cash = self.cash
                 
                 # Calculate execution price with slippage (buying = higher price)
-                execution_price = self._calculate_execution_price(current_price, is_buy=True)
+                execution_price = self._calculate_execution_price(current_price, is_buy=True, slippage_rate=slippage_rate)
                 position_size = available_cash / execution_price
                 
                 # Total cost including slippage
@@ -634,13 +675,13 @@ class SimulatedPortfolio:
                 trade_info['action'] = 'SELL_SHORT'
                 if self.position > 0:  # Close long first
                     trade_info['action'] = 'SELL_AND_SHORT'
-                    self._close_position(current_price, timestamp, trade_info)
+                    self._close_position(current_price, timestamp, trade_info, slippage_rate)
                 
-                # Calculate short position size (use 95% of available cash as collateral)
-                available_cash = self.cash * 0.95
+                # Use all available cash as collateral for short position
+                available_cash = self.cash
                 
                 # Calculate execution price with slippage (selling = lower price)
-                execution_price = self._calculate_execution_price(current_price, is_buy=False)
+                execution_price = self._calculate_execution_price(current_price, is_buy=False, slippage_rate=slippage_rate)
                 position_size = available_cash / current_price  # Size based on market price
                 
                 # Cash received from short sale (less slippage)
@@ -662,7 +703,7 @@ class SimulatedPortfolio:
         elif signal == 2:  # FLAT
             if self.position != 0:  # Need to close position
                 trade_info['action'] = 'CLOSE_POSITION'
-                self._close_position(current_price, timestamp, trade_info)
+                self._close_position(current_price, timestamp, trade_info, slippage_rate)
         
         # Calculate post-trade values
         trade_info['post_trade_value'] = self.get_portfolio_value(current_price)
@@ -692,14 +733,14 @@ class SimulatedPortfolio:
         
         return trade_info
     
-    def _close_position(self, current_price: float, timestamp: datetime, trade_info: Dict):
+    def _close_position(self, current_price: float, timestamp: datetime, trade_info: Dict, slippage_rate: Optional[float] = None):
         """Close current position and update trade info."""
         if self.position == 0:
             return
         
         # Calculate execution price with slippage
         is_buy = self.position < 0  # If short position, we need to buy to cover
-        execution_price = self._calculate_execution_price(current_price, is_buy=is_buy)
+        execution_price = self._calculate_execution_price(current_price, is_buy=is_buy, slippage_rate=slippage_rate)
         
         # Calculate slippage cost
         slippage_cost = abs(self.position) * abs(execution_price - current_price)

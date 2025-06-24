@@ -274,12 +274,12 @@ class AssignmentOptimizer:
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class AlgorithmOptimizer:
-    def __init__(self, symbol: str, chunks: int, age_days: int, slippage_pct: float = 0.005, commission_pct: float = 0.00, data_source: str = "binance", timeframes: List[str] = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]):
+    def __init__(self, symbol: str, chunks: int, age_days: int, slippage_pct: float = 0.005, commission_fixed: float = 0.00, data_source: str = "binance", timeframes: List[str] = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]):
         self.engine = VectorizedBacktesting(
             instance_name="AlgorithmOptimizer",
             initial_capital=10000,
             slippage_pct=slippage_pct,
-            commission_pct=commission_pct,
+            commission_fixed=commission_fixed,
             reinvest=False
         )
 
@@ -422,11 +422,11 @@ class AlgorithmOptimizer:
 
 if __name__ == "__main__":
     A = AlgorithmOptimizer(
-        symbol="SOL-USDT",
+        symbol="SEI-USDT",
         chunks=100,
         age_days=0,
         slippage_pct=0.01,
-        commission_pct=0.00,
+        commission_fixed=0.00,
         data_source="binance",
         timeframes=["30m", "1h", "4h", "1d"]
     )
@@ -435,10 +435,10 @@ if __name__ == "__main__":
         strategy_func=strategy.trend_strategy,
         param_space={
             "supertrend_window":(2,100),
-            "supertrend_multiplier":(0.5,4)
+            "supertrend_multiplier":(0.25,4)
         },
-        metric="Sharpe_Ratio",
-        n_trials=300,
+        metric="Information_Ratio",
+        n_trials=500,
         direction="maximize",
         save_params=False
     )

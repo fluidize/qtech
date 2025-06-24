@@ -11,7 +11,7 @@ def hold_strategy(data: pd.DataFrame, signal: int = 3) -> pd.Series:
 def signal_spam(data: pd.DataFrame) -> pd.Series:
     signals = pd.Series(2, index=data.index)
     signals[data['Close'] > data['Open']] = 3
-    signals[data['Close'] < data['Open']] = 1
+    signals[data['Close'] < data['Open']] = 2
     return signals
 
 def perfect_strategy(data: pd.DataFrame) -> pd.Series:
@@ -92,8 +92,8 @@ def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days, data_source: s
     return signals
 
 def trend_strategy(data: pd.DataFrame,
-                supertrend_window: int = 52,
-                supertrend_multiplier: float = 0.5,
+                supertrend_window: int = 24,
+                supertrend_multiplier: float = 1.2,
                 ) -> pd.Series:
     signals = pd.Series(0, index=data.index)
     supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=supertrend_window, multiplier=supertrend_multiplier)
