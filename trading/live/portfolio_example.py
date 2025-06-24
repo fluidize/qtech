@@ -151,7 +151,7 @@ async def run_single_coin_test(webhook_url: str = None, private_key: str = None)
         
     system = LiveTradingSystem(
         symbol="SOL-USDT",
-        interval="1m",
+        interval="1h",
         data_source="binance",
         buffer_size=500,
         strategy_func=strategy.trend_strategy,
