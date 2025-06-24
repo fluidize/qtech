@@ -19,13 +19,13 @@ class VectorizedBacktesting:
         instance_name: str = "default",
         initial_capital: float = 10000.0,
         slippage_pct: float = 0.001,  # 0.1% slippage per trade
-        commission_pct: float = 0.001,  # 0.1% commission per trade
+        commission_fixed: float = 1.0,  # Fixed commission per trade in dollars
         reinvest: bool = True,  # True for compound returns, False for linear returns
     ):
         self.instance_name = instance_name
         self.initial_capital = initial_capital
         self.slippage_pct = slippage_pct
-        self.commission_pct = commission_pct
+        self.commission_fixed = commission_fixed
         self.reinvest = reinvest
 
         self.symbol = None
@@ -81,31 +81,50 @@ class VectorizedBacktesting:
                     print(f"[yellow]Warning: {large_gaps.sum()} large time gaps detected[/yellow]")
 
     def _apply_trading_costs(self, returns: pd.Series, position_changes: pd.Series, positions: pd.Series) -> pd.Series:
-        """Apply slippage and commissions to returns based on position change type."""
-        if self.slippage_pct == 0 and self.commission_pct == 0:
+        """Apply slippage and fixed commission based on actual trade notional value, respecting reinvestment setting."""
+        if self.slippage_pct == 0 and self.commission_fixed == 0:
             return returns
             
-        costs = pd.Series(0.0, index=returns.index)
-        total_cost_per_trade = self.slippage_pct + self.commission_pct
+        adjusted_returns = returns.copy()
         
-        # Apply costs based on position change type
+        # Calculate position sizes based on reinvestment setting
+        if self.reinvest:
+            # Compound mode: portfolio value grows with profits
+            portfolio_values = self.initial_capital * (1 + returns).cumprod()
+        else:
+            # Linear mode: always trade with initial capital only
+            portfolio_values = pd.Series(self.initial_capital, index=returns.index)
+        
+        # Apply costs based on actual trade value
         for i in range(1, len(positions)):
             prev_pos = positions.iloc[i-1]
             curr_pos = positions.iloc[i]
             
             if prev_pos != curr_pos:  # Position changed
-                if prev_pos == 2:  # From flat
-                    # Flat → Long or Flat → Short: single cost
-                    costs.iloc[i] = total_cost_per_trade
-                elif curr_pos == 2:  # To flat
-                    # Long → Flat or Short → Flat: single cost
-                    costs.iloc[i] = total_cost_per_trade
-                else:
-                    # Direct switch: Long → Short or Short → Long: double cost
-                    costs.iloc[i] = total_cost_per_trade * 2
+                trade_capital = portfolio_values.iloc[i-1]  # Capital available for trade
+                
+                # Calculate slippage cost (percentage of trade value)
+                slippage_cost_pct = self.slippage_pct
+                
+                # Calculate fixed commission cost (convert to percentage of trade value)
+                commission_cost_pct = self.commission_fixed / trade_capital if trade_capital > 0 else 0
+                
+                # Calculate total cost based on trade type
+                if prev_pos == 2:  # From flat (opening position)
+                    # Single cost for opening
+                    total_cost_pct = slippage_cost_pct + commission_cost_pct
+                    
+                elif curr_pos == 2:  # To flat (closing position)
+                    # Single cost for closing
+                    total_cost_pct = slippage_cost_pct + commission_cost_pct
+                    
+                else:  # Direct switch (close + open)
+                    # Double cost for closing one position and opening another
+                    total_cost_pct = (slippage_cost_pct + commission_cost_pct) * 2
+                
+                # Apply cost to returns
+                adjusted_returns.iloc[i] = returns.iloc[i] - total_cost_pct
         
-        # Subtract costs from returns
-        adjusted_returns = returns - costs
         return adjusted_returns
 
     def set_n_days(self):
@@ -160,7 +179,7 @@ class VectorizedBacktesting:
         base_returns = metrics.stateful_position_to_multiplier(position) * self.data['Return']
         
         # Apply trading costs (slippage + commissions)
-        if self.slippage_pct == 0 and self.commission_pct == 0:
+        if self.slippage_pct == 0 and self.commission_fixed == 0:
             self.data['Strategy_Returns'] = base_returns
         else:
             self.data['Strategy_Returns'] = self._apply_trading_costs(base_returns, position_changes, position)
@@ -182,8 +201,8 @@ class VectorizedBacktesting:
         end_time = time.time()
         if verbose:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
-            if self.slippage_pct > 0 or self.commission_pct > 0:
-                print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission per trade[/blue]")
+            if self.slippage_pct > 0 or self.commission_fixed > 0:
+                print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed commission per trade[/blue]")
             print(f"[cyan]Return calculation mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}[/cyan]")
 
         return self.data
@@ -343,9 +362,9 @@ class VectorizedBacktesting:
                     prev_pos = self.data['Position'].iloc[i]
                     current_pos = self.data['Position'].iloc[i + 1]
                     
-                    if i < len(self.data):
-                        # Use price data for signal markers (on primary y-axis)
-                        price_at_signal = self.data['Close'].iloc[i]
+                    if i < len(self.data) - 1:
+                        # Use execution price (next open) for signal markers
+                        price_at_signal = self.data['Open'].iloc[i+1]
                         
                         if current_pos == 3 and prev_pos != 3:
                             long_entries.append(self.data.index[i])
@@ -634,7 +653,7 @@ class VectorizedBacktesting:
             
         print(f"\n[bold blue]STRATEGY DEBUG INFORMATION[/bold blue]")
         print(f"Data shape: {self.data.shape}")
-        print(f"Trading costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_pct*100:.3f}% commission")
+        print(f"Trading costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed commission")
         print(f"Return mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}")
         
         # Position distribution
@@ -692,11 +711,66 @@ class VectorizedBacktesting:
         else:
             print(f"\n[green]No NaN values found[/green]")
 
+    def get_cost_summary(self) -> dict:
+        """Get a summary of trading costs impact."""
+        if self.data is None or 'Position' not in self.data.columns:
+            return {"message": "No strategy results available"}
+            
+        # Count trades
+        position_changes = self.data['Position'].diff().fillna(0)
+        total_trades = (position_changes != 0).sum()
+        
+        if total_trades == 0:
+            return {"message": "No trades executed"}
+        
+        # Calculate position sizes based on reinvestment setting
+        if self.reinvest:
+            portfolio_values = self.initial_capital * (1 + self.data['Return']).cumprod()
+        else:
+            portfolio_values = pd.Series(self.initial_capital, index=self.data.index)
+        
+        # Calculate total slippage and commission paid
+        total_slippage_paid = 0
+        total_commission_paid = 0
+        
+        for i in range(1, len(self.data)):
+            prev_pos = self.data['Position'].iloc[i-1]
+            curr_pos = self.data['Position'].iloc[i]
+            
+            if prev_pos != curr_pos:  # Position changed
+                trade_capital = portfolio_values.iloc[i-1]
+                
+                # Calculate slippage cost
+                if prev_pos == 2:  # From flat (opening position)
+                    slippage_cost = trade_capital * self.slippage_pct
+                elif curr_pos == 2:  # To flat (closing position)
+                    slippage_cost = trade_capital * self.slippage_pct
+                else:  # Direct switch (close + open)
+                    slippage_cost = trade_capital * self.slippage_pct * 2
+                
+                total_slippage_paid += slippage_cost
+                
+                # Calculate commission cost
+                if prev_pos == 2:  # From flat (opening position)
+                    commission_cost = self.commission_fixed
+                elif curr_pos == 2:  # To flat (closing position)
+                    commission_cost = self.commission_fixed
+                else:  # Direct switch (close + open)
+                    commission_cost = self.commission_fixed * 2
+                
+                total_commission_paid += commission_cost
+        
+        return {
+            'total_trades': total_trades,
+            'total_slippage_paid': total_slippage_paid,
+            'total_commission_paid': total_commission_paid
+        }
+
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=400,
         slippage_pct=0.01,
-        commission_pct=0.0,
+        commission_fixed=0.0,
         reinvest=False
     )   
     backtest.fetch_data(
@@ -707,8 +781,9 @@ if __name__ == "__main__":
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.signal_spam, verbose=True)
+    backtest.run_strategy(strategy.trend_strategy, verbose=True, supertrend_window=25, supertrend_multiplier=1)
     
     print(backtest.get_performance_metrics())
-    
+    print(backtest.get_cost_summary())
     backtest.plot_performance(extended=False)
+    
