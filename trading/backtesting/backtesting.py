@@ -21,12 +21,14 @@ class VectorizedBacktesting:
         slippage_pct: float = 0.001,  # 0.1% slippage per trade
         commission_fixed: float = 1.0,  # Fixed commission per trade in dollars
         reinvest: bool = True,  # True for compound returns, False for linear returns
+        leverage: float = 1.0,  # Leverage multiplier (1.0 = no leverage, 2.0 = 2x leverage)
     ):
         self.instance_name = instance_name
         self.initial_capital = initial_capital
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
         self.reinvest = reinvest
+        self.leverage = leverage
 
         self.symbol = None
         self.chunks = None
@@ -101,7 +103,7 @@ class VectorizedBacktesting:
             curr_pos = positions.iloc[i]
             
             if prev_pos != curr_pos:  # Position changed
-                trade_capital = portfolio_values.iloc[i-1]  # Capital available for trade
+                trade_capital = portfolio_values.iloc[i-1] * self.leverage  # Scale by leverage
                 
                 # Calculate slippage cost (percentage of trade value)
                 slippage_cost_pct = self.slippage_pct
@@ -176,7 +178,8 @@ class VectorizedBacktesting:
         # So: Strategy_Return[t] = Position[t] * Return[t]
         # Where Return[t] is the return from Open[t] to Open[t+1]
         # And Position[t] is the position taken at Open[t] based on signal at Close[t-1]
-        base_returns = metrics.stateful_position_to_multiplier(position) * self.data['Return']
+        position_multiplier = metrics.stateful_position_to_multiplier(position)
+        base_returns = position_multiplier * self.leverage * self.data['Return']
         
         # Apply trading costs (slippage + commissions)
         if self.slippage_pct == 0 and self.commission_fixed == 0:
@@ -204,6 +207,8 @@ class VectorizedBacktesting:
             if self.slippage_pct > 0 or self.commission_fixed > 0:
                 print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed commission per trade[/blue]")
             print(f"[cyan]Return calculation mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}[/cyan]")
+            if self.leverage != 1.0:
+                print(f"[yellow]Leverage: {self.leverage}x[/yellow]")
 
         return self.data
 
@@ -655,6 +660,7 @@ class VectorizedBacktesting:
         print(f"Data shape: {self.data.shape}")
         print(f"Trading costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed commission")
         print(f"Return mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}")
+        print(f"Leverage: {self.leverage}x")
         
         # Position distribution
         pos_counts = self.data['Position'].value_counts().sort_index()
@@ -738,7 +744,7 @@ class VectorizedBacktesting:
             curr_pos = self.data['Position'].iloc[i]
             
             if prev_pos != curr_pos:  # Position changed
-                trade_capital = portfolio_values.iloc[i-1]
+                trade_capital = portfolio_values.iloc[i-1] * self.leverage  # Scale by leverage
                 
                 # Calculate slippage cost
                 if prev_pos == 2:  # From flat (opening position)
@@ -768,20 +774,21 @@ class VectorizedBacktesting:
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
-        initial_capital=400,
+        initial_capital=100,
         slippage_pct=0.01,
         commission_fixed=0.0,
-        reinvest=False
+        reinvest=False,
+        leverage=1
     )   
     backtest.fetch_data(
         symbol="SOL-USDT",
         chunks=365,
         interval="1h",
-        age_days=0,
+        age_days=0, 
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.trend_strategy, verbose=True, supertrend_window=25, supertrend_multiplier=1)
+    backtest.run_strategy(strategy.trend_strategy, verbose=True, supertrend_window=96, supertrend_multiplier=1)
     
     print(backtest.get_performance_metrics())
     print(backtest.get_cost_summary())
