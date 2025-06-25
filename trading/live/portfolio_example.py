@@ -201,4 +201,4 @@ if __name__ == "__main__":
     parser.add_argument("--private_key", type=str, default=None, help="Solana private key for Jupiter wallet")
     args = parser.parse_args()
     
-    asyncio.run(run_single_coin_test(webhook_url="", private_key="2BmZhw6gq2VyyvQNhzbXSPp1riXVDQqfiBNPeALf54gsZ9Wh4bLzQrzbysRUgxZVmi862VcXTwFvcAnfC1KYwWsz"))
+    asyncio.run(run_single_coin_test(webhook_url=args.webhook_url, private_key=args.private_key))
