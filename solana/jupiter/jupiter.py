@@ -1,7 +1,5 @@
 import os
 import requests
-import aiohttp
-import asyncio
 import base58
 import base64
 from solders.solders import Keypair, VersionedTransaction
@@ -71,44 +69,6 @@ class JupiterWalletHandler:
                 return in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx
         except Exception as e:
             print(f"Error in get_order: {e}")
-            return None
-        
-    async def get_order_async(self, input_mint: str, output_mint: str, input_amount: float) -> Optional[Tuple[float, float, float, float, float, float, str]]:
-        """
-        Get an order from Jupiter with ultra API Asynchronously.
-        """
-        try:
-            input_mint_info = get_token_info(input_mint)
-            input_decimals = input_mint_info['decimals']
-
-            raw_input_amount = int(input_amount * (10 ** input_decimals))
-
-            order_params = {
-                "inputMint": input_mint,
-                "outputMint": output_mint,
-                "amount": raw_input_amount,
-                "taker": str(self.wallet.pubkey()),
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://lite-api.jup.ag/ultra/v1/order", params=order_params) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        print(f"Error fetching order {response.status} : {error_text}")
-                        return None
-                    
-                    response_json = await response.json()
-                    in_usd = float(response_json['inUsdValue'])
-                    out_usd = float(response_json['outUsdValue'])
-                    slippage_bps = float(response_json['slippageBps'])
-                    fee_bps = float(response_json['feeBps'])
-                    price_impact_pct = float(response_json['priceImpactPct']) #positive pi is good
-                    price_impact_usd = float(response_json['priceImpact'])
-                    unsigned_tx = str(response_json['transaction'])
-                    
-                    return in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx
-        except Exception as e:
-            print(f"Error in get_order_async: {e}")
             return None
             
 
