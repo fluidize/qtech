@@ -54,7 +54,7 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
             estimated_trade_size_usd = portfolio_value
         
         print(estimated_trade_size_sol)
-        debug_order = wallethandler.get_order(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol)
+        debug_order = wallethandler.get_order(jup.Token.USDC, jup.Token.SOL, estimated_trade_size_usd)
         print(debug_order)
 
         if new_signal != 0:  # Not HOLD - execute trade
