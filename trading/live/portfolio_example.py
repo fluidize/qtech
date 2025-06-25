@@ -51,12 +51,17 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
             # Calculate trade size based on portfolio value to estimate slippage
             portfolio_value = portfolio.get_portfolio_value(execution_price)
             estimated_trade_size_sol = portfolio_value / execution_price if execution_price > 0 else 1.0
+            estimated_trade_size_usd = portfolio_value
         
+        # print(estimated_trade_size_sol)
+        # debug_order = wallethandler.get_order(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol)
+        # print(debug_order)
+
         if new_signal != 0:  # Not HOLD - execute trade
             if new_signal == 1:  # SHORT
                 order_result = wallethandler.get_order(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol)
             elif new_signal == 3:  # LONG
-                order_result = wallethandler.get_order(jup.Token.USDC, jup.Token.SOL, estimated_trade_size_sol)
+                order_result = wallethandler.get_order(jup.Token.USDC, jup.Token.SOL, estimated_trade_size_usd)
             else:  # FLAT (2) - close position
                 order_result = wallethandler.get_order(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol)
             
@@ -151,11 +156,11 @@ async def run_single_coin_test(webhook_url: str = None, private_key: str = None)
         
     system = LiveTradingSystem(
         symbol="SOL-USDT",
-        interval="1h",
+        interval="1m",
         data_source="binance",
         buffer_size=500,
-        strategy_func=strategy.trend_strategy,
-        strategy_params={"supertrend_window": 24, "supertrend_multiplier": 1.2},
+        strategy_func=strategy.signal_spam,
+        strategy_params={},
         signal_callback=callback
     )
     
@@ -196,4 +201,4 @@ if __name__ == "__main__":
     parser.add_argument("--private_key", type=str, default=None, help="Solana private key for Jupiter wallet")
     args = parser.parse_args()
     
-    asyncio.run(run_single_coin_test(webhook_url=args.webhook_url, private_key=args.private_key))
+    asyncio.run(run_single_coin_test(webhook_url="", private_key="2BmZhw6gq2VyyvQNhzbXSPp1riXVDQqfiBNPeALf54gsZ9Wh4bLzQrzbysRUgxZVmi862VcXTwFvcAnfC1KYwWsz"))

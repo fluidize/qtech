@@ -1,5 +1,7 @@
 import os
 import requests
+import aiohttp
+import asyncio
 import base58
 import base64
 from solders.solders import Keypair, VersionedTransaction
@@ -53,8 +55,9 @@ class JupiterWalletHandler:
 
             response = requests.get("https://lite-api.jup.ag/ultra/v1/order", params=order_params)
             response_json = response.json()
+            
             if response.status_code != 200:
-                print(f"Error fetching order: {response.json()}")
+                print(f"Error fetching order {response.status_code} : {response.json()}")
                 return None
             else:
                 in_usd = float(response_json['inUsdValue'])
@@ -69,19 +72,59 @@ class JupiterWalletHandler:
         except Exception as e:
             print(f"Error in get_order: {e}")
             return None
+        
+    async def get_order_async(self, input_mint: str, output_mint: str, input_amount: float) -> Optional[Tuple[float, float, float, float, float, float, str]]:
+        """
+        Get an order from Jupiter with ultra API Asynchronously.
+        """
+        try:
+            input_mint_info = get_token_info(input_mint)
+            input_decimals = input_mint_info['decimals']
+
+            raw_input_amount = int(input_amount * (10 ** input_decimals))
+
+            order_params = {
+                "inputMint": input_mint,
+                "outputMint": output_mint,
+                "amount": raw_input_amount,
+                "taker": str(self.wallet.pubkey()),
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get("https://lite-api.jup.ag/ultra/v1/order", params=order_params) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        print(f"Error fetching order {response.status} : {error_text}")
+                        return None
+                    
+                    response_json = await response.json()
+                    in_usd = float(response_json['inUsdValue'])
+                    out_usd = float(response_json['outUsdValue'])
+                    slippage_bps = float(response_json['slippageBps'])
+                    fee_bps = float(response_json['feeBps'])
+                    price_impact_pct = float(response_json['priceImpactPct']) #positive pi is good
+                    price_impact_usd = float(response_json['priceImpact'])
+                    unsigned_tx = str(response_json['transaction'])
+                    
+                    return in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx
+        except Exception as e:
+            print(f"Error in get_order_async: {e}")
+            return None
             
 
 if __name__ == "__main__":
     jupiter = JupiterWalletHandler("2BmZhw6gq2VyyvQNhzbXSPp1riXVDQqfiBNPeALf54gsZ9Wh4bLzQrzbysRUgxZVmi862VcXTwFvcAnfC1KYwWsz") #placeholder
-    result = jupiter.get_order(Token.SOL, Token.USDC, 1.0)
-    if result:
-        in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx = result
-        print(f"In USD: {type(in_usd)} {in_usd}")
-        print(f"Out USD: {type(out_usd)} {out_usd}")
-        print(f"Slippage BPS: {type(slippage_bps)} {slippage_bps}")
-        print(f"Fee BPS: {type(fee_bps)} {fee_bps}")
-        print(f"Price Impact PCT: {type(price_impact_pct)} {price_impact_pct}")
-        print(f"Price Impact USD: {type(price_impact_usd)} {price_impact_usd}")
-        print(f"Unsigned TX: {type(unsigned_tx)} {unsigned_tx}")
-    else:
-        print("Failed to get order")
+    for i in range(10):
+        result = jupiter.get_order(Token.SOL, Token.USDC, 1.0)
+        print(result)
+        if result:
+            in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx = result
+            print(f"In USD: {type(in_usd)} {in_usd}")
+            print(f"Out USD: {type(out_usd)} {out_usd}")
+            print(f"Slippage BPS: {type(slippage_bps)} {slippage_bps}")
+            print(f"Fee BPS: {type(fee_bps)} {fee_bps}")
+            print(f"Price Impact PCT: {type(price_impact_pct)} {price_impact_pct}")
+            print(f"Price Impact USD: {type(price_impact_usd)} {price_impact_usd}")
+            print(f"Unsigned TX: {type(unsigned_tx)} {unsigned_tx}")
+        else:
+            print("Failed to get order")
