@@ -58,7 +58,7 @@ class JupiterWalletHandler:
                 
                 if response.status_code != 200:
                     print(f"Error fetching order {response.status_code} : {response.json()}")
-                    sleep(1.5)
+                    sleep(0.5)
                     continue
                 else:
                     in_usd = float(response_json['inUsdValue'])
@@ -68,26 +68,58 @@ class JupiterWalletHandler:
                     price_impact_pct = float(response_json['priceImpactPct']) #positive pi is good
                     price_impact_usd = float(response_json['priceImpact'])
                     unsigned_tx = str(response_json['transaction'])
+                    request_id = response_json['requestId']
                     
-                    return in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx
+                    return in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx, request_id
         except Exception as e:
             print(f"Error in get_order: {e}")
             return None
+        
+    def execute_order(self, unsigned_tx: str, request_id: str):
+        bytes = base64.b64decode(unsigned_tx)
+        raw_tx = VersionedTransaction.from_bytes(bytes)
+
+        account_keys = raw_tx.message.account_keys
+        wallet_index = account_keys.index(self.wallet.pubkey())
+
+        signers = list(raw_tx.signatures)
+        signers[wallet_index] = self.wallet
+
+        signed_transaction = VersionedTransaction(raw_tx.message, signers)
+        serialized_signed_transaction = base64.b64encode(bytes(signed_transaction)).decode("utf-8")
+
+        execute_request = {
+            "signedTransaction": serialized_signed_transaction,
+            "requestId": request_id,
+        }
+
+        execute_response = requests.post(
+            "https://lite-api.jup.ag/ultra/v1/execute", json=execute_request
+        )
+
+        if execute_response.status_code == 200:
+            error_data = execute_response.json()
+            signature = error_data["signature"]
+            return signature
+        else:
+            if error_data["status"] != "Success":
+                error_code = error_data["code"]
+                error_message = error_data["error"]
+
+                print(f"Transaction failed! Signature: {signature}")
+                print(f"Custom Program Error Code: {error_code}")
+                print(f"Message: {error_message}")
+                print(f"View transaction on Solscan: https://solscan.io/tx/{signature}")
+                return None
+            
+    def order_and_execute(self, input_mint: str, output_mint: str, input_amount: float, retry: bool = True, retry_limit: int = 5) -> Optional[Tuple[float, float, float, float, float, float, str]]:
+        in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx, request_id = self.get_order(input_mint, output_mint, input_amount, retry, retry_limit)
+        signature = self.execute_order(unsigned_tx, request_id)
+        return signature
             
 
 if __name__ == "__main__":
     jupiter = JupiterWalletHandler("2BmZhw6gq2VyyvQNhzbXSPp1riXVDQqfiBNPeALf54gsZ9Wh4bLzQrzbysRUgxZVmi862VcXTwFvcAnfC1KYwWsz") #placeholder
     for i in range(10):
-        result = jupiter.get_order(Token.SOL, Token.USDC, 1.0)
+        result = jupiter.get_order(Token.USDC, Token.SOL, 2)
         print(result)
-        if result:
-            in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx = result
-            print(f"In USD: {type(in_usd)} {in_usd}")
-            print(f"Out USD: {type(out_usd)} {out_usd}")
-            print(f"Slippage BPS: {type(slippage_bps)} {slippage_bps}")
-            print(f"Fee BPS: {type(fee_bps)} {fee_bps}")
-            print(f"Price Impact PCT: {type(price_impact_pct)} {price_impact_pct}")
-            print(f"Price Impact USD: {type(price_impact_usd)} {price_impact_usd}")
-            print(f"Unsigned TX: {type(unsigned_tx)} {unsigned_tx}")
-        else:
-            print("Failed to get order")
