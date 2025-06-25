@@ -6,6 +6,7 @@ from solders.solders import Keypair, VersionedTransaction
 
 from typing import Dict, List, Optional, Tuple, Union
 from rich import print
+from time import sleep
 
 class Token:
     SOL = "So11111111111111111111111111111111111111112"
@@ -33,40 +34,42 @@ class JupiterWalletHandler:
         self.private_key = private_key
         self.wallet = Keypair.from_bytes(base58.b58decode(private_key))
     
-    def get_order(self, input_mint: str, output_mint: str, input_amount: float) -> Optional[Tuple[float, float, float, float, float, float, str]]:
+    def get_order(self, input_mint: str, output_mint: str, input_amount: float, retry: bool = True, retry_limit: int = 3) -> Optional[Tuple[float, float, float, float, float, float, str]]:
         """
         Get an order from Jupiter with ultra API. Automatically scales UI to raw.
         Returns a tuple of (in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx)
         """
         try:
-            input_mint_info = get_token_info(input_mint)
-            input_decimals = input_mint_info['decimals']
+            for i in range(retry_limit if retry else 1):
+                input_mint_info = get_token_info(input_mint)
+                input_decimals = input_mint_info['decimals']
 
-            raw_input_amount = int(input_amount * (10 ** input_decimals))
+                raw_input_amount = int(input_amount * (10 ** input_decimals))
 
-            order_params = {
-                "inputMint": input_mint,
-                "outputMint": output_mint,
-                "amount": raw_input_amount,
-                "taker": str(self.wallet.pubkey()),
-            }
+                order_params = {
+                    "inputMint": input_mint,
+                    "outputMint": output_mint,
+                    "amount": raw_input_amount,
+                    "taker": str(self.wallet.pubkey()),
+                }
 
-            response = requests.get("https://lite-api.jup.ag/ultra/v1/order", params=order_params)
-            response_json = response.json()
-            
-            if response.status_code != 200:
-                print(f"Error fetching order {response.status_code} : {response.json()}")
-                return None
-            else:
-                in_usd = float(response_json['inUsdValue'])
-                out_usd = float(response_json['outUsdValue'])
-                slippage_bps = float(response_json['slippageBps'])
-                fee_bps = float(response_json['feeBps'])
-                price_impact_pct = float(response_json['priceImpactPct']) #positive pi is good
-                price_impact_usd = float(response_json['priceImpact'])
-                unsigned_tx = str(response_json['transaction'])
+                response = requests.get("https://lite-api.jup.ag/ultra/v1/order", params=order_params)
+                response_json = response.json()
                 
-                return in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx
+                if response.status_code != 200:
+                    print(f"Error fetching order {response.status_code} : {response.json()}")
+                    sleep(1)
+                    continue
+                else:
+                    in_usd = float(response_json['inUsdValue'])
+                    out_usd = float(response_json['outUsdValue'])
+                    slippage_bps = float(response_json['slippageBps'])
+                    fee_bps = float(response_json['feeBps'])
+                    price_impact_pct = float(response_json['priceImpactPct']) #positive pi is good
+                    price_impact_usd = float(response_json['priceImpact'])
+                    unsigned_tx = str(response_json['transaction'])
+                    
+                    return in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx
         except Exception as e:
             print(f"Error in get_order: {e}")
             return None
