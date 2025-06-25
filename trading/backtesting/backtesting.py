@@ -775,20 +775,20 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=100,
-        slippage_pct=0.01,
+        slippage_pct=0.005,
         commission_fixed=0.0,
         reinvest=False,
         leverage=1
     )   
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=365,
-        interval="1h",
+        chunks=10,
+        interval="30m",
         age_days=0, 
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.trend_strategy, verbose=True, supertrend_window=24, supertrend_multiplier=1.2)
+    backtest.run_strategy(strategy.trend_strategy, verbose=True, supertrend_window=75, supertrend_multiplier=0.6)
     
     print(backtest.get_performance_metrics())
     print(backtest.get_cost_summary())

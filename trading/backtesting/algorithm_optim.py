@@ -422,13 +422,13 @@ class AlgorithmOptimizer:
 
 if __name__ == "__main__":
     A = AlgorithmOptimizer(
-        symbol="SEI-USDT",
+        symbol="SOL-USDT",
         chunks=100,
         age_days=0,
-        slippage_pct=0.01,
+        slippage_pct=0.005,
         commission_fixed=0.00,
         data_source="binance",
-        timeframes=["30m", "1h", "4h", "1d"]
+        timeframes=["15m", "30m", "1h", "4h", "1d"]
     )
     
     A.optimize(
