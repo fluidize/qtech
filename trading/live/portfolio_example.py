@@ -70,7 +70,7 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
                     console.print(f"[red]Warning: Could not get Jupiter order, using default slippage[/red]")
                 jupiter_slippage_bps = 50.0  # Default 0.5% slippage
             else:
-                in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx = order_result
+                in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx, request_id = order_result
                 jupiter_slippage_bps = price_impact_pct * 100.0 
 
             trade_result = portfolio.execute_trade(new_signal, execution_price, timestamp, slippage_bps=jupiter_slippage_bps)
@@ -165,7 +165,7 @@ async def run_single_coin_test(webhook_url: str = None, private_key: str = None)
     )
     
     if webhook_url:
-        requests.post(webhook_url, json={"content": f"Starting Binance-Jupiter Trading System | Strategy: {system.strategy_func.__name__}"})
+        requests.post(webhook_url, json={"content": f"Starting Binance-Jupiter Trading System | Strategy: {system.strategy_func.__name__} {system.strategy_params}"})
     
     console.print("[green]Starting Binance-Jupiter Trading System[/green]")
     console.print(f"[blue]Signal Source: Binance {system.symbol}[/blue]")
