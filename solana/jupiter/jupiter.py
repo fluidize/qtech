@@ -34,7 +34,7 @@ class JupiterWalletHandler:
         self.private_key = private_key
         self.wallet = Keypair.from_bytes(base58.b58decode(private_key))
     
-    def get_order(self, input_mint: str, output_mint: str, input_amount: float, retry: bool = True, retry_limit: int = 3) -> Optional[Tuple[float, float, float, float, float, float, str]]:
+    def get_order(self, input_mint: str, output_mint: str, input_amount: float, retry: bool = True, retry_limit: int = 5) -> Optional[Tuple[float, float, float, float, float, float, str]]:
         """
         Get an order from Jupiter with ultra API. Automatically scales UI to raw.
         Returns a tuple of (in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx)
@@ -58,7 +58,7 @@ class JupiterWalletHandler:
                 
                 if response.status_code != 200:
                     print(f"Error fetching order {response.status_code} : {response.json()}")
-                    sleep(1)
+                    sleep(1.5)
                     continue
                 else:
                     in_usd = float(response_json['inUsdValue'])
