@@ -77,20 +77,42 @@ def cci(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 20)
 
 def adx(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Average Directional Index"""
-    plus_dm = high.diff()
-    minus_dm = low.diff()
-    plus_dm[plus_dm < 0] = 0
-    minus_dm[minus_dm > 0] = 0
-    
+    # Calculate True Range
     tr1 = high - low
     tr2 = abs(high - close.shift())
     tr3 = abs(low - close.shift())
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     
-    plus_di = 100 * (plus_dm.ewm(alpha=1/timeperiod).mean() / tr.ewm(alpha=1/timeperiod).mean())
-    minus_di = 100 * (minus_dm.ewm(alpha=1/timeperiod).mean() / tr.ewm(alpha=1/timeperiod).mean())
+    # Calculate Directional Movement
+    high_diff = high.diff()
+    low_diff = low.diff()
     
-    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    # Plus DM: current high - previous high (if positive and greater than low difference)
+    plus_dm = pd.Series(0.0, index=high.index, dtype=float)
+    plus_dm[(high_diff > 0) & (high_diff > -low_diff)] = high_diff[(high_diff > 0) & (high_diff > -low_diff)]
+    
+    # Minus DM: previous low - current low (if positive and greater than high difference)
+    minus_dm = pd.Series(0.0, index=low.index, dtype=float)
+    minus_dm[(-low_diff > 0) & (-low_diff > high_diff)] = -low_diff[(-low_diff > 0) & (-low_diff > high_diff)]
+    
+    # Smooth the values using exponential moving average
+    tr_smooth = tr.ewm(alpha=1/timeperiod).mean()
+    plus_dm_smooth = plus_dm.ewm(alpha=1/timeperiod).mean()
+    minus_dm_smooth = minus_dm.ewm(alpha=1/timeperiod).mean()
+    
+    # Calculate Directional Indicators
+    plus_di = 100 * (plus_dm_smooth / tr_smooth)
+    minus_di = 100 * (minus_dm_smooth / tr_smooth)
+    
+    # Calculate Directional Index (DX)
+    di_sum = plus_di + minus_di
+    di_diff = abs(plus_di - minus_di)
+    
+    # Avoid division by zero
+    dx = pd.Series(0.0, index=high.index, dtype=float)
+    dx[di_sum > 0] = 100 * (di_diff[di_sum > 0] / di_sum[di_sum > 0])
+    
+    # Calculate ADX (smoothed DX)
     adx = dx.ewm(alpha=1/timeperiod).mean()
     
     return adx, plus_di, minus_di
