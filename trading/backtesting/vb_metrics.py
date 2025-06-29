@@ -18,37 +18,38 @@ def stateful_position_to_multiplier(position: pd.Series) -> pd.Series:
     
     return position_multiplier
 
-def get_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
-    """Calculate strategy returns from position and close prices."""
-    returns = close_prices.pct_change()
+def get_returns(position: pd.Series, open_prices: pd.Series) -> pd.Series:
+    """Calculate strategy returns from position and open prices."""
+    returns = open_prices.pct_change()
     position_multiplier = stateful_position_to_multiplier(position)
     result = position_multiplier.shift(1) * returns
     return result
 
-def get_cumulative_returns(position: pd.Series, close_prices: pd.Series) -> pd.Series:
-    """Calculate cumulative returns from position and close prices."""
-    returns = get_returns(position, close_prices)
+def get_cumulative_returns(position: pd.Series, open_prices: pd.Series) -> pd.Series:
+    """Calculate cumulative returns from position and open prices."""
+    returns = get_returns(position, open_prices)
     result = (1 + returns).cumprod()
     return result
 
-def get_total_return(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate total return from position and close prices."""
-    cumulative_returns = get_cumulative_returns(position, close_prices)
+def get_total_return(position: pd.Series, open_prices: pd.Series) -> float:
+    """Calculate total return from position and open prices."""
+    cumulative_returns = get_cumulative_returns(position, open_prices)
     result = cumulative_returns.iloc[-1] - 1
     return result
 
-def get_benchmark_returns(close_prices: pd.Series) -> pd.Series:
-    """Calculate benchmark returns per period (if you just held the asset)."""
-    return close_prices.pct_change()
+def get_benchmark_returns(open_prices: pd.Series) -> pd.Series:
+    """Calculate benchmark returns per period using open prices."""
+    return open_prices.pct_change()
 
-def get_benchmark_total_return(close_prices: pd.Series) -> float:
-    returns = get_benchmark_returns(close_prices).dropna()
+def get_benchmark_total_return(open_prices: pd.Series) -> float:
+    """Calculate benchmark total return using open prices."""
+    returns = get_benchmark_returns(open_prices).dropna()
     cum_return = (1 + returns).prod() - 1
     return cum_return
 
-def get_portfolio_value(position: pd.Series, close_prices: pd.Series, initial_capital: float) -> pd.Series:
-    """Calculate portfolio value from position, close prices, and initial capital."""
-    cumulative_returns = get_cumulative_returns(position, close_prices)
+def get_portfolio_value(position: pd.Series, open_prices: pd.Series, initial_capital: float) -> pd.Series:
+    """Calculate portfolio value from position, open prices, and initial capital."""
+    cumulative_returns = get_cumulative_returns(position, open_prices)
     result = initial_capital * cumulative_returns
     return result
 
@@ -103,29 +104,29 @@ def get_beta(strategy_returns: pd.Series, market_returns: pd.Series, n_days: int
     _, beta = get_alpha_beta(strategy_returns, market_returns, n_days=n_days, return_interval=return_interval)
     return beta
 
-def get_active_return(position: pd.Series, close_prices: pd.Series) -> pd.Series:
+def get_active_return(position: pd.Series, open_prices: pd.Series) -> pd.Series:
     """Calculate the active return of strategy compared to benchmark (per period)."""
-    returns = get_returns(position, close_prices)
-    benchmark_returns = get_benchmark_returns(close_prices)
+    returns = get_returns(position, open_prices)
+    benchmark_returns = get_benchmark_returns(open_prices)
     return returns - benchmark_returns
 
-def get_total_active_return(position: pd.Series, close_prices: pd.Series) -> pd.Series:
+def get_total_active_return(position: pd.Series, open_prices: pd.Series) -> pd.Series:
     """Calculate the total active return of strategy compared to benchmark."""
-    return_total = get_total_return(position, close_prices)
-    return_benchmark = get_benchmark_total_return(close_prices)
+    return_total = get_total_return(position, open_prices)
+    return_benchmark = get_benchmark_total_return(open_prices)
     result = return_total - return_benchmark
     return result
 
-def get_drawdown(position: pd.Series, close_prices: pd.Series, initial_capital: float) -> pd.Series:
-    """Calculate drawdown from position, close prices, and initial capital."""
-    portfolio_value = get_portfolio_value(position, close_prices, initial_capital)
+def get_drawdown(position: pd.Series, open_prices: pd.Series, initial_capital: float) -> pd.Series:
+    """Calculate drawdown from position, open prices, and initial capital."""
+    portfolio_value = get_portfolio_value(position, open_prices, initial_capital)
     peak = portfolio_value.cummax()
     result = (portfolio_value - peak) / peak
     return result
 
-def get_max_drawdown(position: pd.Series, close_prices: pd.Series, initial_capital: float) -> float:
-    """Calculate maximum drawdown from position, close prices, and initial capital."""
-    drawdown = get_drawdown(position, close_prices, initial_capital)
+def get_max_drawdown(position: pd.Series, open_prices: pd.Series, initial_capital: float) -> float:
+    """Calculate maximum drawdown from position, open prices, and initial capital."""
+    drawdown = get_drawdown(position, open_prices, initial_capital)
     result = drawdown.min()
     return result
 
@@ -198,8 +199,8 @@ def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days:
     
     return sortino_annualized
 
-def get_trade_pnls(position: pd.Series, close_prices: pd.Series) -> List[float]:
-    """Calculate P&L for each trade from position and close prices."""
+def get_trade_pnls(position: pd.Series, open_prices: pd.Series) -> List[float]:
+    """Calculate P&L for each trade from position and open prices."""
     
     # Vectorized implementation
     position_changes = position.diff()
@@ -221,7 +222,7 @@ def get_trade_pnls(position: pd.Series, close_prices: pd.Series) -> List[float]:
         if prev_pos != 2 and prev_pos != current_pos:
             if active_positions:
                 pos_type, entry_price, _ = active_positions.pop()
-                exit_price = close_prices.loc[idx]
+                exit_price = open_prices.loc[idx]
                 if pos_type == 3:  # Long
                     pnl = exit_price - entry_price
                 else:  # Short (pos_type == 1)
@@ -230,24 +231,24 @@ def get_trade_pnls(position: pd.Series, close_prices: pd.Series) -> List[float]:
         
         # Open new position if not going to flat
         if current_pos != 2:
-            entry_price = close_prices.loc[idx]
+            entry_price = open_prices.loc[idx]
             active_positions.append((current_pos, entry_price, idx))
         
         prev_pos = current_pos
     
     return pnl_list
 
-def get_win_rate(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate win rate from position and close prices."""
-    pnl_list = get_trade_pnls(position, close_prices)
+def get_win_rate(position: pd.Series, open_prices: pd.Series) -> float:
+    """Calculate win rate from position and open prices."""
+    pnl_list = get_trade_pnls(position, open_prices)
     winning_trades = sum(1 for pnl in pnl_list if pnl > 0)
     total_trades = len(pnl_list)
     result = winning_trades / total_trades if total_trades > 0 else 0
     return result
 
-def get_rr_ratio(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate risk/reward ratio from position and close prices."""
-    pnl_list = get_trade_pnls(position, close_prices)
+def get_rr_ratio(position: pd.Series, open_prices: pd.Series) -> float:
+    """Calculate risk/reward ratio from position and open prices."""
+    pnl_list = get_trade_pnls(position, open_prices)
     winning_trades = [pnl for pnl in pnl_list if pnl > 0]
     losing_trades = [pnl for pnl in pnl_list if pnl < 0]
     
@@ -257,23 +258,23 @@ def get_rr_ratio(position: pd.Series, close_prices: pd.Series) -> float:
     result = (avg_win / abs(avg_loss)) if avg_loss < 0 else 0
     return result
 
-def get_breakeven_rate(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate breakeven rate from position and close prices."""
-    rr_ratio = get_rr_ratio(position, close_prices)
+def get_breakeven_rate(position: pd.Series, open_prices: pd.Series) -> float:
+    """Calculate breakeven rate from position and open prices."""
+    rr_ratio = get_rr_ratio(position, open_prices)
     result = 1 / (rr_ratio + 1) if rr_ratio > 0 else 0
     return result
 
-def get_pt_ratio(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate profit/trade ratio from position and close prices."""
-    returns = get_returns(position, close_prices)
-    pnl_list = get_trade_pnls(position, close_prices)
+def get_pt_ratio(position: pd.Series, open_prices: pd.Series) -> float:
+    """Calculate profit/trade ratio from position and open prices."""
+    returns = get_returns(position, open_prices)
+    pnl_list = get_trade_pnls(position, open_prices)
     total_trades = len(pnl_list)
     result = (returns.sum() / total_trades) * 100 if total_trades > 0 else 0
     return result
 
-def get_profit_factor(position: pd.Series, close_prices: pd.Series) -> float:
-    """Calculate profit factor from position and close prices."""
-    returns = get_returns(position, close_prices)
+def get_profit_factor(position: pd.Series, open_prices: pd.Series) -> float:
+    """Calculate profit factor from position and open prices."""
+    returns = get_returns(position, open_prices)
     profit_factor = returns[returns > 0].sum() / abs(returns[returns < 0].sum())
     return profit_factor
 

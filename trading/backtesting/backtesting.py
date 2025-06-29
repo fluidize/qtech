@@ -135,43 +135,6 @@ class VectorizedBacktesting:
         position = position.ffill().fillna(2).astype(int) #forward fill hold signals, default to flat at start
         return position
 
-    def _get_trade_pnls_open_prices(self, position: pd.Series, open_prices: pd.Series) -> list:
-        """Calculate P&L for each trade using open prices."""
-        position_changes = position.diff()
-        change_indices = position_changes[position_changes != 0].index
-        
-        if len(change_indices) == 0:
-            return []
-        
-        pnl_list = []
-        active_positions = []  # Stack of (position_type, entry_price, entry_idx)
-        
-        # Process all position changes
-        prev_pos = position.iloc[0] if len(position) > 0 else 2
-        
-        for idx in change_indices:
-            current_pos = position.loc[idx]
-            
-            # Close existing position if switching or going to flat
-            if prev_pos != 2 and prev_pos != current_pos:
-                if active_positions:
-                    pos_type, entry_price, _ = active_positions.pop()
-                    exit_price = open_prices.loc[idx]  # Exit at current open price
-                    if pos_type == 3:  # Long
-                        pnl = exit_price - entry_price
-                    else:  # Short (pos_type == 1)
-                        pnl = entry_price - exit_price
-                    pnl_list.append(pnl)
-            
-            # Open new position if not going to flat
-            if current_pos != 2:
-                entry_price = open_prices.loc[idx]  # Enter at current open price
-                active_positions.append((current_pos, entry_price, idx))
-            
-            prev_pos = current_pos
-        
-        return pnl_list
-
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
         """
         Run a trading strategy with realistic execution timing.
@@ -263,7 +226,7 @@ class VectorizedBacktesting:
         except:
             total_return = 0
         
-        # FIXED: For benchmark comparison, use same open-to-open returns as strategy
+        # For benchmark comparison, use same open-to-open returns as strategy
         asset_returns = self.data['Open_Return'].dropna()
         if self.reinvest:
             benchmark_total_return = (1 + asset_returns).prod() - 1
@@ -291,16 +254,17 @@ class VectorizedBacktesting:
         else:
             alpha, beta = float('nan'), float('nan')
         
-        # FIXED: Trade-level metrics using correct execution prices (open prices)
-        trade_pnls = self._get_trade_pnls_open_prices(position, open_prices)
+        # Use VB metrics for trade-level analysis (now uses open prices)
+        trade_pnls = metrics.get_trade_pnls(position, open_prices)
+        win_rate = metrics.get_win_rate(position, open_prices)
+        rr_ratio = metrics.get_rr_ratio(position, open_prices)
+        breakeven_rate = metrics.get_breakeven_rate(position, open_prices)
+        pt_ratio = metrics.get_pt_ratio(position, open_prices)
         
         # Profit factor using strategy returns
         positive_returns = strategy_returns[strategy_returns > 0]
         negative_returns = strategy_returns[strategy_returns < 0]
         profit_factor = positive_returns.sum() / abs(negative_returns.sum()) if negative_returns.sum() < 0 else float('inf')
-
-        win_rate = len([pnl for pnl in trade_pnls if pnl > 0]) / len(trade_pnls) if trade_pnls else 0
-        pt_ratio = (strategy_returns.sum() / len(trade_pnls)) * 100 if trade_pnls else 0
 
         return {
             'Total_Return': total_return,
@@ -312,8 +276,8 @@ class VectorizedBacktesting:
             'Sortino_Ratio': sortino_ratio,
             'Information_Ratio': info_ratio,
             'Win_Rate': win_rate,
-            'Breakeven_Rate': metrics.get_breakeven_rate_from_pnls(trade_pnls),
-            'RR_Ratio': metrics.get_rr_ratio_from_pnls(trade_pnls),
+            'Breakeven_Rate': breakeven_rate,
+            'RR_Ratio': rr_ratio,
             'PT_Ratio': pt_ratio,
             'Profit_Factor': profit_factor,
             'Total_Trades': len(trade_pnls),
@@ -538,8 +502,8 @@ class VectorizedBacktesting:
                 row=1, col=2
             )
 
-            # 3. Profit and Loss Distribution - FIXED: use correct trade PnL calculation
-            pnl_list = self._get_trade_pnls_open_prices(self.data['Position'], self.data['Open'])
+            # 3. Profit and Loss Distribution - use VB metrics for trade PnL calculation
+            pnl_list = metrics.get_trade_pnls(self.data['Position'], self.data['Open'])
             # Convert PnL to percentage of portfolio value at time of trade
             initial_value = self.initial_capital
             pnl_pct_list = [(pnl / initial_value) * 100 for pnl in pnl_list]
@@ -742,7 +706,7 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=100,
-        slippage_pct=0.003,
+        slippage_pct=0.00,
         commission_fixed=0.0,
         reinvest=False,
         leverage=1
@@ -750,12 +714,12 @@ if __name__ == "__main__":
     backtest.fetch_data(
         symbol="SOL-USDT",
         chunks=365,
-        interval="4h",
+        interval="5m",
         age_days=0, 
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.ma_crossover_strategy, verbose=True, ma_fast=34, ma_slow=108, slow_pct_shift=0.03)
+    backtest.run_strategy(strategy.perfect_strategy, verbose=True)
 
     print(backtest.get_performance_metrics())
     print(backtest.get_cost_summary())
