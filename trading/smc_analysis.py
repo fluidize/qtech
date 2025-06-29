@@ -7,7 +7,7 @@ def pivot_points(open: pd.Series, high: pd.Series, low: pd.Series, close: pd.Ser
     """
     Calculate pivot points from high and low prices.
     """
-    pivot_points = pd.DataFrame(columns=["Type", "Price_Index", "Price"])
+    pivot_points = pd.DataFrame(columns=["Type", "Price_Index", "Price"], index=open.index)
 
     open = open.values
     high = high.values
@@ -24,6 +24,8 @@ def pivot_points(open: pd.Series, high: pd.Series, low: pd.Series, close: pd.Ser
             pivot_points.loc[i] = ('Swing_High', i, _high)
         elif is_swing_low:
             pivot_points.loc[i] = ('Swing_Low', i, _low)
+        else:
+            pivot_points.loc[i] = ('None', i, np.nan)
 
     return pivot_points
 

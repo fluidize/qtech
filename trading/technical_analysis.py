@@ -6,6 +6,15 @@ from scipy.stats import percentileofscore
 from scipy import signal
 from typing import Optional
 
+def heikin_ashi_transform(data: pd.DataFrame) -> pd.DataFrame:
+    """Heikin Ashi Transform"""
+    ha_data = data.copy()
+    ha_data['Open'] = (ha_data['Open'] + ha_data['Close'].shift(1)) / 2
+    ha_data['Close'] = (ha_data['Open'] + ha_data['High'] + ha_data['Low'] + ha_data['Close']) / 4
+    ha_data['High'] = ha_data[['Open', 'Close', 'High']].max(axis=1)
+    ha_data['Low'] = ha_data[['Open', 'Close', 'Low']].min(axis=1)
+    return ha_data
+
 def sma(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Simple Moving Average"""
     return series.rolling(window=timeperiod).mean()
