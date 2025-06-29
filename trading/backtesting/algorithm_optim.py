@@ -140,7 +140,7 @@ class GridSearch:
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class BayesianOptimizer:
-    def __init__(self, engine: VectorizedBacktesting, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize"):
+    def __init__(self, engine: VectorizedBacktesting, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize", float_exceptions: List[str] = None, fixed_exceptions: List[str] = None):
         self.engine = engine
         self.strategy_func = strategy_func
         self.param_space = param_space  # e.g., {"fast_period": (1, 50), "slow_period": (1, 50)}
@@ -150,6 +150,8 @@ class BayesianOptimizer:
         self.best_metrics = None
         self.n_trials = n_trials
         self.direction = direction
+        self.float_exceptions = float_exceptions or []
+        self.fixed_exceptions = fixed_exceptions or []
 
         invalid = float('-inf') if self.direction == "maximize" else float('inf')
 
@@ -177,27 +179,15 @@ class BayesianOptimizer:
 
     def _suggest_params(self, trial):
         params = {}
-        float_exceptions = [
-            {"strategy": "custom_scalper_strategy", "params": ["wick_threshold", "adx_threshold", "momentum_threshold"]},
-            {"strategy": "ETHBTC_trader", "params": ["lower_zscore_threshold", "upper_zscore_threshold"]},
-            {"strategy": "sr_strategy", "params": ["threshold", "rejection_ratio_threshold"]},
-            {"strategy": "trend_strategy", "params": ["supertrend_multiplier"]},
-            {"strategy": "zscore_momentum_strategy", "params": ["zscore_threshold"]},
-        ] #float exceptions
-        
-        fixed_param_exceptions = [
-            {"strategy": "ETHBTC_trader", "params": ["chunks", "interval", "age_days"]},
-        ] #fixed parameter exceptions
         
         for k, v in self.param_space.items():
             # Check if this is a fixed parameter that should not be optimized
-            is_fixed = any(exception["strategy"] == self.strategy_func.__name__ and k in exception["params"] 
-                          for exception in fixed_param_exceptions)
+            is_fixed = k in self.fixed_exceptions
             
             if is_fixed:
                 # For fixed parameters, just use the first value if it's a tuple/list, otherwise use the value directly
                 params[k] = v[0] if isinstance(v, (tuple, list)) else v
-            elif any(exception["strategy"] == self.strategy_func.__name__ and k in exception["params"] for exception in float_exceptions):
+            elif k in self.float_exceptions:
                 params[k] = trial.suggest_float(k, v[0], v[1])
             else:
                 params[k] = trial.suggest_int(k, v[0], v[1])
@@ -290,7 +280,7 @@ class AlgorithmOptimizer:
         self.strategy_func = None
         self.data_source = data_source
         self.timeframes = timeframes
-    def optimize(self, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize", save_params: bool = False):
+    def optimize(self, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize", save_params: bool = False, float_exceptions: List[str] = None, fixed_exceptions: List[str] = None):
         self.strategy_func = strategy_func
         
         console = Console()
@@ -298,6 +288,10 @@ class AlgorithmOptimizer:
         table.add_column("Timeframe", style="cyan")
         table.add_column("Best Metric", style="green")
         table.add_column("Best Parameters", style="blue")
+
+        # Define which metrics should be formatted as percentages vs ratios
+        percentage_metrics = ["Total_Return", "Alpha", "Active_Return", "Max_Drawdown", "Win_Rate", "Breakeven_Rate", "PT_Ratio"]
+        ratio_metrics = ["Sharpe_Ratio", "Sortino_Ratio", "Information_Ratio", "RR_Ratio", "Profit_Factor", "Beta"]
 
         for timeframe in self.timeframes:
             console.print(f"\n[bold blue]Optimizing for {timeframe} timeframe...[/bold blue]")
@@ -316,7 +310,9 @@ class AlgorithmOptimizer:
                 param_space=param_space,
                 metric=metric,
                 n_trials=n_trials,
-                direction=direction
+                direction=direction,
+                float_exceptions=float_exceptions,
+                fixed_exceptions=fixed_exceptions
             )
 
             best_metric = bayesian_op.run(save_params=False)
@@ -327,9 +323,17 @@ class AlgorithmOptimizer:
                 "best_params": best_params
             }
 
+            # Format metric value appropriately
+            if metric in percentage_metrics:
+                formatted_metric = f"{best_metric:.2%}"
+            elif metric in ratio_metrics:
+                formatted_metric = f"{best_metric:.3f}"
+            else:
+                formatted_metric = f"{best_metric:.3f}"
+
             table.add_row(
                 timeframe,
-                f"{best_metric:.2%}",
+                formatted_metric,
                 str(best_params)
             )
 
@@ -345,7 +349,15 @@ class AlgorithmOptimizer:
         
         console.print("\n[bold green]Timeframe Performance Ranking:[/bold green]")
         for i, (tf, result) in enumerate(sorted_results, 1):
-            console.print(f"{i}. {tf}: {result['best_metric']:.2%}")
+            # Format metric value appropriately for ranking display
+            if metric in percentage_metrics:
+                formatted_metric = f"{result['best_metric']:.2%}"
+            elif metric in ratio_metrics:
+                formatted_metric = f"{result['best_metric']:.3f}"
+            else:
+                formatted_metric = f"{result['best_metric']:.3f}"
+            
+            console.print(f"{i}. {tf}: {formatted_metric}")
             
         # Only save parameters for the best timeframe if save_params is True
         if save_params:
@@ -423,24 +435,27 @@ class AlgorithmOptimizer:
 if __name__ == "__main__":
     A = AlgorithmOptimizer(
         symbol="SOL-USDT",
-        chunks=100,
+        chunks=365,
         age_days=0,
         slippage_pct=0.005,
         commission_fixed=0.00,
         data_source="binance",
-        timeframes=["15m", "30m", "1h", "4h", "1d"]
+        timeframes=["5m", "15m", "30m", "1h", "4h"]
     )
     
     A.optimize(
-        strategy_func=strategy.trend_strategy,
+        strategy_func=strategy.ma_crossover_strategy,
         param_space={
-            "supertrend_window":(2,100),
-            "supertrend_multiplier":(0.25,4)
+            "ma_fast": (2, 50),
+            "ma_slow": (50, 200),
+            "slow_pct_shift": (0.001, 0.03)
         },
-        metric="Information_Ratio",
+        metric="Alpha",
         n_trials=500,
         direction="maximize",
-        save_params=False
+        save_params=False,
+        float_exceptions=["slow_pct_shift"],
+        fixed_exceptions=[]
     )
 
     A.plot_best_performance(extended=False)
