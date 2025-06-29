@@ -6,6 +6,9 @@ import torch.nn.functional as F
 import plotly.graph_objects as go
 from rich import print
 
+import plotly.io as pio
+pio.renderers.default = "browser"
+
 import sys
 sys.path.append("trading")
 
@@ -83,48 +86,39 @@ class VectorizedBacktesting:
                     print(f"[yellow]Warning: {large_gaps.sum()} large time gaps detected[/yellow]")
 
     def _apply_trading_costs(self, returns: pd.Series, position_changes: pd.Series, positions: pd.Series) -> pd.Series:
-        """Apply slippage and fixed commission based on actual trade notional value, respecting reinvestment setting."""
+        """Apply slippage and fixed commission based on actual trade notional value."""
         if self.slippage_pct == 0 and self.commission_fixed == 0:
             return returns
             
         adjusted_returns = returns.copy()
         
-        # Calculate position sizes based on reinvestment setting
+        # Calculate portfolio values for position sizing
         if self.reinvest:
-            # Compound mode: portfolio value grows with profits
-            portfolio_values = self.initial_capital * (1 + returns).cumprod()
+            # Compound mode: portfolio grows with profits
+            # SHIFT(1): Use previous period's portfolio value for current trade sizing
+            portfolio_values = self.initial_capital * (1 + returns).cumprod().shift(1).fillna(self.initial_capital)
         else:
-            # Linear mode: always trade with initial capital only
+            # Linear mode: always trade with initial capital
             portfolio_values = pd.Series(self.initial_capital, index=returns.index)
         
-        # Apply costs based on actual trade value
+        # Apply costs when positions change
         for i in range(1, len(positions)):
             prev_pos = positions.iloc[i-1]
             curr_pos = positions.iloc[i]
             
             if prev_pos != curr_pos:  # Position changed
-                trade_capital = portfolio_values.iloc[i-1] * self.leverage  # Scale by leverage
+                trade_capital = portfolio_values.iloc[i] * self.leverage
                 
-                # Calculate slippage cost (percentage of trade value)
                 slippage_cost_pct = self.slippage_pct
-                
-                # Calculate fixed commission cost (convert to percentage of trade value)
                 commission_cost_pct = self.commission_fixed / trade_capital if trade_capital > 0 else 0
                 
-                # Calculate total cost based on trade type
                 if prev_pos == 2:  # From flat (opening position)
-                    # Single cost for opening
                     total_cost_pct = slippage_cost_pct + commission_cost_pct
-                    
                 elif curr_pos == 2:  # To flat (closing position)
-                    # Single cost for closing
                     total_cost_pct = slippage_cost_pct + commission_cost_pct
-                    
                 else:  # Direct switch (close + open)
-                    # Double cost for closing one position and opening another
                     total_cost_pct = (slippage_cost_pct + commission_cost_pct) * 2
                 
-                # Apply cost to returns
                 adjusted_returns.iloc[i] = returns.iloc[i] - total_cost_pct
         
         return adjusted_returns
@@ -141,72 +135,113 @@ class VectorizedBacktesting:
         position = position.ffill().fillna(2).astype(int) #forward fill hold signals, default to flat at start
         return position
 
+    def _get_trade_pnls_open_prices(self, position: pd.Series, open_prices: pd.Series) -> list:
+        """Calculate P&L for each trade using open prices."""
+        position_changes = position.diff()
+        change_indices = position_changes[position_changes != 0].index
+        
+        if len(change_indices) == 0:
+            return []
+        
+        pnl_list = []
+        active_positions = []  # Stack of (position_type, entry_price, entry_idx)
+        
+        # Process all position changes
+        prev_pos = position.iloc[0] if len(position) > 0 else 2
+        
+        for idx in change_indices:
+            current_pos = position.loc[idx]
+            
+            # Close existing position if switching or going to flat
+            if prev_pos != 2 and prev_pos != current_pos:
+                if active_positions:
+                    pos_type, entry_price, _ = active_positions.pop()
+                    exit_price = open_prices.loc[idx]  # Exit at current open price
+                    if pos_type == 3:  # Long
+                        pnl = exit_price - entry_price
+                    else:  # Short (pos_type == 1)
+                        pnl = entry_price - exit_price
+                    pnl_list.append(pnl)
+            
+            # Open new position if not going to flat
+            if current_pos != 2:
+                entry_price = open_prices.loc[idx]  # Enter at current open price
+                active_positions.append((current_pos, entry_price, idx))
+            
+            prev_pos = current_pos
+        
+        return pnl_list
+
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
         """
-        Run a trading strategy on the data with realistic execution at open prices.
-        
-        Supports two return calculation modes:
-        - Compound (reinvest=True): Returns compound over time. Profits increase position size.
-          Example: 10% + 10% = 21% total return (1.1 * 1.1 - 1)
-        - Linear (reinvest=False): Each period's return applied to initial capital only.
-          Example: 10% + 10% = 20% total return (additive)
-          
-        Args:
-            strategy_func: Strategy function that returns position signals
-            verbose: Print execution details
-            **kwargs: Parameters passed to strategy function
+        Run a trading strategy with realistic execution timing.
+
+        EXECUTION MODEL:
+        - Signal generated at Close[t] using all data up to time t
+        - Trade executed at Open[t+1] (next period's open)
+        - Return earned from Open[t+1] to Open[t+2]
         """
         if self.data is None or self.data.empty:
             raise ValueError("No data available. Call fetch_data() first.")
 
+        import time
         start_time = time.time()
 
-        # Generate signals based on available data (no hindsight bias)
+        # Generate signals using all available data up to each time point
         raw_signals = strategy_func(self.data, **kwargs)
         position = self._signals_to_stateful_position(raw_signals)
+        
+        # SHIFT(-1): Move returns forward to align with execution timing
+        # Open_Return[t] now represents return from Open[t] to Open[t+1] (next period's return)
+        # This aligns with our execution model where position at t earns return at t
+        self.data['Open_Return'] = self.data['Open'].pct_change().shift(-1)
+        
+        # SHIFT(1): Delay position execution by 1 period
+        # Signal at t → Position executed at t+1 (realistic execution delay)
+        execution_position = position.shift(1).fillna(2).astype(int)
 
-        # Calculate open-to-open returns (realistic execution)
-        # Return[t] = (Open[t+1] - Open[t]) / Open[t]
-        # This represents the return from executing at Open[t] to Open[t+1]
-        self.data['Return'] = self.data['Open'].shift(-1) / self.data['Open'] - 1
-        self.data['Position'] = position
-        
+        # Store positions for analysis
+        self.data['Signal_Position'] = position  # Original signal timing
+        self.data['Position'] = execution_position  # Actual execution timing
+
         # Calculate position changes for cost application
-        position_changes = position.diff().fillna(0)
-        
-        # REALISTIC TIMING: Signal at close of bar t-1 -> Execute at open of bar t -> Earn return from open t to open t+1
-        # So: Strategy_Return[t] = Position[t] * Return[t]
-        # Where Return[t] is the return from Open[t] to Open[t+1]
-        # And Position[t] is the position taken at Open[t] based on signal at Close[t-1]
-        position_multiplier = metrics.stateful_position_to_multiplier(position)
-        base_returns = position_multiplier * self.leverage * self.data['Return']
-        
-        # Apply trading costs (slippage + commissions)
+        position_changes = execution_position.diff().fillna(0)
+
+        # Calculate strategy returns: position[t] * return[t]
+        # Where position[t] was executed at Open[t] and earns return from Open[t] to Open[t+1]
+        position_multiplier = metrics.stateful_position_to_multiplier(execution_position)
+        base_returns = position_multiplier * self.leverage * self.data['Open_Return']
+
+        # Apply trading costs
         if self.slippage_pct == 0 and self.commission_fixed == 0:
             self.data['Strategy_Returns'] = base_returns
         else:
-            self.data['Strategy_Returns'] = self._apply_trading_costs(base_returns, position_changes, position)
-        
-        # Calculate cumulative returns and portfolio value based on reinvestment setting
+            self.data['Strategy_Returns'] = self._apply_trading_costs(
+                base_returns, position_changes, execution_position
+            )
+
+        # Calculate portfolio value based on reinvestment setting
         if self.reinvest:
-            # Compound returns (reinvestment) - default behavior
+            # Compound returns: each period's return compounds on previous value
             self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
             self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
         else:
-            # Linear returns (no reinvestment) - each period's return applied to initial capital only
+            # Linear returns: profits don't compound, always trade with initial capital
             self.data['Linear_Profit'] = (self.initial_capital * self.data['Strategy_Returns']).cumsum()
             self.data['Portfolio_Value'] = self.initial_capital + self.data['Linear_Profit']
             self.data['Cumulative_Returns'] = self.data['Portfolio_Value'] / self.initial_capital
-        
+
+        # Calculate drawdowns
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
         self.data['Drawdown'] = (self.data['Portfolio_Value'] - self.data['Peak']) / self.data['Peak']
 
+        # Execution report
         end_time = time.time()
         if verbose:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
             if self.slippage_pct > 0 or self.commission_fixed > 0:
-                print(f"[blue]Applied {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed commission per trade[/blue]")
-            print(f"[cyan]Return calculation mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}[/cyan]")
+                print(f"[blue]Costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed[/blue]")
+            print(f"[cyan]Return model: {'Compound' if self.reinvest else 'Linear'}[/cyan]")
             if self.leverage != 1.0:
                 print(f"[yellow]Leverage: {self.leverage}x[/yellow]")
 
@@ -223,10 +258,13 @@ class VectorizedBacktesting:
         portfolio_value = self.data['Portfolio_Value'].dropna()
         
         # Calculate metrics using the actual portfolio performance (respects reinvest setting)
-        total_return = (portfolio_value.iloc[-1] / self.initial_capital) - 1
+        try:
+            total_return = (portfolio_value.iloc[-1] / self.initial_capital) - 1
+        except:
+            total_return = 0
         
-        # For benchmark comparison, use the same reinvest logic
-        asset_returns = self.data['Return'].dropna()
+        # FIXED: For benchmark comparison, use same open-to-open returns as strategy
+        asset_returns = self.data['Open_Return'].dropna()
         if self.reinvest:
             benchmark_total_return = (1 + asset_returns).prod() - 1
         else:
@@ -253,13 +291,16 @@ class VectorizedBacktesting:
         else:
             alpha, beta = float('nan'), float('nan')
         
-        # Trade-level metrics (these work the same regardless of reinvest mode)
-        trade_pnls = metrics.get_trade_pnls(position, open_prices)
+        # FIXED: Trade-level metrics using correct execution prices (open prices)
+        trade_pnls = self._get_trade_pnls_open_prices(position, open_prices)
         
         # Profit factor using strategy returns
         positive_returns = strategy_returns[strategy_returns > 0]
         negative_returns = strategy_returns[strategy_returns < 0]
         profit_factor = positive_returns.sum() / abs(negative_returns.sum()) if negative_returns.sum() < 0 else float('inf')
+
+        win_rate = len([pnl for pnl in trade_pnls if pnl > 0]) / len(trade_pnls) if trade_pnls else 0
+        pt_ratio = (strategy_returns.sum() / len(trade_pnls)) * 100 if trade_pnls else 0
 
         return {
             'Total_Return': total_return,
@@ -270,12 +311,13 @@ class VectorizedBacktesting:
             'Sharpe_Ratio': sharpe_ratio,
             'Sortino_Ratio': sortino_ratio,
             'Information_Ratio': info_ratio,
-            'Win_Rate': len([pnl for pnl in trade_pnls if pnl > 0]) / len(trade_pnls) if trade_pnls else 0,
+            'Win_Rate': win_rate,
             'Breakeven_Rate': metrics.get_breakeven_rate_from_pnls(trade_pnls),
             'RR_Ratio': metrics.get_rr_ratio_from_pnls(trade_pnls),
-            'PT_Ratio': (strategy_returns.sum() / len(trade_pnls)) * 100 if trade_pnls else 0,
+            'PT_Ratio': pt_ratio,
             'Profit_Factor': profit_factor,
-            'Total_Trades': len(trade_pnls)
+            'Total_Trades': len(trade_pnls),
+            'Combined_Objective': win_rate * profit_factor * sharpe_ratio * total_return * alpha
         }
 
     def plot_performance(self, show_graph: bool = True, extended: bool = False):
@@ -287,10 +329,9 @@ class VectorizedBacktesting:
         if not extended:
             from plotly.subplots import make_subplots
             
-            # Create subplot with secondary y-axis
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            # Create subplot with secondary y-axis - FIXED: explicitly specify rows and cols
+            fig = make_subplots(rows=1, cols=1, specs=[[{"secondary_y": True}]])
             
-            # Add candlestick chart on primary y-axis (original price scale)
             fig.add_trace(
                 go.Candlestick(
                     x=self.data.index,
@@ -305,12 +346,15 @@ class VectorizedBacktesting:
             )
             
             portfolio_value = self.data['Portfolio_Value'].values
-            # Calculate asset value using the same reinvestment logic as the strategy
-            asset_returns = self.data['Return'].dropna()
+            
+            # Calculate buy & hold benchmark for comparison
             if self.reinvest:
-                asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
+                # Compound mode: returns compound over time
+                valid_returns = self.data['Open_Return'].fillna(0)
+                asset_value = self.initial_capital * (1 + valid_returns).cumprod()
             else:
-                asset_linear_profit = (self.initial_capital * self.data['Return']).cumsum()
+                # Linear mode: profits don't compound, just accumulate
+                asset_linear_profit = (self.initial_capital * self.data['Open_Return']).cumsum()
                 asset_value = self.initial_capital + asset_linear_profit
 
             # Add portfolio performance on secondary y-axis
@@ -338,23 +382,8 @@ class VectorizedBacktesting:
                 secondary_y=True
             )
 
-            # Add rolling returns line (30-period rolling window)
-            rolling_returns = self.data['Strategy_Returns'].rolling(window=30).mean() * 100  # Convert to percentage
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data.index,
-                    y=rolling_returns,
-                    mode='lines',
-                    name='Rolling Returns (30-period)',
-                    line=dict(color='orange', width=1, dash='dot'),
-                    yaxis='y2'
-                ),
-                secondary_y=True
-            )
-
             position_changes = np.diff(self.data['Position'].values)
             
-            # Separate different types of position changes
             long_entries = []
             short_entries = []
             flats = []
@@ -363,23 +392,23 @@ class VectorizedBacktesting:
             flat_prices = []
             
             for i in range(len(position_changes)):
-                if position_changes[i] != 0:  # Any position change
+                if position_changes[i] != 0:
                     prev_pos = self.data['Position'].iloc[i]
-                    current_pos = self.data['Position'].iloc[i + 1]
+                    current_pos = self.data['Position'].iloc[i+1]
                     
                     if i < len(self.data) - 1:
-                        # Use execution price (next open) for signal markers
-                        price_at_signal = self.data['Open'].iloc[i+1]
+                        # FIXED: Use actual execution price (current open, not next open)
+                        price_at_execution = self.data['Open'].iloc[i+1]
                         
                         if current_pos == 3 and prev_pos != 3:
-                            long_entries.append(self.data.index[i])
-                            long_entry_prices.append(price_at_signal)
+                            long_entries.append(self.data.index[i+1])  # Mark at execution time
+                            long_entry_prices.append(price_at_execution)
                         elif current_pos == 1 and prev_pos != 1:
-                            short_entries.append(self.data.index[i])
-                            short_entry_prices.append(price_at_signal)
+                            short_entries.append(self.data.index[i+1])  # Mark at execution time
+                            short_entry_prices.append(price_at_execution)
                         elif current_pos == 2 and prev_pos != 2:
-                            flats.append(self.data.index[i])
-                            flat_prices.append(price_at_signal)
+                            flats.append(self.data.index[i+1])  # Mark at execution time
+                            flat_prices.append(price_at_execution)
 
             # Add long entry signals (green triangles up) on price axis
             if long_entries:
@@ -476,13 +505,16 @@ class VectorizedBacktesting:
                 row=1, col=1
             )
             
-            # Calculate asset value using the same reinvestment logic as the strategy
+            # Calculate buy & hold benchmark for comparison
             if self.reinvest:
-                asset_value = self.initial_capital * (1 + self.data['Return']).cumprod()
+                # Compound mode: returns compound over time
+                valid_returns = self.data['Open_Return'].fillna(0)
+                asset_value = self.initial_capital * (1 + valid_returns).cumprod()
             else:
-                asset_linear_profit = (self.initial_capital * self.data['Return']).cumsum()
+                # Linear mode: profits don't compound, just accumulate
+                asset_linear_profit = (self.initial_capital * self.data['Open_Return']).cumsum()
                 asset_value = self.initial_capital + asset_linear_profit
-                
+
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
@@ -506,8 +538,8 @@ class VectorizedBacktesting:
                 row=1, col=2
             )
 
-            # 3. Profit and Loss Distribution - use metrics function with open prices
-            pnl_list = metrics.get_trade_pnls(self.data['Position'], self.data['Open'])
+            # 3. Profit and Loss Distribution - FIXED: use correct trade PnL calculation
+            pnl_list = self._get_trade_pnls_open_prices(self.data['Position'], self.data['Open'])
             # Convert PnL to percentage of portfolio value at time of trade
             initial_value = self.initial_capital
             pnl_pct_list = [(pnl / initial_value) * 100 for pnl in pnl_list]
@@ -651,72 +683,6 @@ class VectorizedBacktesting:
         
         return fig
 
-    def debug_strategy(self, n_bars: int = 10):
-        """Print debugging information about the strategy execution."""
-        if self.data is None or 'Position' not in self.data.columns:
-            raise ValueError("No strategy results available. Run a strategy first.")
-            
-        print(f"\n[bold blue]STRATEGY DEBUG INFORMATION[/bold blue]")
-        print(f"Data shape: {self.data.shape}")
-        print(f"Trading costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed commission")
-        print(f"Return mode: {'Compound (Reinvest)' if self.reinvest else 'Linear (No Reinvest)'}")
-        print(f"Leverage: {self.leverage}x")
-        
-        # Position distribution
-        pos_counts = self.data['Position'].value_counts().sort_index()
-        print(f"\nPosition distribution:")
-        pos_labels = {0: 'Hold', 1: 'Short', 2: 'Flat', 3: 'Long'}
-        for pos, count in pos_counts.items():
-            print(f"  {pos_labels.get(pos, f'Unknown({pos})')}: {count} bars ({count/len(self.data)*100:.1f}%)")
-        
-        # Strategy performance summary
-        total_return = (self.data['Portfolio_Value'].iloc[-1] / self.initial_capital - 1) * 100
-        max_dd = self.data['Drawdown'].min() * 100
-        n_trades = len([1 for i in range(1, len(self.data)) if self.data['Position'].iloc[i] != self.data['Position'].iloc[i-1]])
-        
-        print(f"\nPerformance Summary:")
-        print(f"  Total Return: {total_return:.2f}%")
-        print(f"  Max Drawdown: {max_dd:.2f}%")
-        print(f"  Number of Position Changes: {n_trades}")
-        
-        # Show first N bars
-        print(f"\n[bold]FIRST {n_bars} BARS:[/bold]")
-        debug_cols = ['Open', 'Close', 'Return', 'Position', 'Strategy_Returns', 'Portfolio_Value']
-        available_cols = [col for col in debug_cols if col in self.data.columns]
-        
-        first_bars = self.data[available_cols].head(n_bars)
-        for i, (idx, row) in enumerate(first_bars.iterrows()):
-            open_price = row.get('Open', 'N/A')
-            close_price = row.get('Close', 'N/A')
-            print(f"Bar {i:2d}: Open={open_price:8.2f}, Close={close_price:8.2f}, "
-                  f"Return={row['Return']*100:6.2f}%, Pos={row['Position']}, "
-                  f"StratRet={row['Strategy_Returns']*100:6.2f}%, Portfolio=${row['Portfolio_Value']:8.2f}")
-        
-        # Show last N bars  
-        print(f"\n[bold]LAST {n_bars} BARS:[/bold]")
-        last_bars = self.data[available_cols].tail(n_bars)
-        start_idx = len(self.data) - n_bars
-        for i, (idx, row) in enumerate(last_bars.iterrows()):
-            open_price = row.get('Open', 'N/A')
-            close_price = row.get('Close', 'N/A')
-            print(f"Bar {start_idx+i:2d}: Open={open_price:8.2f}, Close={close_price:8.2f}, "
-                  f"Return={row['Return']*100:6.2f}%, Pos={row['Position']}, "
-                  f"StratRet={row['Strategy_Returns']*100:6.2f}%, Portfolio=${row['Portfolio_Value']:8.2f}")
-        
-        # Check for NaN values
-        nan_cols = []
-        for col in self.data.columns:
-            if self.data[col].isna().any():
-                nan_count = self.data[col].isna().sum()
-                nan_cols.append(f"{col}: {nan_count}")
-        
-        if nan_cols:
-            print(f"\n[yellow]NaN values found:[/yellow]")
-            for col_info in nan_cols:
-                print(f"  {col_info}")
-        else:
-            print(f"\n[green]No NaN values found[/green]")
-
     def get_cost_summary(self) -> dict:
         """Get a summary of trading costs impact."""
         if self.data is None or 'Position' not in self.data.columns:
@@ -729,9 +695,9 @@ class VectorizedBacktesting:
         if total_trades == 0:
             return {"message": "No trades executed"}
         
-        # Calculate position sizes based on reinvestment setting
+        # FIXED: Calculate position sizes for cost estimation using pre-cost portfolio values
         if self.reinvest:
-            portfolio_values = self.initial_capital * (1 + self.data['Return']).cumprod()
+            portfolio_values = self.initial_capital * (1 + self.data['Open_Return']).cumprod()
         else:
             portfolio_values = pd.Series(self.initial_capital, index=self.data.index)
         
@@ -744,7 +710,7 @@ class VectorizedBacktesting:
             curr_pos = self.data['Position'].iloc[i]
             
             if prev_pos != curr_pos:  # Position changed
-                trade_capital = portfolio_values.iloc[i-1] * self.leverage  # Scale by leverage
+                trade_capital = portfolio_values.iloc[i] * self.leverage  # Scale by leverage
                 
                 # Calculate slippage cost
                 if prev_pos == 2:  # From flat (opening position)
@@ -769,27 +735,28 @@ class VectorizedBacktesting:
         return {
             'total_trades': total_trades,
             'total_slippage_paid': total_slippage_paid,
-            'total_commission_paid': total_commission_paid
+            'total_commission_paid': total_commission_paid,
+            'total_costs': total_slippage_paid + total_commission_paid
         }
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=100,
-        slippage_pct=0.005,
+        slippage_pct=0.003,
         commission_fixed=0.0,
         reinvest=False,
         leverage=1
     )   
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=10,
-        interval="30m",
+        chunks=365,
+        interval="4h",
         age_days=0, 
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.trend_strategy, verbose=True, supertrend_window=75, supertrend_multiplier=0.6)
-    
+    backtest.run_strategy(strategy.ma_crossover_strategy, verbose=True, ma_fast=34, ma_slow=108, slow_pct_shift=0.03)
+
     print(backtest.get_performance_metrics())
     print(backtest.get_cost_summary())
     backtest.plot_performance(extended=False)
