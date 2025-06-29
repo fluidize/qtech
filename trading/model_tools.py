@@ -18,16 +18,15 @@ from rich import print
 import technical_analysis as ta
 import smc_analysis as smc
 
-def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24):
+def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24):
     print("[yellow]FETCHING DATA[/yellow]")
     
     # Create a temp directory for market data
     temp_dir = os.path.join(tempfile.gettempdir(), "market_data")
     os.makedirs(temp_dir, exist_ok=True)
     
-    cache_key = f"{ticker}_{chunks}_{interval}_{age_days}_{data_source}"
-    cache_hash = hashlib.sha256(cache_key.encode()).hexdigest()
-    cache_file = os.path.join(temp_dir, f"market_data_{cache_hash}.parquet")
+    cache_key = f"{symbol}_{chunks}_{interval}_{age_days}_{data_source}"
+    cache_file = os.path.join(temp_dir, f"market_data_{cache_key}.parquet")
     
     if use_cache and os.path.exists(cache_file):
         file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
@@ -40,7 +39,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
                 
                 with open(f"{cache_file}.json", "w") as f:
                     json.dump({
-                        "ticker": ticker,
+                        "symbol": symbol,
                         "chunks": chunks,
                         "interval": interval,
                         "age_days": age_days,
@@ -64,7 +63,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
             chunksize = 1
             start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=age_days)
             end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=age_days)
-            temp_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False)
+            temp_data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False)
             if data.empty:
                 data = temp_data
             else:
@@ -75,7 +74,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
         earliest = min(times)
         latest = max(times)
         difference = latest - earliest
-        print(f"\n{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
+        print(f"\n{symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
 
         data.sort_index(inplace=True)
         if isinstance(data.columns, pd.MultiIndex):
@@ -110,7 +109,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
             start_time = end_time - timedelta(minutes=chunksize) - timedelta(days=age_days)
             
             params = {
-                "symbol": ticker,
+                "symbol": symbol,
                 "type": interval,
                 "startAt": str(int(start_time.timestamp())),
                 "endAt": str(int(end_time.timestamp()))
@@ -120,7 +119,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
             try:
                 request_data = request["data"]  # list of lists
             except:
-                raise Exception(f"Error fetching {ticker} from Kucoin. Check request parameters. {request}")
+                raise Exception(f"Error fetching {symbol} from Kucoin. Check request parameters. {request}")
             
             records = []
             for dochltv in request_data:
@@ -147,7 +146,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
         earliest = min(times)
         latest = max(times)
         difference = latest - earliest
-        print(f"{ticker} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
+        print(f"{symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
         
         data["Datetime"] = pd.to_datetime(pd.to_numeric(data['Datetime']), unit='s')
         data.sort_values('Datetime', inplace=True)
@@ -167,7 +166,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
             interval = interval.replace("month", "M")
         
         # Format symbol for Binance (remove hyphen if present)
-        binance_symbol = ticker.replace('-', '').upper()
+        binance_symbol = symbol.replace('-', '').upper()
         
         data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         times = []
@@ -195,7 +194,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
                 request_data = response.json()
             except Exception as e:
                 print(f"[red]Error fetching {binance_symbol} from Binance: {e}[/red]")
-                break
+                raise e
             
             records = []
             for kline in request_data:
@@ -244,7 +243,7 @@ def fetch_data(ticker, chunks, interval, age_days, data_source: str = "kucoin", 
             
             with open(f"{cache_file}.json", "w") as f:
                 json.dump({
-                    "ticker": ticker,
+                    "symbol": symbol,
                     "chunks": chunks,
                     "interval": interval,
                     "age_days": age_days,
@@ -727,5 +726,5 @@ def loss_plot(loss_history):
     return fig
 
 if __name__ == "__main__":
-    data = fetch_data(ticker="ETH-USDT", chunks=10, interval="1m", age_days=1, data_source="binance")
+    data = fetch_data(symbol="ETH-USDT", chunks=10, interval="1m", age_days=1, data_source="binance")
     print(data)
