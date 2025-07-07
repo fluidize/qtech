@@ -38,7 +38,10 @@ class VectorizedBacktesting:
         self.interval = None
         self.age_days = None
         self.n_days = None
+        self.data_source = None
         self.data: pd.DataFrame = pd.DataFrame()
+
+        self.strategy_output = None #strategy may return signals and indicators
 
     def fetch_data(self, symbol: str = "None", chunks: int = "None", interval: str = "None", age_days: int = "None", data_source: str = "kucoin"):
         self.symbol = symbol
@@ -51,14 +54,14 @@ class VectorizedBacktesting:
         else:
             self.data = mt.fetch_data(symbol, chunks, interval, age_days, data_source=data_source)
             # self._validate_data_quality()
-            self.set_n_days()
+            self._set_n_days()
 
             return self.data
 
     def load_data(self, data: pd.DataFrame):
         self.data = data
         # self._validate_data_quality()
-        self.set_n_days()
+        self._set_n_days()
 
     def _validate_data_quality(self):
         """Validate data quality and handle common issues."""
@@ -123,7 +126,7 @@ class VectorizedBacktesting:
         
         return adjusted_returns
 
-    def set_n_days(self):
+    def _set_n_days(self):
         oldest = self.data['Datetime'].iloc[0]
         newest = self.data['Datetime'].iloc[-1]
         self.n_days = (newest - oldest).days
@@ -150,8 +153,11 @@ class VectorizedBacktesting:
         import time
         start_time = time.time()
 
-        # Generate signals using all available data up to each time point
-        raw_signals = strategy_func(self.data, **kwargs)
+        self.strategy_output = strategy_func(self.data, **kwargs)
+        if isinstance(self.strategy_output, tuple):
+            raw_signals = self.strategy_output[0]
+        else:
+            raw_signals = self.strategy_output
         position = self._signals_to_stateful_position(raw_signals)
         
         # SHIFT(-1): Move returns forward to align with execution timing
@@ -220,13 +226,11 @@ class VectorizedBacktesting:
         strategy_returns = self.data['Strategy_Returns'].dropna()
         portfolio_value = self.data['Portfolio_Value'].dropna()
         
-        # Calculate metrics using the actual portfolio performance (respects reinvest setting)
         try:
             total_return = (portfolio_value.iloc[-1] / self.initial_capital) - 1
         except:
             total_return = 0
         
-        # For benchmark comparison, use same open-to-open returns as strategy
         asset_returns = self.data['Open_Return'].dropna()
         if self.reinvest:
             benchmark_total_return = (1 + asset_returns).prod() - 1
@@ -235,17 +239,14 @@ class VectorizedBacktesting:
         
         active_return = total_return - benchmark_total_return
         
-        # Calculate drawdown from actual portfolio values
         peak = portfolio_value.cummax()
         drawdown = (portfolio_value - peak) / peak
         max_drawdown = drawdown.min()
         
-        # Calculate Sharpe, Sortino, and Information ratios using strategy returns that include costs
         sharpe_ratio = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
 
-        # Calculate Alpha and Beta using strategy returns vs market returns
         if len(strategy_returns) >= 2 and len(asset_returns) >= 2:
             try:
                 alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
@@ -254,14 +255,12 @@ class VectorizedBacktesting:
         else:
             alpha, beta = float('nan'), float('nan')
         
-        # Use VB metrics for trade-level analysis (now uses open prices)
         trade_pnls = metrics.get_trade_pnls(position, open_prices)
         win_rate = metrics.get_win_rate(position, open_prices)
         rr_ratio = metrics.get_rr_ratio(position, open_prices)
         breakeven_rate = metrics.get_breakeven_rate(position, open_prices)
         pt_ratio = metrics.get_pt_ratio(position, open_prices)
         
-        # Profit factor using strategy returns
         positive_returns = strategy_returns[strategy_returns > 0]
         negative_returns = strategy_returns[strategy_returns < 0]
         profit_factor = positive_returns.sum() / abs(negative_returns.sum()) if negative_returns.sum() < 0 else float('inf')
@@ -293,7 +292,6 @@ class VectorizedBacktesting:
         if not extended:
             from plotly.subplots import make_subplots
             
-            # Create subplot with secondary y-axis - FIXED: explicitly specify rows and cols
             fig = make_subplots(rows=1, cols=1, specs=[[{"secondary_y": True}]])
             
             fig.add_trace(
@@ -311,17 +309,9 @@ class VectorizedBacktesting:
             
             portfolio_value = self.data['Portfolio_Value'].values
             
-            # Calculate buy & hold benchmark for comparison
-            if self.reinvest:
-                # Compound mode: returns compound over time
-                valid_returns = self.data['Open_Return'].fillna(0)
-                asset_value = self.initial_capital * (1 + valid_returns).cumprod()
-            else:
-                # Linear mode: profits don't compound, just accumulate
-                asset_linear_profit = (self.initial_capital * self.data['Open_Return']).cumsum()
-                asset_value = self.initial_capital + asset_linear_profit
+            valid_returns = self.data['Open_Return'].fillna(0)
+            asset_value = self.initial_capital * (1 + valid_returns).cumprod()
 
-            # Add portfolio performance on secondary y-axis
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
@@ -339,7 +329,7 @@ class VectorizedBacktesting:
                     x=self.data.index,
                     y=asset_value,
                     mode='lines',
-                    name=f'Buy & Hold ({"Compound" if self.reinvest else "Linear"})',
+                    name=f'Buy & Hold',
                     line=dict(dash='dash', width=2),
                     yaxis='y2'
                 ),
@@ -361,7 +351,6 @@ class VectorizedBacktesting:
                     current_pos = self.data['Position'].iloc[i+1]
                     
                     if i < len(self.data) - 1:
-                        # FIXED: Use actual execution price (current open, not next open)
                         price_at_execution = self.data['Open'].iloc[i+1]
                         
                         if current_pos == 3 and prev_pos != 3:
@@ -416,6 +405,19 @@ class VectorizedBacktesting:
                     secondary_y=False
                 )
             
+            if isinstance(self.strategy_output, tuple):
+                for output_idx in range(1, len(self.strategy_output)): 
+                    #first idx should contain signals, followed by indicators
+                    fig.add_trace(
+                        go.Scatter(
+                            x=self.data.index,
+                            y=self.strategy_output[output_idx],
+                            mode='lines',
+                            name=f'Indicator {output_idx}'
+                        ),
+                        secondary_y=False
+                    )
+
             # Update layout for dual y-axes
             fig.update_layout(
                 title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
@@ -713,13 +715,13 @@ if __name__ == "__main__":
     )   
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=365,
-        interval="5m",
-        age_days=0, 
+        chunks=30,
+        interval="1h",
+        age_days=0,
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.perfect_strategy, verbose=True)
+    backtest.run_strategy(strategy.rsi_divergence_strategy, verbose=True)
 
     print(backtest.get_performance_metrics())
     print(backtest.get_cost_summary())

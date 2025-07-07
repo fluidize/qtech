@@ -145,13 +145,12 @@ def zscore_momentum_strategy(data: pd.DataFrame, zscore_threshold: float = 0.1) 
 def scalper_strategy(data: pd.DataFrame) -> pd.Series:
     """Trades frequently, good for testing."""
     signals = pd.Series(2, index=data.index)
-    fast_ema = ta.ema(data['Close'], 3)
-    slow_ema = ta.ema(data['Close'], 8)
 
-    rolling_vol = data['Volume'].rolling(window=10).mean()
+    rsi = ta.rsi(data['Close'], timeperiod=2)
+    adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'], timeperiod=2)
 
-    buy_conditions = (fast_ema > slow_ema) & (data['Volume'] > rolling_vol * 3)
-    sell_conditions = (fast_ema < slow_ema) & (data['Volume'] > rolling_vol * 3)
+    buy_conditions = (rsi > adx) & (plus_di > minus_di)
+    sell_conditions = (rsi < adx) & (minus_di > plus_di)
 
     signals[buy_conditions] = 3
     signals[sell_conditions] = 1
@@ -247,28 +246,59 @@ def ichimoku_strategy(data: pd.DataFrame, tenkan_period: int = 9, kijun_period: 
 
     return signals
 
-def bollinger_bands_strategy(data: pd.DataFrame, bollinger_period: int = 20, bollinger_std: int = 2, stop_loss_pct: float = 0.01) -> pd.Series:
-    signals = pd.Series(0, index=data.index)
-    upper, middle, lower = ta.bbands(data['Close'], timeperiod=bollinger_period, nbdevup=bollinger_std, nbdevdn=bollinger_std)
-    buy_conditions = (data['Close'] < lower)
-    sell_conditions = (data['Close'] > upper)
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 2
-
-    signals = stop_loss_filter(data, signals, stop_loss_pct)
-
+def rsi_divergence_strategy(data: pd.DataFrame, 
+                           rsi_period: int = 14, 
+                           lookback: int = 5,
+                           min_strength: float = 0.1) -> pd.Series:
+    """
+    RSI Divergence Strategy
+    
+    Detects bullish and bearish divergences between price and RSI:
+    - Bullish divergence: Price makes lower lows while RSI makes higher lows
+    - Bearish divergence: Price makes higher highs while RSI makes lower highs
+    
+    Args:
+        data: DataFrame with OHLC data
+        rsi_period: Period for RSI calculation
+        lookback: Number of bars to look back for divergence detection
+        min_strength: Minimum strength threshold for divergence signals
+    
+    Returns:
+        pd.Series: Trading signals (1=short, 2=flat, 3=long)
+    """
+    signals = pd.Series(2, index=data.index)  # Start with flat signals
+    
+    # Calculate RSI
+    rsi = ta.rsi(data['Close'], timeperiod=rsi_period)
+    
+    # Handle NaN values
+    rsi = rsi.fillna(50)
+    
+    # Vectorized divergence detection
+    price_change = data['Close'] - data['Close'].shift(lookback)
+    rsi_change = rsi - rsi.shift(lookback)
+    
+    # Bullish divergence: price down, RSI up, RSI oversold
+    bullish_divergence = (price_change < 0) & (rsi_change > 0) & (rsi < 40)
+    
+    # Bearish divergence: price up, RSI down, RSI overbought
+    bearish_divergence = (price_change > 0) & (rsi_change < 0) & (rsi > 60)
+    
+    # Generate signals - only set once per condition
+    signals[bullish_divergence] = 3
+    signals[bearish_divergence] = 1
+    
     return signals
 
 def comprehensive_trend_strategy(data: pd.DataFrame, 
                                rsi_period: int = 14,
-                               rsi_oversold: float = 30,
-                               rsi_overbought: float = 70,
+                               rsi_range: float = 30,
                                supertrend_period: int = 10,
                                supertrend_multiplier: float = 3.0,
                                ma_fast: int = 21,
                                ma_slow: int = 50,
                                ma_trend: int = 200,
-                               require_all_signals: bool = False) -> pd.Series:
+                               score_threshold: int = 3) -> pd.Series:
     """
     Comprehensive trend-following strategy combining multiple indicators.
     
@@ -288,10 +318,8 @@ def comprehensive_trend_strategy(data: pd.DataFrame,
     """
     signals = pd.Series(2, index=data.index)  # Start with flat signals
     
-    # Transform to Heikin Ashi
     ha_data = ta.heikin_ashi_transform(data)
     
-    # Calculate indicators
     rsi = ta.rsi(data['Close'], timeperiod=rsi_period)
     
     supertrend, supertrend_line = ta.supertrend(
@@ -301,14 +329,15 @@ def comprehensive_trend_strategy(data: pd.DataFrame,
         period=supertrend_period, 
         multiplier=supertrend_multiplier
     )
+
+    hlc3 = (data['High'] + data['Low'] + data['Close']) / 3
     
     ma_fast_values = ta.ema(data['Close'], timeperiod=ma_fast)
     ma_slow_values = ta.ema(data['Close'], timeperiod=ma_slow)
-    ma_trend_values = ta.sma(data['Close'], timeperiod=ma_trend)
+    ma_trend_values = ta.sma(hlc3, timeperiod=ma_trend)
     
-    # Individual signal components
-    rsi_bullish = rsi > rsi_oversold
-    rsi_bearish = rsi < rsi_overbought
+    rsi_bullish = rsi > 100 - rsi_range
+    rsi_bearish = rsi < rsi_range
     
     supertrend_bullish = supertrend == 1
     supertrend_bearish = supertrend == -1
@@ -316,64 +345,42 @@ def comprehensive_trend_strategy(data: pd.DataFrame,
     ma_cross_bullish = ma_fast_values > ma_slow_values
     ma_cross_bearish = ma_fast_values < ma_slow_values
     
-    trend_filter_bullish = data['Close'] > ma_trend_values
-    trend_filter_bearish = data['Close'] < ma_trend_values
+    trend_filter_bullish = hlc3 > ma_trend_values
+    trend_filter_bearish = hlc3 < ma_trend_values
     
-    # Simplified Heikin Ashi trend confirmation
-    ha_bullish = ha_data['Close'] > ha_data['Open']  # Simple bullish HA candle
-    ha_bearish = ha_data['Close'] < ha_data['Open']  # Simple bearish HA candle
+    ha_bullish = ha_data['Close'] > ha_data['Open']
+    ha_bearish = ha_data['Close'] < ha_data['Open']
     
-    if require_all_signals:
-        # Require ALL indicators to align for entry
-        long_conditions = (
-            rsi_bullish & 
-            supertrend_bullish & 
-            ma_cross_bullish & 
-            trend_filter_bullish & 
-            ha_bullish
-        )
-        
-        short_conditions = (
-            rsi_bearish & 
-            supertrend_bearish & 
-            ma_cross_bearish & 
-            trend_filter_bearish & 
-            ha_bearish
-        )
-    else:
-        # Require majority of indicators (at least 3 out of 5)
-        long_score = (
-            rsi_bullish.astype(int) + 
-            supertrend_bullish.astype(int) + 
-            ma_cross_bullish.astype(int) + 
-            trend_filter_bullish.astype(int) + 
-            ha_bullish.astype(int)
-        )
-        
-        short_score = (
-            rsi_bearish.astype(int) + 
-            supertrend_bearish.astype(int) + 
-            ma_cross_bearish.astype(int) + 
-            trend_filter_bearish.astype(int) + 
-            ha_bearish.astype(int)
-        )
-        
-        long_conditions = long_score >= 3
-        short_conditions = short_score >= 3
     
-    # Apply entry signals first
-    signals[long_conditions] = 3  # Long
-    signals[short_conditions] = 1  # Short
+    long_score = (
+        rsi_bullish.astype(int) + 
+        supertrend_bullish.astype(int) + 
+        ma_cross_bullish.astype(int) + 
+        trend_filter_bullish.astype(int) + 
+        ha_bullish.astype(int)
+    )
     
-    # Then apply exit conditions (but don't override new entries)
-    exit_long = supertrend_bearish | (ma_fast_values < ma_slow_values)
-    exit_short = supertrend_bullish | (ma_fast_values > ma_slow_values)
+    short_score = (
+        rsi_bearish.astype(int) + 
+        supertrend_bearish.astype(int) + 
+        ma_cross_bearish.astype(int) + 
+        trend_filter_bearish.astype(int) + 
+        ha_bearish.astype(int)
+    )
     
-    # Only exit if we're not entering a new position
-    for i in range(len(signals)):
-        if signals.iloc[i] == 3 and exit_long.iloc[i] and not long_conditions.iloc[i]:
-            signals.iloc[i] = 2  # Exit long to flat
-        elif signals.iloc[i] == 1 and exit_short.iloc[i] and not short_conditions.iloc[i]:
-            signals.iloc[i] = 2  # Exit short to flat
+    long_conditions = long_score >= score_threshold
+    short_conditions = short_score >= score_threshold
+    
+    signals[long_conditions] = 3
+    signals[short_conditions] = 1
+    
+    # exit_long = supertrend_bearish | (ma_fast_values < ma_slow_values)
+    # exit_short = supertrend_bullish | (ma_fast_values > ma_slow_values)
+    
+    # for i in range(len(signals)):
+    #     if signals.iloc[i] == 3 and exit_long.iloc[i] and not long_conditions.iloc[i]:
+    #         signals.iloc[i] = 2
+    #     elif signals.iloc[i] == 1 and exit_short.iloc[i] and not short_conditions.iloc[i]:
+    #         signals.iloc[i] = 2
     
     return signals
