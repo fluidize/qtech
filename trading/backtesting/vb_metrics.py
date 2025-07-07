@@ -265,11 +265,10 @@ def get_breakeven_rate(position: pd.Series, open_prices: pd.Series) -> float:
     return result
 
 def get_pt_ratio(position: pd.Series, open_prices: pd.Series) -> float:
-    """Calculate profit/trade ratio from position and open prices."""
-    returns = get_returns(position, open_prices)
-    pnl_list = get_trade_pnls(position, open_prices)
-    total_trades = len(pnl_list)
-    result = (returns.sum() / total_trades) * 100 if total_trades > 0 else 0
+    """Calculate average profit/trade ratio from position and open prices."""
+    total_return = get_total_return(position, open_prices)
+    total_trades = get_total_trades(position)
+    result = (total_return / total_trades) if total_trades > 0 else 0
     return result
 
 def get_profit_factor(position: pd.Series, open_prices: pd.Series) -> float:
