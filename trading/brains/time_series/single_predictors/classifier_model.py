@@ -2,16 +2,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, TensorDataset, random_split
-from torch.amp import autocast, GradScaler
+from torch.utils.data import DataLoader, TensorDataset
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import time
 from rich import print
 from tqdm import tqdm
-from typing import List, Optional
 
 import sys
 sys.path.append(r"trading")
@@ -59,7 +55,7 @@ class ResidualBlock(nn.Module):
         return out
 
 class ClassifierModel(nn.Module):
-    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, epochs=10, train: bool = True, lagged_length=20, use_feature_selection: bool = True, importance_threshold: int = 30, max_features: int = 50, input_dim=None):
+    def __init__(self, ticker: str = None, chunks: int = None, interval: str = None, age_days: int = None, data_source: str = "binance", epochs=10, train: bool = True, lagged_length=20, use_feature_selection: bool = True, importance_threshold: int = 30, max_features: int = 50, input_dim=None):
         super().__init__()
 
         self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,7 +73,7 @@ class ClassifierModel(nn.Module):
         
 
         if train:
-            self.data = mt.fetch_data(ticker, chunks, interval, age_days, kucoin=True)
+            self.data = mt.fetch_data(ticker, chunks, interval, age_days, data_source=data_source)
             X, y = mt.prepare_data_classifier(self.data, lagged_length=lagged_length)
             feature_names = X.columns.tolist()
             
@@ -502,5 +498,5 @@ def load_model(model_path: str, input_dim=None, verbose: bool = False):
     return model
 
 if __name__ == "__main__":
-    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="1min", age_days=0, epochs=50, lagged_length=5, use_feature_selection=True, importance_threshold=15, max_features=50)
+    model = ClassifierModel(ticker="BTC-USDT", chunks=50, interval="1h", age_days=0, epochs=50, lagged_length=10, use_feature_selection=True, importance_threshold=15, max_features=50)
     model = model.train_model(model, prompt_save=True, show_loss=False)
