@@ -310,7 +310,7 @@ class VectorizedBacktesting:
             portfolio_value = self.data['Portfolio_Value'].values
             
             valid_returns = self.data['Open_Return'].fillna(0)
-            asset_value = self.initial_capital * (1 + valid_returns).cumprod()
+            hodl_value = self.initial_capital * (1 + valid_returns).cumprod()
 
             fig.add_trace(
                 go.Scatter(
@@ -327,9 +327,21 @@ class VectorizedBacktesting:
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
-                    y=asset_value,
+                    y=hodl_value,
                     mode='lines',
                     name=f'Buy & Hold',
+                    line=dict(width=2),
+                    yaxis='y2'
+                ),
+                secondary_y=True
+            )
+
+            fig.add_trace(
+                go.Scatter(
+                    x=self.data.index,
+                    y=portfolio_value - hodl_value,
+                    mode='lines',
+                    name='Active Return',
                     line=dict(dash='dash', width=2),
                     yaxis='y2'
                 ),
@@ -714,14 +726,14 @@ if __name__ == "__main__":
         leverage=1
     )   
     backtest.fetch_data(
-        symbol="SOL-USDT",
-        chunks=30,
-        interval="1h",
+        symbol="ETH-USDT",
+        chunks=100,
+        interval="15m",
         age_days=0,
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.rsi_divergence_strategy, verbose=True)
+    backtest.run_strategy(strategy.combined_trend_strategy, verbose=True)
 
     print(backtest.get_performance_metrics())
     print(backtest.get_cost_summary())

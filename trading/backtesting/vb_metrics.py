@@ -89,8 +89,7 @@ def get_alpha_beta(strategy_returns: pd.Series, market_returns: pd.Series, n_day
     else:
         periods_per_year = 252  # Default to trading days
 
-    # Annualize alpha: alpha_annual = alpha_per_period * periods_per_year
-    alpha_annualized = alpha * periods_per_year
+    alpha_annualized = alpha * np.sqrt(periods_per_year)
 
     return alpha_annualized, beta
 
@@ -104,7 +103,7 @@ def get_beta(strategy_returns: pd.Series, market_returns: pd.Series, n_days: int
     _, beta = get_alpha_beta(strategy_returns, market_returns, n_days=n_days, return_interval=return_interval)
     return beta
 
-def get_active_return(position: pd.Series, open_prices: pd.Series) -> pd.Series:
+def get_active_returns(position: pd.Series, open_prices: pd.Series) -> pd.Series:
     """Calculate the active return of strategy compared to benchmark (per period)."""
     returns = get_returns(position, open_prices)
     benchmark_returns = get_benchmark_returns(open_prices)
