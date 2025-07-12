@@ -227,8 +227,8 @@ class AssignmentOptimizer:
         self.engine = VectorizedBacktesting(
             instance_name="AssignmentOptimizer",
             initial_capital=10000,
-            slippage_pct=0.005,
-            commission_fixed=0.00,
+            slippage_pct=slippage_pct,
+            commission_fixed=commission_fixed,
             reinvest=False,
         )
         self.symbols = symbols
