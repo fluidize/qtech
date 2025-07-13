@@ -140,7 +140,7 @@ class VectorizedBacktesting:
 
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
         """
-        Run a trading strategy with realistic execution timing.
+        Run a trading strategy.
 
         EXECUTION MODEL:
         - Signal generated at Close[t] using all data up to time t
@@ -265,6 +265,12 @@ class VectorizedBacktesting:
         negative_returns = strategy_returns[strategy_returns < 0]
         profit_factor = positive_returns.sum() / abs(negative_returns.sum()) if negative_returns.sum() < 0 else float('inf')
 
+        if (alpha < 0) or (sortino_ratio < 0): #when both are negative this can encourage bad optimizations
+            sign_factor = -1
+        else:
+            sign_factor = 1
+        combined_objective = win_rate * profit_factor * abs(alpha) * abs(sortino_ratio) * sign_factor
+
         return {
             'Total_Return': total_return,
             'Alpha': alpha,
@@ -280,7 +286,7 @@ class VectorizedBacktesting:
             'PT_Ratio': pt_ratio,
             'Profit_Factor': profit_factor,
             'Total_Trades': len(trade_pnls),
-            'Combined_Objective': win_rate * profit_factor * sharpe_ratio * total_return * alpha
+            'Combined_Objective': combined_objective,
         }
 
     def plot_performance(self, show_graph: bool = True, extended: bool = False):
@@ -726,14 +732,14 @@ if __name__ == "__main__":
         leverage=1
     )   
     backtest.fetch_data(
-        symbol="ETH-USDT",
-        chunks=100,
-        interval="15m",
+        symbol="SOL-USDT",
+        chunks=365,
+        interval="1h",
         age_days=0,
         data_source="binance"
     )
     
-    backtest.run_strategy(strategy.combined_trend_strategy, verbose=True)
+    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True)
 
     print(backtest.get_performance_metrics())
     print(backtest.get_cost_summary())
