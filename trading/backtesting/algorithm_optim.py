@@ -156,11 +156,6 @@ class BayesianOptimizer:
 
         invalid = float('-inf') if self.direction == "maximize" else float('inf')
 
-        def save_callback(study, trial):
-            if study.best_trial.number == trial.number:
-                self.save_params(trial)
-        self.save_callback = save_callback
-
         def objective(trial):
             param_dict = self._suggest_params(trial)
 
@@ -173,10 +168,6 @@ class BayesianOptimizer:
             return metrics[self.metric]
         
         self.objective_function = objective
-
-    def save_params(self, trial):
-        with open(f"{self.engine.symbol}-{self.engine.interval}-{self.strategy_func.__name__}-{self.metric}-{self.n_trials}trials-params.json", "w") as f:
-            json.dump(trial.params, f)
 
     def _suggest_params(self, trial):
         params = {}
@@ -194,13 +185,11 @@ class BayesianOptimizer:
                 params[k] = trial.suggest_int(k, v[0], v[1])
         return params
 
-    def run(self, save_params: bool = False, show_progress_bar: bool = True):
+    def run(self, show_progress_bar: bool = True):
         study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
         study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=show_progress_bar)
         self.best_params = study.best_params
         self.best_metric = study.best_value
-        if save_params:
-            self.save_params(study.best_trial)
         return self.best_metric, self.best_params
 
     def get_best(self):
@@ -233,12 +222,9 @@ class QuantitativeScreener:
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
     
-        self.results = pd.DataFrame(columns=["symbol", "timeframe", "metric", "params"])
+        self.results = pd.DataFrame(columns=["symbol", "interval", "metric", "params"])
 
         self.console = Console()
-
-        self.metric = None
-        self.direction = None
 
     def optimize(
         self,
@@ -251,6 +237,7 @@ class QuantitativeScreener:
         direction: str = "maximize", 
         save_params: bool = False
     ):
+        self.strategy_func = strategy_func
         self.metric = metric
         self.direction = direction
 
@@ -281,28 +268,32 @@ class QuantitativeScreener:
                     fixed_exceptions=fixed_exceptions
                 )
 
-                best_metrics, best_params = BO.run(save_params=save_params)
+                best_metrics, best_params = BO.run()
 
                 self.results.loc[len(self.results)] = {
                     "symbol": symbol,
-                    "timeframe": interval,
+                    "interval": interval,
                     "metric": best_metrics,
                     "params": best_params
                 }
 
                 progress_count += 1
         
-        self._show_chart()
+        self._generate_chart(print_results=True)
+        if save_params:
+            best = self.get_best()
+            with open(f"{self.strategy_func.__name__}-{best["symbol"]}-{best["interval"]}-{self.metric}", "w") as f:
+                json.dump(best["params"], f)
 
     def get_best(self):
-        """Get the best performing symbol, timeframe, and parameters based on the specified metric."""
+        """Get the best performing symbol, interval, and parameters based on the specified metric."""
         if self.results.empty:
             raise ValueError("No results available. Run the optimization first.")
         
         best_row = self.results.loc[self.results['metric'].idxmax()]
         return {
             "symbol": best_row["symbol"],
-            "timeframe": best_row["timeframe"],
+            "interval": best_row["interval"],
             "metric": best_row["metric"],
             "params": best_row["params"]
         }
@@ -312,7 +303,7 @@ class QuantitativeScreener:
         best = self.get_best()
         self.engine.fetch_data(
             symbol=best["symbol"],
-            interval=best["timeframe"],
+            interval=best["interval"],
             chunks=self.chunks,
             age_days=self.age_days,
             data_source=self.data_source
@@ -320,11 +311,11 @@ class QuantitativeScreener:
         self.engine.run_strategy(strategy_func=strategy.trend_reversal_strategy, **best["params"])
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
     
-    def _show_chart(self):
+    def _generate_chart(self, print_results: bool = True):
         """Show the performance chart of all strategies."""
         results_table = Table(title="Quantitative Screener Results")
         results_table.add_column("Symbol", style="cyan")
-        results_table.add_column("Timeframe", style="cyan")
+        results_table.add_column("Interval", style="cyan")
         results_table.add_column("Metric", style="green")
         results_table.add_column("Parameters", style="blue")
 
@@ -337,18 +328,21 @@ class QuantitativeScreener:
         for idx, result in sorted_results.iterrows():
             results_table.add_row(
                 result["symbol"],
-                result["timeframe"],
+                result["interval"],
                 str(result["metric"]),
                 str(result["params"])
             )
+        
+        if print_results:
+            self.console.print(results_table)
 
-        self.console.print(results_table)
+        return results_table
 
 if __name__ == "__main__":
     qs = QuantitativeScreener(
         symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"],
         chunks=100,
-        intervals=["5m", "15m", "30m", "1h"],
+        intervals=["1h"],
         age_days=0,
         data_source="binance",
         slippage_pct=0.005,
@@ -366,9 +360,10 @@ if __name__ == "__main__":
         },
         float_exceptions=["supertrend_multiplier", "bb_dev"],
         fixed_exceptions=[],
-        metric="Total_Return",
-        n_trials=500,
+        metric="Sharpe_Ratio",
+        n_trials=1,
         direction="maximize",
+        save_params=False
     )
 
     qs.plot_best_performance(show_graph=True, extended=False)
