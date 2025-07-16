@@ -3,7 +3,7 @@ import json
 import pandas as pd
 from typing import Dict, List, Any, Callable
 
-# from rich import print
+from rich import print
 from rich.table import Table
 from rich.console import Console
 
@@ -194,9 +194,9 @@ class BayesianOptimizer:
                 params[k] = trial.suggest_int(k, v[0], v[1])
         return params
 
-    def run(self, save_params: bool = False):
+    def run(self, save_params: bool = False, show_progress_bar: bool = True):
         study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
-        study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=True)
+        study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=show_progress_bar)
         self.best_params = study.best_params
         self.best_metric = study.best_value
         if save_params:
@@ -254,14 +254,20 @@ class QuantitativeScreener:
         self.metric = metric
         self.direction = direction
 
+        total = len(self.symbols) * len(self.intervals)
+        progress_count = 1
+
         for symbol in self.symbols:
             for interval in self.intervals:
+                print(f"{symbol} {interval} {progress_count}/{total} ({progress_count/total:.2%})")
+
                 self.engine.fetch_data(
                     symbol=symbol,
                     interval=interval,
                     chunks=self.chunks,
                     age_days=self.age_days,
-                    data_source=self.data_source
+                    data_source=self.data_source,
+                    verbose=False
                 )
 
                 BO = BayesianOptimizer(
@@ -283,10 +289,11 @@ class QuantitativeScreener:
                     "metric": best_metrics,
                     "params": best_params
                 }
+
+                progress_count += 1
         
         self._show_chart()
 
-    
     def get_best(self):
         """Get the best performing symbol, timeframe, and parameters based on the specified metric."""
         if self.results.empty:
@@ -339,8 +346,8 @@ class QuantitativeScreener:
 
 if __name__ == "__main__":
     qs = QuantitativeScreener(
-        symbols=["ETH-USDT", "SOL-USDT"],
-        chunks=10,
+        symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"],
+        chunks=100,
         intervals=["5m", "15m", "30m", "1h"],
         age_days=0,
         data_source="binance",
@@ -360,7 +367,7 @@ if __name__ == "__main__":
         float_exceptions=["supertrend_multiplier", "bb_dev"],
         fixed_exceptions=[],
         metric="Total_Return",
-        n_trials=1,
+        n_trials=500,
         direction="maximize",
     )
 

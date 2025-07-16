@@ -42,7 +42,14 @@ class VectorizedBacktesting:
 
         self.strategy_output = None #strategy may return signals and indicators
 
-    def fetch_data(self, symbol: str = "None", chunks: int = "None", interval: str = "None", age_days: int = "None", data_source: str = "kucoin"):
+    def fetch_data(self,
+        symbol: str = "None",
+        chunks: int = "None",
+        interval: str = "None",
+        age_days: int = "None",
+        data_source: str = "kucoin",
+        verbose: bool = True
+    ):
         self.symbol = symbol
         self.chunks = chunks
         self.interval = interval
@@ -51,7 +58,7 @@ class VectorizedBacktesting:
         if any([symbol, chunks, interval, age_days]) == "None":
             pass
         else:
-            self.data = mt.fetch_data(symbol, chunks, interval, age_days, data_source=data_source)
+            self.data = mt.fetch_data(symbol, chunks, interval, age_days, data_source=data_source, verbose=verbose)
             # self._validate_data_quality()
             self._set_n_days()
 

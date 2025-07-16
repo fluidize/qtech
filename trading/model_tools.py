@@ -18,8 +18,8 @@ from rich import print
 import technical_analysis as ta
 import smc_analysis as smc
 
-def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24):
-    print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]")
+def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, verbose: bool = True):
+    print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None
     
     # Create a temp directory for market data
     temp_dir = os.path.join(tempfile.gettempdir(), "market_data")
@@ -35,7 +35,7 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
         if file_age_hours < cache_expiry_hours:
             try:
                 cached_data = pd.read_parquet(cache_file)
-                print(f"[blue]USING CACHE {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB)")
+                print(f"[blue]USING CACHE {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB)") if verbose else None
                 
                 with open(f"{cache_file}.json", "w") as f:
                     json.dump({
