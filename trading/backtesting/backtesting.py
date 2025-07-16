@@ -1,11 +1,10 @@
 import time
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn.functional as F
-import plotly.graph_objects as go
 from rich import print
 
+import plotly
+import plotly.graph_objects as go
 import plotly.io as pio
 pio.renderers.default = "browser"
 
@@ -289,7 +288,7 @@ class VectorizedBacktesting:
             'Combined_Objective': combined_objective,
         }
 
-    def plot_performance(self, show_graph: bool = True, extended: bool = False):
+    def plot_performance(self, show_graph: bool = True, extended: bool = False) -> plotly.graph_objects:
         if self.data is None or 'Portfolio_Value' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
@@ -389,7 +388,7 @@ class VectorizedBacktesting:
                         y=long_entry_prices,
                         mode='markers',
                         name='Long Entry',
-                        marker=dict(color='green', size=10, symbol='triangle-up'),
+                        marker=dict(color="#26FF00", size=8, symbol='triangle-up'),
                         yaxis='y'
                     ),
                     secondary_y=False
@@ -403,7 +402,7 @@ class VectorizedBacktesting:
                         y=short_entry_prices,
                         mode='markers',
                         name='Short Entry',
-                        marker=dict(color='red', size=10, symbol='triangle-down'),
+                        marker=dict(color='#ff073a', size=8, symbol='triangle-down'),
                         yaxis='y'
                     ),
                     secondary_y=False
@@ -417,7 +416,7 @@ class VectorizedBacktesting:
                         y=flat_prices,
                         mode='markers',
                         name='Exit to Flat',
-                        marker=dict(color='yellow', size=8, symbol='circle'),
+                        marker=dict(color='yellow', size=7, symbol='circle'),
                         yaxis='y'
                     ),
                     secondary_y=False
@@ -436,7 +435,6 @@ class VectorizedBacktesting:
                         secondary_y=False
                     )
 
-            # Update layout for dual y-axes
             fig.update_layout(
                 title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis_title='Date',
