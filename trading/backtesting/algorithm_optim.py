@@ -2,18 +2,19 @@ import itertools
 import json
 import pandas as pd
 from typing import Dict, List, Any, Callable
-from rich import print
+
+# from rich import print
 from rich.table import Table
 from rich.console import Console
+
 from tqdm import tqdm
 import numpy as np
-import sys
 
 from backtesting import VectorizedBacktesting
 import strategy
 import optuna
 
-optuna.logging.set_verbosity(optuna.logging.WARNING) #disable optuna printing
+optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
 
 class GridSearch:
     def __init__(
@@ -197,249 +198,174 @@ class BayesianOptimizer:
         study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
         study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=True)
         self.best_params = study.best_params
-        self.best_metrics = study.best_value
+        self.best_metric = study.best_value
         if save_params:
             self.save_params(study.best_trial)
-        return self.best_metrics, self.best_params
+        return self.best_metric, self.best_params
 
-    def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
-        self.engine.run_strategy(self.strategy_func, **self.best_params)
-        return self.engine.plot_performance(show_graph=show_graph, extended=extended)
+    def get_best(self):
+        return self.best_params, self.best_metric
 
-    def get_best_params(self):
-        return self.best_params
-
-    def get_best_metrics(self):
-        return self.best_metrics
-
-class AssignmentOptimizer:
-    """ Find the best pair fit for the given algorithm."""
-    def __init__(
-        self,
-        symbols: List[str],
-        chunks: int,
-        interval: str,
-        age_days: int,
-        data_source: str = "binance",
-        slippage_pct: float = 0.005,
-        commission_fixed: float = 0.00,
-    ):
+class QuantitativeScreener:
+    """Optimize on all symbols and intervals for a given strategy to find the highest performing pairs and timeframes."""
+    def __init__(self,
+                 symbols: List[str],
+                 chunks: int,
+                 intervals: List[str],
+                 age_days: int,
+                 data_source: str = "binance",
+                 slippage_pct: float = 0.005,
+                 commission_fixed: float = 0.00):
+        
         self.engine = VectorizedBacktesting(
-            instance_name="AssignmentOptimizer",
-            initial_capital=10000,
-            slippage_pct=slippage_pct,
-            commission_fixed=commission_fixed,
-            reinvest=False,
-        )
-        self.symbols = symbols
-        self.chunks = chunks
-        self.interval = interval
-        self.age_days = age_days
-        self.data_source = data_source
-        self.results = {}
-
-    def optimize(self, strategy_func: Callable, params: Dict[str, float], metric: str = "Total_Return") -> pd.DataFrame:
-        console = Console()
-
-        for symbol in self.symbols:
-            self.engine.fetch_data(
-                symbol=symbol,
-                chunks=self.chunks,
-                interval=self.interval,
-                age_days=self.age_days,
-                data_source=self.data_source
-            )
-            self.engine.run_strategy(strategy_func, **params)
-            best_metric = self.engine.get_performance_metrics()[metric]
-            self.results[symbol] = best_metric
-        table = Table(title="Algorithm Assignment Optimizer Results")
-        table.add_column("Pair", style="cyan")
-        table.add_column("Metric", style="green")
-        self.results = dict(sorted(self.results.items(), key=lambda x: x[1], reverse=True))
-        for keyvalue in self.results.items():
-            symbol, result = keyvalue
-            table.add_row(
-                symbol,
-                f"{result}"
-            )
-        console.print(table)
-        return self.results
-    
-    def get_best_pair(self) -> str:
-        return max(self.results, key=lambda x: self.results[x][self.metric])
-
-    def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
-        self.engine.fetch_data(
-            symbol=self.get_best_pair(),
-            chunks=self.chunks,
-            interval=self.interval,
-            age_days=self.age_days
-        )
-        self.engine.run_strategy(self.strategy_func, **self.params)
-        return self.engine.plot_performance(show_graph=show_graph, extended=extended)
-
-class TimeframeOptimizer:
-    """Optimizes a trading strategy across multiple timeframes to find the best performing. """
-    def __init__(
-        self, 
-        symbol: str, 
-        chunks: int,
-        intervals: List[str],
-        age_days: int,
-        data_source: str = "binance", 
-        slippage_pct: float = 0.005, 
-        commission_fixed: float = 0.00, 
-    ):
-        self.engine = VectorizedBacktesting(
-            instance_name="AlgorithmOptimizer",
+            instance_name="QuantitativeScreener",
             initial_capital=10000,
             slippage_pct=slippage_pct,
             commission_fixed=commission_fixed,
             reinvest=False
         )
 
-        self.symbol = symbol
+        self.symbols = symbols
         self.chunks = chunks
-        self.age_days = age_days
-        self.results = {}
-        self.strategy_func = None
-        self.data_source = data_source
         self.intervals = intervals
+        self.age_days = age_days
+        self.data_source = data_source
+        self.slippage_pct = slippage_pct
+        self.commission_fixed = commission_fixed
+    
+        self.results = pd.DataFrame(columns=["symbol", "timeframe", "metric", "params"])
 
-    def optimize(self, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 100, direction: str = "maximize", save_params: bool = False, float_exceptions: List[str] = None, fixed_exceptions: List[str] = None):
-        self.strategy_func = strategy_func
+        self.console = Console()
+
+        self.metric = None
+        self.direction = None
+
+    def optimize(
+        self,
+        strategy_func: Callable, 
+        param_space: Dict[str, tuple],
+        float_exceptions: List[str] = None, 
+        fixed_exceptions: List[str] = None,
+        metric: str = "Total_Return", 
+        n_trials: int = 100, 
+        direction: str = "maximize", 
+        save_params: bool = False
+    ):
+        self.metric = metric
+        self.direction = direction
+
+        for symbol in self.symbols:
+            for interval in self.intervals:
+                self.engine.fetch_data(
+                    symbol=symbol,
+                    interval=interval,
+                    chunks=self.chunks,
+                    age_days=self.age_days,
+                    data_source=self.data_source
+                )
+
+                BO = BayesianOptimizer(
+                    engine=self.engine,
+                    strategy_func=strategy_func,
+                    param_space=param_space,
+                    metric=metric,
+                    n_trials=n_trials,
+                    direction=direction,
+                    float_exceptions=float_exceptions,
+                    fixed_exceptions=fixed_exceptions
+                )
+
+                best_metrics, best_params = BO.run(save_params=save_params)
+
+                self.results.loc[len(self.results)] = {
+                    "symbol": symbol,
+                    "timeframe": interval,
+                    "metric": best_metrics,
+                    "params": best_params
+                }
         
-        console = Console()
-        table = Table(title="Timeframe Optimization Results")
-        table.add_column("Timeframe", style="cyan")
-        table.add_column("Best Metric", style="green")
-        table.add_column("Best Parameters", style="blue")
+        self._show_chart()
 
-        # Define which metrics should be formatted as percentages vs ratios
-        percentage_metrics = ["Total_Return", "Alpha", "Active_Return", "Max_Drawdown", "Win_Rate", "Breakeven_Rate", "PT_Ratio"]
-        ratio_metrics = ["Sharpe_Ratio", "Sortino_Ratio", "Information_Ratio", "RR_Ratio", "Profit_Factor", "Beta"]
-
-        for interval in self.intervals:
-            console.print(f"\n[bold blue]Optimizing for {interval} timeframe...[/bold blue]")
-            
-            self.engine.fetch_data(
-                symbol=self.symbol,
-                chunks=self.chunks,
-                interval=interval,
-                age_days=self.age_days,
-                data_source=self.data_source
-            )
-
-            bayesian_op = BayesianOptimizer(
-                engine=self.engine,
-                strategy_func=strategy_func,
-                param_space=param_space,
-                metric=metric,
-                n_trials=n_trials,
-                direction=direction,
-                float_exceptions=float_exceptions,
-                fixed_exceptions=fixed_exceptions
-            )
-
-            best_metric, best_params = bayesian_op.run(save_params=False)
-            
-            self.results[interval] = {
-                "best_metric": best_metric,
-                "best_params": best_params
-            }
-
-            # Format metric value appropriately
-            if metric in percentage_metrics:
-                formatted_metric = f"{best_metric:.2%}"
-            elif metric in ratio_metrics:
-                formatted_metric = f"{best_metric:.3f}"
-            else:
-                formatted_metric = f"{best_metric:.3f}"
-
-            table.add_row(
-                interval,
-                formatted_metric,
-                str(best_params)
-            )
-
-        console.print("\n")
-        console.print(table)
+    
+    def get_best(self):
+        """Get the best performing symbol, timeframe, and parameters based on the specified metric."""
+        if self.results.empty:
+            raise ValueError("No results available. Run the optimization first.")
         
-        # Print sorted results by metric
-        sorted_results = sorted(
-            self.results.items(),
-            key=lambda x: x[1]["best_metric"],
-            reverse=True
-        )
-        
-        console.print("\n[bold green]Timeframe Performance Ranking:[/bold green]")
-        for i, (tf, result) in enumerate(sorted_results, 1):
-            # Format metric value appropriately for ranking display
-            if metric in percentage_metrics:
-                formatted_metric = f"{result['best_metric']:.2%}"
-            elif metric in ratio_metrics:
-                formatted_metric = f"{result['best_metric']:.3f}"
-            else:
-                formatted_metric = f"{result['best_metric']:.3f}"
-            
-            console.print(f"{i}. {tf}: {formatted_metric}")
-            
-        # Only save parameters for the best timeframe if save_params is True
-        if save_params:
-            best_timeframe = self.get_best_timeframe()
-            best_params = self.results[best_timeframe]["best_params"]
-            with open(f"{self.symbol}-{best_timeframe}-{strategy_func.__name__}-{metric}-{n_trials}trials-params.json", "w") as f:
-                json.dump(best_params, f)
-            
-        return self.results
-
-    def get_best_timeframe(self) -> str:
-        if not self.results:
-            raise ValueError("No optimization results available. Run optimize() first.")
-        
-        return max(self.results.items(), key=lambda x: x[1]["best_metric"])[0]
-
-    def get_best_params_with_timeframe(self) -> tuple[Dict[str, Any], str]:
-        if not self.results:
-            raise ValueError("No optimization results available. Run optimize() first.")
-        
-        best_timeframe = self.get_best_timeframe()
-        best_params = self.results[best_timeframe]["best_params"]
-        
-        return best_params, best_timeframe
-
+        best_row = self.results.loc[self.results['metric'].idxmax()]
+        return {
+            "symbol": best_row["symbol"],
+            "timeframe": best_row["timeframe"],
+            "metric": best_row["metric"],
+            "params": best_row["params"]
+        }
+    
     def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
-        if not self.results:
-            raise ValueError("No optimization results available. Run optimize() first.")
-        
-        best_timeframe = self.get_best_timeframe()
-        best_params = self.results[best_timeframe]["best_params"]
-        
+        """Plot the performance of the best parameter combination."""
+        best = self.get_best()
         self.engine.fetch_data(
-            symbol=self.symbol,
+            symbol=best["symbol"],
+            interval=best["timeframe"],
             chunks=self.chunks,
-            interval=best_timeframe,
-            age_days=0,
+            age_days=self.age_days,
             data_source=self.data_source
         )
-        
-        self.engine.run_strategy(self.strategy_func, **best_params)
+        self.engine.run_strategy(strategy_func=strategy.trend_reversal_strategy, **best["params"])
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
+    
+    def _show_chart(self):
+        """Show the performance chart of all strategies."""
+        results_table = Table(title="Quantitative Screener Results")
+        results_table.add_column("Symbol", style="cyan")
+        results_table.add_column("Timeframe", style="cyan")
+        results_table.add_column("Metric", style="blue")
+
+        sorted_results = self.results.sort_values(by="metric", ascending=False if self.direction == "maximize" else True)
+
+        percent_metrics = ["Total_Return", "Alpha", "Active_Return", "Max_Drawdown", "Win_Rate", "PT_Ratio"]
+        if self.metric in percent_metrics:
+            sorted_results["metric"] = sorted_results["metric"].apply(lambda x: f"{x:.2%}")
+        
+        for idx, result in sorted_results.iterrows():
+            results_table.add_row(
+                result["symbol"],
+                result["timeframe"],
+                str(result["metric"])
+            )
+
+        self.console.print(results_table)
+
+        
+    
 
 if __name__ == "__main__":
-    A = AssignmentOptimizer(
-        symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"],
-        chunks=365,
-        interval="15m",
+    qs = QuantitativeScreener(
+        symbols=["ETH-USDT", "SOL-USDT"],
+        chunks=10,
+        intervals=["5m", "15m", "30m", "1h"],
         age_days=0,
-        data_source="binance"
+        data_source="binance",
+        slippage_pct=0.005,
+        commission_fixed=0.00
     )
 
-    A.optimize(
-        strategy_func=strategy.combined_trend_strategy,
-        params={"ma_fast": 12, "ma_slow": 26, "supertrend_window": 20, "supertrend_multiplier": 1.2, "score_threshold": 1},
+    qs.optimize(
+        strategy_func=strategy.trend_reversal_strategy,
+        param_space={
+            "supertrend_window": (2,50),
+            "supertrend_multiplier": (1,5),
+            "bb_window": (2,100),
+            "bb_dev": (1, 3),
+            "bbw_ma_window": (2,100)
+        },
+        float_exceptions=["supertrend_multiplier", "bb_dev"],
+        fixed_exceptions=[],
         metric="Total_Return",
+        n_trials=1,
+        direction="maximize",
     )
+
+    qs.plot_best_performance(show_graph=True, extended=False)
 
 
 
