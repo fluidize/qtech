@@ -40,7 +40,9 @@ class VectorizedBacktesting:
         self.data_source = None
         self.data: pd.DataFrame = pd.DataFrame()
 
-        self.strategy_output = None #strategy may return signals and indicators
+        self.strategy_output = None
+        #strategy may return a signal and indicators as
+        #return signals, (indicator, use_price_scale)
 
     def fetch_data(self,
         symbol: str = "None",
@@ -302,10 +304,8 @@ class VectorizedBacktesting:
         summary = self.get_performance_metrics()
 
         if not extended:
-            from plotly.subplots import make_subplots
-            
-            fig = make_subplots(rows=1, cols=1, specs=[[{"secondary_y": True}]])
-            
+            #y1 for price, y2 for portfolio, y3 for active returns, y4 for indicators
+            fig = go.Figure()
             fig.add_trace(
                 go.Candlestick(
                     x=self.data.index,
@@ -315,15 +315,11 @@ class VectorizedBacktesting:
                     close=self.data['Close'],
                     name='Price',
                     yaxis='y'
-                ),
-                secondary_y=False
+                )
             )
-            
             portfolio_value = self.data['Portfolio_Value'].values
-            
             valid_returns = self.data['Open_Return'].fillna(0)
             hodl_value = self.initial_capital * (1 + valid_returns).cumprod()
-
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
@@ -332,10 +328,8 @@ class VectorizedBacktesting:
                     name='Strategy Portfolio',
                     line=dict(width=2),
                     yaxis='y2'
-                ),
-                secondary_y=True
+                )
             )
-            
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
@@ -344,10 +338,8 @@ class VectorizedBacktesting:
                     name=f'Buy & Hold',
                     line=dict(width=2),
                     yaxis='y2'
-                ),
-                secondary_y=True
+                )
             )
-
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
@@ -355,39 +347,31 @@ class VectorizedBacktesting:
                     mode='lines',
                     name='Active Return',
                     line=dict(dash='dash', width=2),
-                    yaxis='y2'
-                ),
-                secondary_y=True
+                    yaxis='y3'
+                )
             )
-
             position_changes = np.diff(self.data['Position'].values)
-            
             long_entries = []
             short_entries = []
             flats = []
             long_entry_prices = []
             short_entry_prices = []
             flat_prices = []
-            
             for i in range(len(position_changes)):
                 if position_changes[i] != 0:
                     prev_pos = self.data['Position'].iloc[i]
                     current_pos = self.data['Position'].iloc[i+1]
-                    
                     if i < len(self.data) - 1:
                         price_at_execution = self.data['Open'].iloc[i+1]
-                        
                         if current_pos == 3 and prev_pos != 3:
-                            long_entries.append(self.data.index[i+1])  # Mark at execution time
+                            long_entries.append(self.data.index[i+1])
                             long_entry_prices.append(price_at_execution)
                         elif current_pos == 1 and prev_pos != 1:
-                            short_entries.append(self.data.index[i+1])  # Mark at execution time
+                            short_entries.append(self.data.index[i+1])
                             short_entry_prices.append(price_at_execution)
                         elif current_pos == 2 and prev_pos != 2:
-                            flats.append(self.data.index[i+1])  # Mark at execution time
+                            flats.append(self.data.index[i+1])
                             flat_prices.append(price_at_execution)
-
-            # Add long entry signals (green triangles up) on price axis
             if long_entries:
                 fig.add_trace(
                     go.Scatter(
@@ -397,11 +381,8 @@ class VectorizedBacktesting:
                         name='Long Entry',
                         marker=dict(color="#26FF00", size=8, symbol='triangle-up'),
                         yaxis='y'
-                    ),
-                    secondary_y=False
+                    )
                 )
-
-            # Add short entry signals (red triangles down) on price axis
             if short_entries:
                 fig.add_trace(
                     go.Scatter(
@@ -411,11 +392,8 @@ class VectorizedBacktesting:
                         name='Short Entry',
                         marker=dict(color='#ff073a', size=8, symbol='triangle-down'),
                         yaxis='y'
-                    ),
-                    secondary_y=False
+                    )
                 )
-
-            # Add flat signals (yellow circles) on price axis
             if flats:
                 fig.add_trace(
                     go.Scatter(
@@ -425,26 +403,63 @@ class VectorizedBacktesting:
                         name='Exit to Flat',
                         marker=dict(color='yellow', size=7, symbol='circle'),
                         yaxis='y'
-                    ),
-                    secondary_y=False
-                )
-            
-            if isinstance(self.strategy_output, tuple):
-                for output_idx in range(1, len(self.strategy_output)): 
-                    #first idx should contain signals, followed by indicators
-                    fig.add_trace(
-                        go.Scatter(
-                            x=self.data.index,
-                            y=self.strategy_output[output_idx],
-                            mode='lines',
-                            name=f'Indicator {output_idx}'
-                        ),
-                        secondary_y=False
                     )
-
+                )
+            if isinstance(self.strategy_output, tuple):
+                for output_idx in range(1, len(self.strategy_output)):
+                    if self.strategy_output[output_idx][1]: #if true add to price axis
+                        fig.add_trace(
+                            go.Scatter(
+                                x=self.data.index,
+                                y=self.strategy_output[output_idx],
+                                mode='lines',
+                                name=f'Indicator {output_idx}',
+                                yaxis='y1'
+                            )
+                        )
+                    else:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=self.data.index,
+                                y=self.strategy_output[output_idx],
+                                mode='lines',
+                                name=f'Indicator {output_idx}',
+                                yaxis='y1'
+                            )
+                        )
             fig.update_layout(
                 title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
-                xaxis_title='Date',
+                xaxis=dict(
+                    title='Date',
+                    rangeslider=dict(visible=False),
+                    rangeselector=dict(visible=False)
+                ),
+                yaxis=dict(
+                    title="Price ($)",
+                    side="left",
+                    showgrid=False,
+                    anchor="x"
+                ),
+                yaxis2=dict(
+                    title="Portfolio Value ($)",
+                    overlaying="y",
+                    side="right",
+                    showgrid=False
+                ),
+                yaxis3=dict(
+                    title="Active Return ($)",
+                    overlaying="y",
+                    side="right",
+                    position=0.95,
+                    showgrid=False
+                ),
+                yaxis4=dict(
+                    title="Indicators",
+                    overlaying="y",
+                    side="left",
+                    position=0.05,
+                    showgrid=False
+                ),
                 showlegend=True,
                 template="plotly_dark",
                 legend=dict(
@@ -453,10 +468,6 @@ class VectorizedBacktesting:
                     y=1,
                     xanchor="right",
                     x=1
-                ),
-                xaxis=dict(
-                    rangeslider=dict(visible=False),
-                    rangeselector=dict(visible=False)
                 )
             )
             
