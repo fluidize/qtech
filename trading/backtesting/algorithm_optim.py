@@ -318,7 +318,8 @@ class QuantitativeScreener:
         results_table = Table(title="Quantitative Screener Results")
         results_table.add_column("Symbol", style="cyan")
         results_table.add_column("Timeframe", style="cyan")
-        results_table.add_column("Metric", style="blue")
+        results_table.add_column("Metric", style="green")
+        results_table.add_column("Parameters", style="blue")
 
         sorted_results = self.results.sort_values(by="metric", ascending=False if self.direction == "maximize" else True)
 
@@ -330,13 +331,11 @@ class QuantitativeScreener:
             results_table.add_row(
                 result["symbol"],
                 result["timeframe"],
-                str(result["metric"])
+                str(result["metric"]),
+                str(result["params"])
             )
 
         self.console.print(results_table)
-
-        
-    
 
 if __name__ == "__main__":
     qs = QuantitativeScreener(
