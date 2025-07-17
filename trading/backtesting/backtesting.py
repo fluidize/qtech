@@ -312,8 +312,8 @@ class VectorizedBacktesting:
                     high=self.data['High'],
                     low=self.data['Low'],
                     close=self.data['Close'],
-                    increasing_fillcolor='#EEEEEE',
-                    increasing_line_color='#EEEEEE',
+                    increasing_fillcolor='#888888',
+                    increasing_line_color='#888888',
                     decreasing_fillcolor='#00B4FF',
                     decreasing_line_color='#00B4FF', #make short orders more visible
                     name='Price',
@@ -750,7 +750,7 @@ if __name__ == "__main__":
         leverage=1
     )   
     backtest.fetch_data(
-        symbol="SOL-USDT",
+        symbol="JTO-USDT",
         chunks=100,
         interval="1h",
         age_days=0,
@@ -758,11 +758,11 @@ if __name__ == "__main__":
     )
 
     params = {
-        'supertrend_window': 32,
-        'supertrend_multiplier': 4,
-        'bb_window': 62,
+        'supertrend_window': 8,
+        'supertrend_multiplier': 5,
+        'bb_window': 82,
         'bb_dev': 3,
-        'bbw_ma_window': 18
+        'bbw_ma_window': 62
     }
     
     backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **params)
