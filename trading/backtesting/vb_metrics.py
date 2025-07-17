@@ -275,8 +275,6 @@ def get_profit_factor(position: pd.Series, open_prices: pd.Series) -> float:
     pnl_list = get_trade_pnls(position, open_prices)
     winning_trades = [pnl for pnl in pnl_list if pnl > 0]
     losing_trades = [pnl for pnl in pnl_list if pnl < 0]
-
-    print(winning_trades, losing_trades)
     
     total_gross_profit = sum(winning_trades) if winning_trades else 0
     total_gross_loss = abs(sum(losing_trades)) if losing_trades else 0
