@@ -275,6 +275,7 @@ class VectorizedBacktesting:
             sign_factor = -1
         else:
             sign_factor = 1
+        
         combined_objective = win_rate * profit_factor * abs(alpha) * abs(sortino_ratio) * sign_factor
 
         return {
@@ -311,6 +312,10 @@ class VectorizedBacktesting:
                     high=self.data['High'],
                     low=self.data['Low'],
                     close=self.data['Close'],
+                    increasing_fillcolor='#EEEEEE',
+                    increasing_line_color='#EEEEEE',
+                    decreasing_fillcolor='#00B4FF',
+                    decreasing_line_color='#00B4FF', #make short orders more visible
                     name='Price',
                     yaxis='y'
                 )
@@ -746,7 +751,7 @@ if __name__ == "__main__":
     )   
     backtest.fetch_data(
         symbol="SOL-USDT",
-        chunks=365,
+        chunks=100,
         interval="1h",
         age_days=0,
         data_source="binance"
