@@ -290,13 +290,26 @@ class QuantitativeScreener:
         if self.results.empty:
             raise ValueError("No results available. Run the optimization first.")
         
-        best_row = self.results.loc[self.results['metric'].idxmax()]
+        best_row = self.results.loc[self.results['metric'].idxmax() if self.direction == "maximize" else self.results['metric'].idxmin()]
         return {
             "symbol": best_row["symbol"],
             "interval": best_row["interval"],
             "metric": best_row["metric"],
             "params": best_row["params"]
         }
+    
+    def get_best_metrics(self):
+        best = self.get_best()
+        self.engine.fetch_data(
+            symbol=best["symbol"],
+            interval=best["interval"],
+            chunks=self.chunks,
+            age_days=self.age_days,
+            data_source=self.data_source
+        )
+        self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
+
+        return self.engine.get_performance_metrics()
     
     def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
         """Plot the performance of the best parameter combination."""
@@ -308,7 +321,7 @@ class QuantitativeScreener:
             age_days=self.age_days,
             data_source=self.data_source
         )
-        self.engine.run_strategy(strategy_func=strategy.trend_reversal_strategy, **best["params"])
+        self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
     
     def _generate_chart(self, print_results: bool = True):
@@ -340,9 +353,9 @@ class QuantitativeScreener:
 
 if __name__ == "__main__":
     qs = QuantitativeScreener(
-        symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT"],
+        symbols=["JTO-USDT", "JUP-USDT", "RENDER-USDT", "RAY-USDT"],
         chunks=100,
-        intervals=["1h"],
+        intervals=["5m", "15m","30m"],
         age_days=0,
         data_source="binance",
         slippage_pct=0.005,
@@ -350,23 +363,25 @@ if __name__ == "__main__":
     )
 
     qs.optimize(
-        strategy_func=strategy.trend_reversal_strategy,
+        strategy_func=strategy.scalper_strategy,
         param_space={
-            "supertrend_window": (2,50),
-            "supertrend_multiplier": (1,5),
-            "bb_window": (2,100),
-            "bb_dev": (1, 3),
-            "bbw_ma_window": (2,100)
+            "rsi_window": (2,100),
+            "psar_af_start": (0.01, 0.05),
+            "psar_af_step": (0.01, 0.05),
+            "psar_af_max": (0.01, 0.05)
         },
-        float_exceptions=["supertrend_multiplier", "bb_dev"],
+        float_exceptions=["psar_af_start", "psar_af_step", "psar_af_max"],
         fixed_exceptions=[],
-        metric="Sharpe_Ratio",
+        metric="Alpha",
         n_trials=1,
         direction="maximize",
         save_params=False
     )
 
     qs.plot_best_performance(show_graph=True, extended=False)
+    qs.plot_best_performance(show_graph=True, extended=True)
+    print(qs.get_best_metrics())
+    print(qs.get_best())
 
 
 
