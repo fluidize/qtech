@@ -179,7 +179,7 @@ def trend_reversal_strategy(
         supertrend_multiplier: float = 2,
         bb_window: int = 20,
         bb_dev: float = 2,
-        bbw_ma_window: int = 13
+        bbw_ma_window: int = 13,
     ) -> pd.Series:
     signals = pd.Series(0, index=data.index)
     
@@ -201,7 +201,7 @@ def trend_reversal_strategy(
     sell_conditions = (supertrend == 1) & (volatility_contraction)
 
     signals[buy_conditions] = 3
-    signals[sell_conditions] = 2
+    signals[sell_conditions] = 1
     
     return signals
 

@@ -5,7 +5,6 @@ from rich.console import Console
 from typing import Dict
 import requests
 
-# Add the trading directory to the path
 sys.path.append("trading")
 sys.path.append("trading/backtesting")
 sys.path.append("trading/live")
