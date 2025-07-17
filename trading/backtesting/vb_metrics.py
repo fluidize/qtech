@@ -212,7 +212,7 @@ def get_trade_pnls(position: pd.Series, open_prices: pd.Series) -> List[float]:
     active_positions = []  # Stack of (position_type, entry_price, entry_idx)
     
     # Process all position changes
-    prev_pos = position.iloc[0] if len(position) > 0 else 2
+    prev_pos = position.iloc[0]
     
     for idx in change_indices:
         current_pos = position.loc[idx]
@@ -224,7 +224,7 @@ def get_trade_pnls(position: pd.Series, open_prices: pd.Series) -> List[float]:
                 exit_price = open_prices.loc[idx]
                 if pos_type == 3:  # Long
                     pnl = exit_price - entry_price
-                else:  # Short (pos_type == 1)
+                elif pos_type == 1:  # Short
                     pnl = entry_price - exit_price
                 pnl_list.append(pnl)
         
@@ -272,8 +272,16 @@ def get_pt_ratio(position: pd.Series, open_prices: pd.Series) -> float:
 
 def get_profit_factor(position: pd.Series, open_prices: pd.Series) -> float:
     """Calculate profit factor from position and open prices."""
-    returns = get_returns(position, open_prices)
-    profit_factor = returns[returns > 0].sum() / abs(returns[returns < 0].sum())
+    pnl_list = get_trade_pnls(position, open_prices)
+    winning_trades = [pnl for pnl in pnl_list if pnl > 0]
+    losing_trades = [pnl for pnl in pnl_list if pnl < 0]
+
+    print(winning_trades, losing_trades)
+    
+    total_gross_profit = sum(winning_trades) if winning_trades else 0
+    total_gross_loss = abs(sum(losing_trades)) if losing_trades else 0
+    
+    profit_factor = total_gross_profit / total_gross_loss if total_gross_loss > 0 else float('inf')
     return profit_factor
 
 def get_total_trades(position: pd.Series) -> int:
@@ -348,3 +356,42 @@ def get_information_ratio(strategy_returns: pd.Series, market_returns: pd.Series
     info_ratio_annualized = info_ratio_per_period * np.sqrt(periods_per_year)
     
     return info_ratio_annualized
+
+def get_trade_returns(position: pd.Series, open_prices: pd.Series) -> List[float]:
+    """Calculate return percentage for each trade from position and open prices."""
+    
+    # Vectorized implementation
+    position_changes = position.diff()
+    change_indices = position_changes[position_changes != 0].index
+    
+    if len(change_indices) == 0:
+        return []
+    
+    return_list = []
+    active_positions = []  # Stack of (position_type, entry_price, entry_idx)
+    
+    # Process all position changes
+    prev_pos = position.iloc[0]
+    
+    for idx in change_indices:
+        current_pos = position.loc[idx]
+        
+        # Close existing position if switching or going to flat
+        if prev_pos != 2 and prev_pos != current_pos:
+            if active_positions:
+                pos_type, entry_price, _ = active_positions.pop()
+                exit_price = open_prices.loc[idx]
+                if pos_type == 3:  # Long
+                    trade_return = (exit_price - entry_price) / entry_price
+                elif pos_type == 1:  # Short
+                    trade_return = (entry_price - exit_price) / entry_price
+                return_list.append(trade_return)
+        
+        # Open new position if not going to flat
+        if current_pos != 2:
+            entry_price = open_prices.loc[idx]
+            active_positions.append((current_pos, entry_price, idx))
+        
+        prev_pos = current_pos
+    
+    return return_list

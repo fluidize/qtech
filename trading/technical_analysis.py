@@ -39,6 +39,7 @@ def macd(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalpe
     signal = ema(macd, signalperiod)
     hist = macd - signal
     return macd, signal, hist
+
 def macd_dema(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> tuple[pd.Series, pd.Series]:
     """Moving Average Convergence Divergence with DEMA"""
     exp1 = dema(series, fastperiod)
@@ -48,12 +49,12 @@ def macd_dema(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, sig
     hist = macd - signal
     return macd, signal, hist
 
-def bbands(series: pd.Series, timeperiod: int = 20, nbdevup: int = 2, nbdevdn: int = 2) -> tuple[pd.Series, pd.Series, pd.Series]:
+def bbands(series: pd.Series, timeperiod: int = 20, devup: int = 2, devdn: int = 2) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Bollinger Bands"""
     middle = sma(series, timeperiod)
     std = series.rolling(window=timeperiod).std()
-    upper = middle + (std * nbdevup)
-    lower = middle - (std * nbdevdn)
+    upper = middle + (std * devup)
+    lower = middle - (std * devdn)
     return upper, middle, lower
 
 def stoch(high: pd.Series, low: pd.Series, close: pd.Series, fastk_period: int = 14, slowk_period: int = 3, slowd_period: int = 3) -> tuple[pd.Series, pd.Series]:

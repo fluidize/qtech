@@ -142,42 +142,45 @@ def zscore_momentum_strategy(data: pd.DataFrame, zscore_threshold: float = 0.1) 
     signals[zscore < -zscore_threshold] = 2
     return signals
 
-def scalper_strategy(data: pd.DataFrame) -> pd.Series:
-    """Trades frequently, good for testing."""
-    signals = pd.Series(2, index=data.index)
+def scalper_strategy(
+        data: pd.DataFrame,
+        rsi_window: int = 2,
+        psar_af_start: float = 0.02,
+        psar_af_step: float = 0.02,
+        psar_af_max: float = 0.2,
+        rsi_threshold: float = 30,
+        ma_window: int = 20,
+    ) -> pd.Series:
+    signals = pd.Series(0, index=data.index)
 
-    rsi = ta.rsi(data['Close'], timeperiod=2)
-    adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'], timeperiod=2)
+    rsi = ta.rsi(data['Close'], timeperiod=rsi_window)
+    psar = ta.psar(data['High'], data['Low'], psar_af_start, psar_af_step, psar_af_max)
 
-    buy_conditions = (rsi > adx) & (plus_di > minus_di)
-    sell_conditions = (rsi < adx) & (minus_di > plus_di)
+    long_rsi = rsi < rsi_threshold
+    short_rsi = rsi > 100 - rsi_threshold
 
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 1
+    long_psar = data['Close'] > psar
+    short_psar = data['Close'] < psar
+
+    long_ma = data['Close'] > ta.sma(data['Close'], timeperiod=ma_window)
+    short_ma = data['Close'] < ta.sma(data['Close'], timeperiod=ma_window)
+
+    long_score = long_rsi.astype(int) + long_psar.astype(int) + long_ma.astype(int)
+    short_score = short_rsi.astype(int) + short_psar.astype(int) + short_ma.astype(int)
+
+    signals[long_score == 3] = 3
+    signals[short_score == 3] = 2
+
     return signals
 
-def ETHBTC_trader(data: pd.DataFrame, chunks, interval, age_days, data_source: str = "binance", zscore_window: int = 20, lower_zscore_threshold: float = -1, upper_zscore_threshold: float = 1) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
-    eth_price = mt.fetch_data('ETH-USDT', chunks=chunks, interval=interval, age_days=age_days, data_source=data_source)
-    btc_price = mt.fetch_data('BTC-USDT', chunks=chunks, interval=interval, age_days=age_days, data_source=data_source)
-    ethbtc_ratio = eth_price[['Open', 'High', 'Low', 'Close']] / btc_price[['Open', 'High', 'Low', 'Close']]
-    
-    zscore = ta.zscore(ethbtc_ratio['Open'], timeperiod=zscore_window)
-
-    #follow ethbtc ratio breakouts
-    buy_conditions = zscore > upper_zscore_threshold
-    sell_conditions = zscore < lower_zscore_threshold
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 2
-    return signals
-
-def trend_reversal_strategy(data: pd.DataFrame,
-                supertrend_window: int = 10,
-                supertrend_multiplier: float = 2,
-                bb_window: int = 20,
-                bb_dev: float = 2,
-                bbw_ma_window: int = 13,
-                ) -> pd.Series:
+def trend_reversal_strategy(
+        data: pd.DataFrame,
+        supertrend_window: int = 10,
+        supertrend_multiplier: float = 2,
+        bb_window: int = 20,
+        bb_dev: float = 2,
+        bbw_ma_window: int = 13
+    ) -> pd.Series:
     signals = pd.Series(0, index=data.index)
     
     supertrend, supertrend_line = ta.supertrend(
@@ -190,7 +193,7 @@ def trend_reversal_strategy(data: pd.DataFrame,
 
     upper, middle, lower = ta.bbands(data['Close'], timeperiod=bb_window, devup=bb_dev, devdn=bb_dev)
     bbw = (upper - lower) / middle #utilizing BBW as a volatility proxy
-    bbw_ma = ta.sma(bbw, timeperiod=13)
+    bbw_ma = ta.sma(bbw, timeperiod=bbw_ma_window)
 
     volatility_contraction = (bbw < bbw_ma) & (bbw.shift(1) > bbw_ma.shift(1))
 
@@ -253,86 +256,5 @@ def ichimoku_strategy(data: pd.DataFrame, tenkan_period: int = 9, kijun_period: 
 
     signals[buy_conditions] = 3
     signals[sell_conditions] = 2
-
-    return signals
-
-def rsi_divergence_strategy(data: pd.DataFrame, 
-                           rsi_period: int = 14, 
-                           lookback: int = 5,
-                           min_strength: float = 0.1) -> pd.Series:
-    """
-    RSI Divergence Strategy
-    
-    Detects bullish and bearish divergences between price and RSI:
-    - Bullish divergence: Price makes lower lows while RSI makes higher lows
-    - Bearish divergence: Price makes higher highs while RSI makes lower highs
-    
-    Args:
-        data: DataFrame with OHLC data
-        rsi_period: Period for RSI calculation
-        lookback: Number of bars to look back for divergence detection
-        min_strength: Minimum strength threshold for divergence signals
-    
-    Returns:
-        pd.Series: Trading signals (1=short, 2=flat, 3=long)
-    """
-    signals = pd.Series(2, index=data.index)  # Start with flat signals
-    
-    # Calculate RSI
-    rsi = ta.rsi(data['Close'], timeperiod=rsi_period)
-    
-    # Handle NaN values
-    rsi = rsi.fillna(50)
-    
-    # Vectorized divergence detection
-    price_change = data['Close'] - data['Close'].shift(lookback)
-    rsi_change = rsi - rsi.shift(lookback)
-    
-    # Bullish divergence: price down, RSI up, RSI oversold
-    bullish_divergence = (price_change < 0) & (rsi_change > 0) & (rsi < 40)
-    
-    # Bearish divergence: price up, RSI down, RSI overbought
-    bearish_divergence = (price_change > 0) & (rsi_change < 0) & (rsi > 60)
-    
-    # Generate signals - only set once per condition
-    signals[bullish_divergence] = 3
-    signals[bearish_divergence] = 1
-    
-    return signals
-
-def combined_trend_strategy(data: pd.DataFrame,
-    ma_fast: int = 21,
-    ma_slow: int = 50,
-    supertrend_window: int = 20,
-    supertrend_multiplier: float = 3,
-    score_threshold: int = 1
-) -> pd.Series:
-    """
-    Comprehensive trend-following strategy combining multiple indicators.    
-    """
-    signals = pd.Series(0, index=data.index)  # Start with flat signals
-    
-    ma_slow = ta.sma(data['Close'], timeperiod=ma_slow)
-    ma_fast = ta.sma(data['Close'], timeperiod=ma_fast)
-    
-    supertrend, supertrend_line = ta.supertrend(
-        data['High'], 
-        data['Low'], 
-        data['Close'], 
-        period=supertrend_window, 
-        multiplier=supertrend_multiplier
-    )
-    
-    ma_signals = (ma_fast > ma_slow)
-    supertrend_signals = (supertrend == 1)
-
-    long_score = (ma_signals.astype(int) + supertrend_signals.astype(int))
-    short_score = (~ma_signals.astype(int) + ~supertrend_signals.astype(int))
-
-    long_conditions = long_score >= score_threshold
-    short_conditions = short_score >= score_threshold
-
-    signals[long_conditions] = 3
-    signals[short_conditions] = 1
 
     return signals

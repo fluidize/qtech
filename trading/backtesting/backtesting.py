@@ -269,9 +269,7 @@ class VectorizedBacktesting:
         breakeven_rate = metrics.get_breakeven_rate(position, open_prices)
         pt_ratio = metrics.get_pt_ratio(position, open_prices)
         
-        positive_returns = strategy_returns[strategy_returns > 0]
-        negative_returns = strategy_returns[strategy_returns < 0]
-        profit_factor = positive_returns.sum() / abs(negative_returns.sum()) if negative_returns.sum() < 0 else float('inf')
+        profit_factor = metrics.get_profit_factor(position, open_prices)
 
         if (alpha < 0) or (sortino_ratio < 0): #when both are negative this can encourage bad optimizations
             sign_factor = -1
@@ -471,10 +469,9 @@ class VectorizedBacktesting:
                 )
             )
             
-            # Set y-axes titles
-            fig.update_yaxes(title_text="Price ($)", secondary_y=False)
-            fig.update_yaxes(title_text="Portfolio Value ($)", secondary_y=True)
-        else: # Advanced Plotting
+            fig.update_yaxes(title_text="Price ($)")
+            fig.update_yaxes(title_text="Portfolio Value ($)")
+        else:
             start = time.time()
             fig = go.Figure().set_subplots(
                 rows=4, cols=2,
@@ -742,7 +739,7 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=100,
-        slippage_pct=0.00,
+        slippage_pct=0.005,
         commission_fixed=0.0,
         reinvest=False,
         leverage=1
@@ -754,10 +751,17 @@ if __name__ == "__main__":
         age_days=0,
         data_source="binance"
     )
+
+    params = {
+        'supertrend_window': 32,
+        'supertrend_multiplier': 4,
+        'bb_window': 62,
+        'bb_dev': 3,
+        'bbw_ma_window': 18
+    }
     
-    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True)
+    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **params)
 
     print(backtest.get_performance_metrics())
-    print(backtest.get_cost_summary())
     backtest.plot_performance(extended=False)
     
