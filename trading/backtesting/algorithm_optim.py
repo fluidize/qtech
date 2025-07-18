@@ -203,12 +203,13 @@ class QuantitativeScreener:
                  intervals: List[str],
                  age_days: int,
                  data_source: str = "binance",
+                 initial_capital: float = 10000,
                  slippage_pct: float = 0.005,
                  commission_fixed: float = 0.00):
         
         self.engine = VectorizedBacktesting(
             instance_name="QuantitativeScreener",
-            initial_capital=10000,
+            initial_capital=initial_capital,
             slippage_pct=slippage_pct,
             commission_fixed=commission_fixed,
             reinvest=False
@@ -358,8 +359,9 @@ if __name__ == "__main__":
         intervals=["1h"],
         age_days=0,
         data_source="binance",
-        slippage_pct=0.01,
-        commission_fixed=0.00
+        initial_capital=15,
+        slippage_pct=0.005,
+        commission_fixed=0.01
     )
 
     qs.optimize(

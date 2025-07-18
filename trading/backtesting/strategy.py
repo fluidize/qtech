@@ -108,7 +108,7 @@ def hold_strategy(data: pd.DataFrame, signal: int = 3) -> pd.Series:
 def signal_spam(data: pd.DataFrame) -> pd.Series:
     signals = pd.Series(2, index=data.index)
     signals[data['Close'] > data['Open']] = 3
-    signals[data['Close'] < data['Open']] = 2
+    signals[data['Close'] < data['Open']] = 1
     return signals
 
 def perfect_strategy(data: pd.DataFrame) -> pd.Series:

@@ -4,6 +4,7 @@ import sys
 from rich.console import Console
 from typing import Dict
 import requests
+from discord_webhook import DiscordWebhook, DiscordEmbed
 
 sys.path.append("trading")
 sys.path.append("trading/backtesting")
@@ -15,32 +16,32 @@ import strategy
 
 def create_discord_callback(webhook_url: str):
     def discord_callback(signal_info: Dict):
+        webhook = DiscordWebhook(url=webhook_url)
         if signal_info['new_signal'] != signal_info['previous_signal'] and signal_info['new_signal'] != 0:
             if signal_info['new_signal'] == 3:
-                message = {
-                    "content": f"{signal_info['timestamp']} LONG {signal_info['symbol']} @ {signal_info['current_price']}"
-                }
+                color = "39FF14"
             elif signal_info['new_signal'] == 2:
-                message = {
-                    "content": f"{signal_info['timestamp']} SHORT {signal_info['symbol']} @ {signal_info['current_price']}"
-                }
+                color = "FFFF33"
             elif signal_info['new_signal'] == 1:
-                message = {
-                    "content": f"{signal_info['timestamp']} FLAT {signal_info['symbol']} @ {signal_info['current_price']}"
-                }
-            requests.post(webhook_url, json=message)
+                color = "FF073A"
+
+            embed = DiscordEmbed(title=f"{signal_info['symbol']}", color=color)
+            embed.add_embed_field(name="Action", value=f"***{signal_info['action']}***", inline=True)
+            embed.add_embed_field(name="Price", value=f"{signal_info['current_price']}", inline=True)
+            embed.add_embed_field(name="Timestamp", value=f"{signal_info['timestamp']}", inline=True)
+            webhook.add_embed(embed)
+            webhook.execute()
     return discord_callback
 
 async def main(webhook_url: str = None):
     """Run a single coin portfolio test using Binance signals and Jupiter execution."""
     discord_callback = create_discord_callback(webhook_url)
-
     params = {
         'supertrend_window': 8,
         'supertrend_multiplier': 5,
-        'bb_window': 67,
-        'bb_dev': 3,
-        'bbw_ma_window': 90
+        'bb_window': 85,
+        'bb_dev': 5,
+        'bbw_ma_window': 62
     }
 
     system = LiveTradingSystem(
@@ -54,7 +55,15 @@ async def main(webhook_url: str = None):
     )
 
     if webhook_url:
-        requests.post(webhook_url, json={"content": f"Starting Algorithmic Call Generator | Strategy: {system.strategy_func.__name__} {system.strategy_params}"})
+        webhook = DiscordWebhook(url=webhook_url)
+        embed = DiscordEmbed(title="Starting Algorithmic Call Generator", color="1BFFFF")
+        embed.add_embed_field(name="Strategy", value=f"`{system.strategy_func.__name__}`", inline=True)
+        embed.add_embed_field(name="Symbol", value=f"`{system.symbol}`", inline=True)
+        embed.add_embed_field(name="Interval", value=f"`{system.interval}`", inline=True)
+        embed.add_embed_field(name="Data Source", value=f"`{system.data_source}`", inline=True)
+        embed.add_embed_field(name="Parameters", value=f"`{system.strategy_params}`", inline=True)
+        webhook.add_embed(embed)
+        webhook.execute()
 
     await system.start()
 
