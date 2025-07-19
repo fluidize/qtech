@@ -307,7 +307,7 @@ class VectorizedBacktesting:
             fig = go.Figure()
             fig.add_trace(
                 go.Candlestick(
-                    x=self.data.index,
+                    x=self.data['Datetime'],
                     open=self.data['Open'],
                     high=self.data['High'],
                     low=self.data['Low'],
@@ -325,7 +325,7 @@ class VectorizedBacktesting:
             hodl_value = self.initial_capital * (1 + valid_returns).cumprod()
             fig.add_trace(
                 go.Scatter(
-                    x=self.data.index,
+                    x=self.data['Datetime'],
                     y=portfolio_value,
                     mode='lines',
                     name='Strategy Portfolio',
@@ -335,7 +335,7 @@ class VectorizedBacktesting:
             )
             fig.add_trace(
                 go.Scatter(
-                    x=self.data.index,
+                    x=self.data['Datetime'],
                     y=hodl_value,
                     mode='lines',
                     name=f'Buy & Hold',
@@ -345,7 +345,7 @@ class VectorizedBacktesting:
             )
             fig.add_trace(
                 go.Scatter(
-                    x=self.data.index,
+                    x=self.data['Datetime'],
                     y=portfolio_value - hodl_value,
                     mode='lines',
                     name='Active Return',
@@ -367,13 +367,13 @@ class VectorizedBacktesting:
                     if i < len(self.data) - 1:
                         price_at_execution = self.data['Open'].iloc[i+1]
                         if current_pos == 3 and prev_pos != 3:
-                            long_entries.append(self.data.index[i+1])
+                            long_entries.append(self.data['Datetime'].iloc[i+1])
                             long_entry_prices.append(price_at_execution)
                         elif current_pos == 1 and prev_pos != 1:
-                            short_entries.append(self.data.index[i+1])
+                            short_entries.append(self.data['Datetime'].iloc[i+1])
                             short_entry_prices.append(price_at_execution)
                         elif current_pos == 2 and prev_pos != 2:
-                            flats.append(self.data.index[i+1])
+                            flats.append(self.data['Datetime'].iloc[i+1])
                             flat_prices.append(price_at_execution)
             if long_entries:
                 fig.add_trace(
@@ -413,7 +413,7 @@ class VectorizedBacktesting:
                     if self.strategy_output[output_idx][1]: #if true add to price axis
                         fig.add_trace(
                             go.Scatter(
-                                x=self.data.index,
+                                x=self.data['Datetime'],
                                 y=self.strategy_output[output_idx],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
@@ -423,7 +423,7 @@ class VectorizedBacktesting:
                     else:
                         fig.add_trace(
                             go.Scatter(
-                                x=self.data.index,
+                                x=self.data['Datetime'],
                                 y=self.strategy_output[output_idx],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
@@ -743,15 +743,15 @@ class VectorizedBacktesting:
 
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
-        initial_capital=100,
+        initial_capital=20,
         slippage_pct=0.005,
-        commission_fixed=0.0,
+        commission_fixed=0.01,
         reinvest=False,
         leverage=1
-    )   
+    )
     backtest.fetch_data(
         symbol="JTO-USDT",
-        chunks=100,
+        chunks=5,
         interval="1h",
         age_days=0,
         data_source="binance"
@@ -760,8 +760,8 @@ if __name__ == "__main__":
     params = {
         'supertrend_window': 8,
         'supertrend_multiplier': 5,
-        'bb_window': 82,
-        'bb_dev': 3,
+        'bb_window': 85,
+        'bb_dev': 5,
         'bbw_ma_window': 62
     }
     
