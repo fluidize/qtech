@@ -1,6 +1,8 @@
 import yfinance as yf
 import matplotlib.pyplot as plt
 import pandas as pd
+from scipy.interpolate import interp1d
+import numpy as np
 
 def get_option_chain(ticker, expiration=None):
     ticker_obj = yf.Ticker(ticker)
@@ -26,6 +28,8 @@ def plot_vol_curve(otm_calls, otm_puts, spot, ticker, expiration):
         plt.scatter(otm_calls['strike'], otm_calls['impliedVolatility'], label='OTM Calls', color='green', alpha=0.7)
     if 'impliedVolatility' in otm_puts.columns:
         plt.scatter(otm_puts['strike'], otm_puts['impliedVolatility'], label='OTM Puts', color='red', alpha=0.7)
+    plt.plot(otm_calls['strike'], otm_calls['impliedVolatility'], label='OTM Calls Curve', color='green')
+    plt.plot(otm_puts['strike'], otm_puts['impliedVolatility'], label='OTM Puts Curve', color='red')
     plt.axvline(spot, color='black', linestyle='--', label='Spot Price')
     plt.xlabel('Strike Price')
     plt.ylabel('Implied Volatility')
@@ -35,7 +39,7 @@ def plot_vol_curve(otm_calls, otm_puts, spot, ticker, expiration):
     plt.show()
 
 def main():
-    ticker = input("Enter ticker:")
+    ticker = input("Enter ticker: ")
     chain, spot, expiration = get_option_chain(ticker)
     print(f"Spot price: {spot:.2f}, Expiration: {expiration}")
     otm_calls, otm_puts = filter_otm(chain, spot)
