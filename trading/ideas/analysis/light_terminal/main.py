@@ -180,7 +180,7 @@ class Terminal(App):
                 return
             #get and update the info
             name = info.get('longName', 'N/A')
-            current_price = info.get('currentPrice', 'N/A')
+            current_price = info.get('regularMarketPrice', 'N/A')
             high_value = info.get('fiftyTwoWeekHigh', 'N/A')
             low_value = info.get('fiftyTwoWeekLow', 'N/A')
             change_value = info.get('52WeekChange', 'N/A')
