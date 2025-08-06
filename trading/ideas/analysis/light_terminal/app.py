@@ -227,7 +227,17 @@ class Terminal(App):
             if change_value == "N/A":
                 history = stock.history(period="1y", interval="1d")
                 change_value = (history['Close'].iloc[-1] - history['Close'].iloc[0]) / history['Close'].iloc[0]
+
             market_cap_value = info.get('marketCap', 'N/A')
+            if market_cap_value != "N/A":
+                if market_cap_value / 1_000_000_000_000 > 1:
+                    market_cap_value = f"{market_cap_value / 1_000_000_000_000:.2f}T"
+                elif market_cap_value / 1_000_000_000 > 1:
+                    market_cap_value = f"{market_cap_value / 1_000_000_000:.2f}B"
+                elif market_cap_value / 1_000_000 > 1:
+                    market_cap_value = f"{market_cap_value / 1_000_000:.2f}M"
+                else:
+                    market_cap_value = f"{market_cap_value:.2f / 1_000}K"
             pe_ratio_value = info.get('trailingPE', 'N/A')
             dividend_yield_value = info.get('dividendYield', 'N/A')
             volume_value = info.get('volume', 'N/A')
