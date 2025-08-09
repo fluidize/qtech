@@ -56,7 +56,7 @@ class LiveTradingSystem:
         self.interval = interval
         self.data_source = data_source
         self.buffer_size = buffer_size
-        self.strategy_func = strategy_func or Strategy.ema_cross_strategy
+        self.strategy_func = strategy_func
         self.strategy_params = strategy_params or {}
         self.signal_callback = signal_callback
         

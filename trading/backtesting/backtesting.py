@@ -744,28 +744,22 @@ class VectorizedBacktesting:
 if __name__ == "__main__":
     backtest = VectorizedBacktesting(
         initial_capital=20,
-        slippage_pct=0.005,
-        commission_fixed=0.01,
+        slippage_pct=0.00,
+        commission_fixed=0.00,
         reinvest=False,
         leverage=1
     )
     backtest.fetch_data(
-        symbol="JTO-USDT",
-        chunks=5,
-        interval="1h",
+        symbol="SOL-USDT",
+        chunks=50,
+        interval="5m",
         age_days=0,
-        data_source="binance"
+        data_source="kucoin"
     )
 
-    params = {
-        'supertrend_window': 8,
-        'supertrend_multiplier': 5,
-        'bb_window': 85,
-        'bb_dev': 5,
-        'bbw_ma_window': 62
-    }
+    params = {}
     
-    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **params)
+    backtest.run_strategy(strategy.heikin_ashi_strategy, verbose=True, **params)
 
     print(backtest.get_performance_metrics())
     backtest.plot_performance(extended=False)

@@ -201,18 +201,17 @@ def trend_reversal_strategy(
     sell_conditions = (supertrend == 1) & (volatility_contraction)
 
     signals[buy_conditions] = 3
-    signals[sell_conditions] = 1
+    signals[sell_conditions] = 2
     
     return signals
 
-def ma_crossover_strategy(data: pd.DataFrame, ma_fast: int = 50, ma_slow: int = 200, slow_pct_shift: int = 0.01) -> pd.Series:
+def ma_crossover_strategy(data: pd.DataFrame, ma_fast: int = 50, ma_slow: int = 200) -> pd.Series:
     signals = pd.Series(0, index=data.index)
-    hlc3 = (data['High'] + data['Low'] + data['Close']) / 3
 
     ma_fast = ta.sma(data['Close'], timeperiod=ma_fast) 
-    ma_slow = ta.sma(data['Close'], timeperiod=ma_slow) + hlc3 * slow_pct_shift
-    signals[ma_fast < ma_slow] = 3
-    signals[ma_fast > ma_slow] = 2
+    ma_slow = ta.sma(data['Close'], timeperiod=ma_slow)
+    signals[ma_fast > ma_slow] = 3
+    signals[ma_fast < ma_slow] = 2
 
     return signals
 
@@ -228,33 +227,33 @@ def sr_strategy(data: pd.DataFrame, sr_window: int = 10) -> pd.Series:
 
     return signals
 
-def psar_strategy(data: pd.DataFrame, af_start: float = 0.02, af_step: float = 0.02, af_max: float = 0.2) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
-    psar = ta.psar(data['High'], data['Low'], af_start, af_step, af_max)
+def heikin_ashi_strategy(data: pd.DataFrame, fast_ma_window: int = 5, slow_ma_window: int = 20) -> pd.Series:
+    """
+    Use Heikin Ashi as a trend-following signal.
+    """
+    signals = pd.Series(0, index=data.index)
+    ha_data = ta.heikin_ashi_transform(data)
 
-    buy_conditions = (data['Close'] > psar)
-    sell_conditions = (data['Close'] < psar)
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 2
+    fast_ma = ta.sma(ha_data['Close'], timeperiod=fast_ma_window)
+    slow_ma = ta.sma(ha_data['Close'], timeperiod=slow_ma_window)
+
+    signals[fast_ma > slow_ma] = 3
+    signals[fast_ma < slow_ma] = 2
 
     return signals
 
-def ichimoku_strategy(data: pd.DataFrame, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> pd.Series:
+def supertrend_strategy(data: pd.DataFrame, supertrend_window: int = 10, supertrend_multiplier: float = 2) -> pd.Series:
     signals = pd.Series(0, index=data.index)
 
-    tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b, chikou_span = ta.ichimoku(
+    supertrend, supertrend_line = ta.supertrend(
         data['High'], 
         data['Low'], 
         data['Close'], 
-        tenkan_period, 
-        kijun_period, 
-        senkou_period, 
-        chikou_period)
-    
-    buy_conditions = (data['Close'] > senkou_span_a) & (data['Close'] > senkou_span_b)
-    sell_conditions = (data['Close'] < senkou_span_a) & (data['Close'] < senkou_span_b)
+        period=supertrend_window, 
+        multiplier=supertrend_multiplier
+    )
 
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 2
+    signals[supertrend == -1] = 3
+    signals[supertrend == 1] = 2
 
     return signals

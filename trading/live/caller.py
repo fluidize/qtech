@@ -36,16 +36,10 @@ def create_discord_callback(webhook_url: str):
 async def main(webhook_url: str = None):
     """Run a single coin portfolio test using Binance signals and Jupiter execution."""
     discord_callback = create_discord_callback(webhook_url)
-    params = {
-        'supertrend_window': 8,
-        'supertrend_multiplier': 5,
-        'bb_window': 85,
-        'bb_dev': 5,
-        'bbw_ma_window': 62
-    }
+    params = {'supertrend_window': 2, 'supertrend_multiplier': 7, 'bb_window': 47, 'bb_dev': 8, 'bbw_ma_window': 49}
 
     system = LiveTradingSystem(
-        symbol="JTO-USDT",
+        symbol="SOL-USDT",
         interval="1h",
         data_source="binance",
         buffer_size=500,

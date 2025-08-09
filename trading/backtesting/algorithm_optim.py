@@ -354,29 +354,29 @@ class QuantitativeScreener:
 
 if __name__ == "__main__":
     qs = QuantitativeScreener(
-        symbols=["JTO-USDT"],
-        chunks=180,
-        intervals=["1h"],
+        symbols=["SOL-USDT"],
+        chunks=365,
+        intervals=["30m", "1h", "4h"],
         age_days=0,
-        data_source="binance",
-        initial_capital=15,
-        slippage_pct=0.005,
-        commission_fixed=0.01
+        data_source="kucoin",
+        initial_capital=100,
+        slippage_pct=0.0002,
+        commission_fixed=0.0
     )
 
     qs.optimize(
         strategy_func=strategy.trend_reversal_strategy,
         param_space={
-            "supertrend_window": (2,50),
-            "supertrend_multiplier": (1,5),
-            "bb_window": (2,100),
-            "bb_dev": (1, 5),
-            "bbw_ma_window": (2,100),
+            "supertrend_window": (1,50),
+            "supertrend_multiplier": (1,10),
+            "bb_window": (1,50),
+            "bb_dev": (1,10),
+            "bbw_ma_window": (1,50),
         },
         float_exceptions=[],
         fixed_exceptions=[],
-        metric="Combined_Objective",
-        n_trials=1000,
+        metric="Total_Return",
+        n_trials=500,
         direction="maximize",
         save_params=False
     )
