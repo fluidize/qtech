@@ -6,7 +6,6 @@ import yfinance as yf
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
-import hashlib
 import os
 import tempfile
 import json
@@ -17,6 +16,7 @@ from plotly.subplots import make_subplots
 from rich import print
 import technical_analysis as ta
 import smc_analysis as smc
+
 
 def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, verbose: bool = True):
     print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None
@@ -55,10 +55,11 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
         else:
             print(f"[yellow]Cache expired ({file_age_hours:.1f} hours old). Fetching fresh data...[/yellow]")
     
-    print("[green]DOWNLOADING DATA[/green]")
+    print("[green]DOWNLOADING DATA[/green]") if verbose else None
     if data_source == "yfinance":
         data = pd.DataFrame()
         times = []
+        progress_bar = tqdm(total=chunks, desc="YFINANCE PROGRESS", ascii="#>")
         for x in range(chunks):
             chunksize = 1
             start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=age_days)
@@ -70,6 +71,8 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
                 data = pd.concat([data, temp_data])
             times.append(start_date)
             times.append(end_date)
+            progress_bar.update(1)
+        progress_bar.close()
         
         earliest = min(times)
         latest = max(times)
@@ -153,7 +156,6 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
         data.reset_index(drop=True, inplace=True)
 
     elif data_source == "binance":
-        # Parse interval format for Binance
         if "min" in interval:
             interval = interval.replace("min", "m")
         elif "hour" in interval:
@@ -165,27 +167,36 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
         elif "month" in interval:
             interval = interval.replace("month", "M")
         
-        # Format symbol for Binance (remove hyphen if present)
         binance_symbol = symbol.replace('-', '').upper()
         
-        data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
-        times = []
+        if "m" in interval:
+            minutes_per_bar = int(interval.replace("m", ""))
+        elif "h" in interval:
+            minutes_per_bar = int(interval.replace("h", "")) * 60
+        elif "d" in interval:
+            minutes_per_bar = int(interval.replace("d", "")) * 1440
+        elif "w" in interval:
+            minutes_per_bar = int(interval.replace("w", "")) * 10080
+        elif "M" in interval:
+            minutes_per_bar = int(interval.replace("M", "")) * 43200
+        else:
+            minutes_per_bar = 1
         
-        # Each chunk represents exactly 1 day (correct)
-        chunk_minutes = 1440
-
+        data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
+        
         progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS", ascii="#>")
         for x in range(chunks):
-            end_time = datetime.now() - timedelta(minutes=chunk_minutes*x) - timedelta(days=age_days)
-            start_time = end_time - timedelta(minutes=chunk_minutes) - timedelta(days=age_days)
+            # Calculate how many bars we can request for this chunk (max 1000 per request)
+            bars_in_chunk = min(1000, 1440 // minutes_per_bar)  # 1 day worth of data
             
-            # Binance API parameters
+            if bars_in_chunk == 0:
+                bars_in_chunk = 1
+            
+            # Fetch the latest data without explicit time ranges (like providers.py)
             params = {
                 "symbol": binance_symbol,
                 "interval": interval,
-                "startTime": int(start_time.timestamp() * 1000),  # Binance uses milliseconds
-                "endTime": int(end_time.timestamp() * 1000),
-                "limit": 1000
+                "limit": bars_in_chunk
             }
             
             try:
@@ -193,8 +204,9 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
                 response.raise_for_status()
                 request_data = response.json()
             except Exception as e:
-                print(f"[red]Error fetching {binance_symbol} from Binance: {e}[/red]")
-                raise e
+                print(f"[red]Error fetching {binance_symbol} from Binance for chunk {x}: {e}[/red]")
+                progress_bar.update(1)
+                continue
             
             records = []
             for kline in request_data:
@@ -208,21 +220,18 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
                 })
             
             temp_data = pd.DataFrame(records)
-            if not temp_data.empty:
-                if data.empty:
-                    data = temp_data
-                else:
-                    data = pd.concat([data, temp_data])
+            if data.empty:
+                data = temp_data
+            else:
+                data = pd.concat([data, temp_data])
             
-            times.append(start_time)
-            times.append(end_time)
             progress_bar.update(1)
-        
         progress_bar.close()
         
         if not data.empty:
-            earliest = min(times)
-            latest = max(times)
+            # Calculate time range from the actual data timestamps
+            earliest = pd.to_datetime(data["Datetime"].min(), unit='s')
+            latest = pd.to_datetime(data["Datetime"].max(), unit='s')
             difference = latest - earliest
             print(f"{binance_symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
             
