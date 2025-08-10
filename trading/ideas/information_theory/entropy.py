@@ -17,7 +17,7 @@ import sys
 sys.path.append('trading')
 import model_tools as mt
 import technical_analysis as ta
-from vectorized_backtesting import VectorizedBacktesting
+from backtesting.backtesting import VectorizedBacktesting
 
 class EntropyAnalyzer:
     def __init__(self, data: pd.DataFrame
@@ -132,7 +132,7 @@ class EntropyAnalyzer:
         return output
         
 
-def scan_and_sort_by_binned_entropy(symbols, interval='5min', chunks=50, age_days=0, column='Close', variable='log_return', bins=100):
+def scan_and_sort_by_binned_entropy(symbols, interval='5m', chunks=50, age_days=0, column='Close', variable='log_return', bins=100):
     results = []
     for symbol in symbols:
         try:
