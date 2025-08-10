@@ -1,3 +1,4 @@
+from math import ceil
 import time
 from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 from datetime import datetime, timedelta
@@ -18,14 +19,14 @@ from rich import print
 import technical_analysis as ta
 import smc_analysis as smc
 
-def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, verbose: bool = True):
+def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, verbose: bool = True):
     print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None
 
     # Create a temp directory for market data
     temp_dir = os.path.join(tempfile.gettempdir(), "market_data")
     os.makedirs(temp_dir, exist_ok=True)
 
-    cache_key = f"{symbol}_{chunks}_{interval}_{age_days}_{data_source}"
+    cache_key = f"{symbol}_{days}_{interval}_{age_days}_{data_source}"
     cache_file = os.path.join(temp_dir, f"market_data_{cache_key}.parquet")
     cache_file = os.path.join(temp_dir, f"{cache_key}.parquet")
 
@@ -41,7 +42,7 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
                 with open(f"{cache_file}.json", "w") as f:
                     json.dump({
                         "symbol": symbol,
-                        "chunks": chunks,
+                        "days": days,
                         "interval": interval,
                         "age_days": age_days,
                         "data_source": data_source,
@@ -60,7 +61,7 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
     if data_source == "yfinance":
         data = pd.DataFrame()
         times = []
-        for x in range(chunks):
+        for x in range(days):
             chunksize = 1
             start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=age_days)
             end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=age_days)
@@ -103,8 +104,8 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
         data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         times = []
 
-        progress_bar = tqdm(total=chunks, desc="KUCOIN PROGRESS", ascii="#>")
-        for x in range(chunks):
+        progress_bar = tqdm(total=days, desc="KUCOIN PROGRESS", ascii="#>")
+        for x in range(days):
             chunksize = 1440  # 1d of 1m data
             end_time = datetime.now() - timedelta(minutes=chunksize*x) - timedelta(days=age_days)
             start_time = end_time - timedelta(minutes=chunksize) - timedelta(days=age_days)
@@ -172,7 +173,7 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
         data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         times = []
 
-        chunks = int(chunks * 1.44) # adjust due to binance 1k bar limit
+        chunks = ceil(days * 1.44) # adjust due to binance 1k bar limit
 
         progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS", ascii="#>")
         for x in range(chunks):
@@ -249,7 +250,7 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
             with open(f"{cache_file}.json", "w") as f:
                 json.dump({
                     "symbol": symbol,
-                    "chunks": chunks,
+                    "days": days,
                     "interval": interval,
                     "age_days": age_days,
                     "data_source": data_source,
@@ -534,5 +535,5 @@ def loss_plot(loss_history):
     return fig
 
 if __name__ == "__main__":
-    data = fetch_data(symbol="ETH-USDT", chunks=10, interval="1m", age_days=1, data_source="binance")
+    data = fetch_data(symbol="ETH-USDT", days=10, interval="1m", age_days=1, data_source="binance")
     print(data)

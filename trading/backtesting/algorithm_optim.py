@@ -199,7 +199,7 @@ class QuantitativeScreener:
     """Optimize on all symbols and intervals for a given strategy to find the highest performing pairs and timeframes."""
     def __init__(self,
                  symbols: List[str],
-                 chunks: int,
+                 days: int,
                  intervals: List[str],
                  age_days: int,
                  data_source: str = "binance",
@@ -216,7 +216,7 @@ class QuantitativeScreener:
         )
 
         self.symbols = symbols
-        self.chunks = chunks
+        self.days = days
         self.intervals = intervals
         self.age_days = age_days
         self.data_source = data_source
@@ -252,7 +252,7 @@ class QuantitativeScreener:
                 self.engine.fetch_data(
                     symbol=symbol,
                     interval=interval,
-                    chunks=self.chunks,
+                    days=self.days,
                     age_days=self.age_days,
                     data_source=self.data_source,
                     verbose=False
@@ -304,7 +304,7 @@ class QuantitativeScreener:
         self.engine.fetch_data(
             symbol=best["symbol"],
             interval=best["interval"],
-            chunks=self.chunks,
+            days=self.days,
             age_days=self.age_days,
             data_source=self.data_source
         )
@@ -318,7 +318,7 @@ class QuantitativeScreener:
         self.engine.fetch_data(
             symbol=best["symbol"],
             interval=best["interval"],
-            chunks=self.chunks,
+            days=self.days,
             age_days=self.age_days,
             data_source=self.data_source
         )
@@ -355,10 +355,10 @@ class QuantitativeScreener:
 if __name__ == "__main__":
     qs = QuantitativeScreener(
         symbols=["SOL-USDT"],
-        chunks=365,
-        intervals=["30m", "1h", "4h"],
+        days=10,
+        intervals=["5m"],
         age_days=0,
-        data_source="kucoin",
+        data_source="binance",
         initial_capital=100,
         slippage_pct=0.0002,
         commission_fixed=0.0
@@ -367,15 +367,15 @@ if __name__ == "__main__":
     qs.optimize(
         strategy_func=strategy.trend_reversal_strategy,
         param_space={
-            "supertrend_window": (1,50),
-            "supertrend_multiplier": (1,10),
-            "bb_window": (1,50),
-            "bb_dev": (1,10),
-            "bbw_ma_window": (1,50),
+            "supertrend_window": (1,200),
+            "supertrend_multiplier": (1,200),
+            "bb_window": (1,200),
+            "bb_dev": (1,200),
+            "bbw_ma_window": (1,200),
         },
         float_exceptions=[],
         fixed_exceptions=[],
-        metric="Total_Return",
+        metric="Alpha",
         n_trials=500,
         direction="maximize",
         save_params=False
