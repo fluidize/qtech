@@ -26,7 +26,7 @@ def fetch_data(symbol, chunks, interval, age_days, data_source: str = "kucoin", 
     os.makedirs(temp_dir, exist_ok=True)
     
     cache_key = f"{symbol}_{chunks}_{interval}_{age_days}_{data_source}"
-    cache_file = os.path.join(temp_dir, f"market_data_{cache_key}.parquet")
+    cache_file = os.path.join(temp_dir, f"{cache_key}.parquet")
     
     if use_cache and os.path.exists(cache_file):
         file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
