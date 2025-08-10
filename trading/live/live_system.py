@@ -16,6 +16,11 @@ from rich.live import Live
 import sys
 import os
 
+import plotly
+import plotly.graph_objects as go
+import plotly.io as pio
+pio.renderers.default = "browser"
+
 sys.path.append("trading")
 sys.path.append("trading/backtesting")
 sys.path.append("trading/live")
@@ -39,7 +44,9 @@ class LiveTradingSystem:
         buffer_size: int = 500,
         strategy_func: Callable = None,
         strategy_params: Dict = None,
-        signal_callback: Callable = None
+        signal_callback: Callable = None,
+        debug_plot: bool = False,
+        debug_plot_window: int = 100
     ):
         """
         Initialize the live trading system.
@@ -51,6 +58,8 @@ class LiveTradingSystem:
             strategy_func: Strategy function from Strategy class
             strategy_params: Parameters for the strategy
             signal_callback: Function to call when new signal is generated
+            debug_plot: Enable debug plotting on each candle close
+            debug_plot_window: Number of recent candles to show in debug plot
         """
         self.symbol = symbol
         self.interval = interval
@@ -59,6 +68,8 @@ class LiveTradingSystem:
         self.strategy_func = strategy_func
         self.strategy_params = strategy_params or {}
         self.signal_callback = signal_callback
+        self.debug_plot = debug_plot
+        self.debug_plot_window = debug_plot_window
         
         # Data storage - buffer only contains closed candles
         self.data_buffer = deque(maxlen=buffer_size)
@@ -359,6 +370,10 @@ class LiveTradingSystem:
                                 self.timeprint(f"Candle Closed | {self.symbol} | ${closed_price:.2f}", color="blue")
                                 new_signal = self._run_strategy()
                                 self._handle_signal_change(new_signal)
+                                
+                                # Create debug plot if enabled
+                                if self.debug_plot:
+                                    self._create_debug_plot()
                     
                     except asyncio.TimeoutError:
                         logger.debug("WebSocket timeout - pinging...")
@@ -470,6 +485,190 @@ class LiveTradingSystem:
     def timeprint(self, text, color="white", end="\n"):
         now = datetime.now().strftime("%H:%M:%S")
         self.console.print(f"[{color}]{now} | {text}[/{color}]", end=end)
+    
+    def _create_debug_plot(self):
+        """Create debug plot showing recent candles and signals similar to backtesting.py"""
+        if not self.debug_plot or self.current_data.empty or len(self.current_data) < 10:
+            return
+        
+        try:
+            # Get recent data for plotting
+            plot_data = self.current_data.tail(self.debug_plot_window).copy()
+            
+            # Run strategy on current data to get all signals
+            if self.strategy_func:
+                signals = self.strategy_func(self.current_data, **self.strategy_params)
+                plot_signals = signals.tail(self.debug_plot_window)
+                
+                # Convert signals to position for visualization
+                position = plot_signals.copy()
+                position[plot_signals == 0] = np.nan
+                position = position.ffill().fillna(2).astype(int)
+                plot_data['Position'] = position
+                plot_data['Signal'] = plot_signals
+            else:
+                plot_data['Position'] = 2
+                plot_data['Signal'] = 0
+            
+            # Create plotly figure
+            fig = go.Figure()
+            
+            # Add candlestick chart
+            fig.add_trace(
+                go.Candlestick(
+                    x=plot_data.index,
+                    open=plot_data['Open'],
+                    high=plot_data['High'],
+                    low=plot_data['Low'],
+                    close=plot_data['Close'],
+                    increasing_fillcolor='#26FF00',
+                    increasing_line_color='#26FF00',
+                    decreasing_fillcolor='#ff073a',
+                    decreasing_line_color='#ff073a',
+                    name='Price'
+                )
+            )
+            
+            # Add signal markers
+            position_changes = np.diff(plot_data['Position'].values)
+            long_entries = []
+            short_entries = []
+            flats = []
+            long_entry_prices = []
+            short_entry_prices = []
+            flat_prices = []
+            
+            for i in range(len(position_changes)):
+                if position_changes[i] != 0:
+                    prev_pos = plot_data['Position'].iloc[i]
+                    current_pos = plot_data['Position'].iloc[i+1]
+                    if i < len(plot_data) - 1:
+                        price_at_signal = plot_data['Close'].iloc[i+1]
+                        timestamp = plot_data.index[i+1]
+                        
+                        if current_pos == 3 and prev_pos != 3:  # Long entry
+                            long_entries.append(timestamp)
+                            long_entry_prices.append(price_at_signal)
+                        elif current_pos == 1 and prev_pos != 1:  # Short entry
+                            short_entries.append(timestamp)
+                            short_entry_prices.append(price_at_signal)
+                        elif current_pos == 2 and prev_pos != 2:  # Exit to flat
+                            flats.append(timestamp)
+                            flat_prices.append(price_at_signal)
+            
+            # Add signal markers
+            if long_entries:
+                fig.add_trace(
+                    go.Scatter(
+                        x=long_entries,
+                        y=long_entry_prices,
+                        mode='markers',
+                        name='Long Entry',
+                        marker=dict(color="#26FF00", size=10, symbol='triangle-up'),
+                    )
+                )
+            
+            if short_entries:
+                fig.add_trace(
+                    go.Scatter(
+                        x=short_entries,
+                        y=short_entry_prices,
+                        mode='markers',
+                        name='Short Entry',
+                        marker=dict(color='#ff073a', size=10, symbol='triangle-down'),
+                    )
+                )
+            
+            if flats:
+                fig.add_trace(
+                    go.Scatter(
+                        x=flats,
+                        y=flat_prices,
+                        mode='markers',
+                        name='Exit to Flat',
+                        marker=dict(color='yellow', size=8, symbol='circle'),
+                    )
+                )
+            
+            # Update layout
+            current_time = datetime.now().strftime("%H:%M:%S")
+            latest_signal = plot_data['Signal'].iloc[-1] if len(plot_data) > 0 else 0
+            latest_position = plot_data['Position'].iloc[-1] if len(plot_data) > 0 else 2
+            latest_price = plot_data['Close'].iloc[-1] if len(plot_data) > 0 else 0
+            
+            signal_names = {0: 'HOLD', 1: 'SHORT', 2: 'FLAT', 3: 'LONG'}
+            
+            fig.update_layout(
+                title=f'Live Debug Plot - {self.symbol} {self.interval} | {current_time} | Signal: {signal_names.get(latest_signal, "UNKNOWN")} | Position: {signal_names.get(latest_position, "UNKNOWN")} | Price: ${latest_price:.4f}',
+                xaxis=dict(
+                    title='Time',
+                    rangeslider=dict(visible=False),
+                ),
+                yaxis=dict(
+                    title="Price ($)",
+                ),
+                showlegend=True,
+                template="plotly_dark",
+                height=600,
+                width=1200
+            )
+            
+            # Show plot
+            fig.show()
+            
+            # Log debug info
+            self.timeprint(f"Debug Plot Updated | Latest Signal: {signal_names.get(latest_signal, 'UNKNOWN')} | Position: {signal_names.get(latest_position, 'UNKNOWN')} | Data Points: {len(plot_data)}", color="magenta")
+            
+            # Print data quality info
+            self._print_data_quality_info(plot_data)
+            
+        except Exception as e:
+            logger.error(f"Error creating debug plot: {e}")
+            self.timeprint(f"Debug plot error: {e}", color="red")
+    
+    def _print_data_quality_info(self, data: pd.DataFrame):
+        """Print data quality information for debugging"""
+        try:
+            if data.empty:
+                self.timeprint("Data Quality: EMPTY DATASET", color="red")
+                return
+            
+            # Check for missing values
+            missing_data = data.isnull().sum()
+            if missing_data.any():
+                self.timeprint(f"Data Quality: Missing values found - {missing_data[missing_data > 0].to_dict()}", color="yellow")
+            
+            # Check for price anomalies
+            price_cols = ['Open', 'High', 'Low', 'Close']
+            for col in price_cols:
+                if col in data.columns:
+                    if (data[col] <= 0).any():
+                        self.timeprint(f"Data Quality: Zero/negative prices in {col}", color="red")
+                    
+                    # Check for extreme price movements
+                    pct_change = data[col].pct_change().abs()
+                    extreme_moves = pct_change > 0.5  # 50% price change
+                    if extreme_moves.any():
+                        self.timeprint(f"Data Quality: Extreme price movements detected in {col}", color="yellow")
+            
+            # Check OHLC logic
+            if all(col in data.columns for col in price_cols):
+                invalid_ohlc = (data['High'] < data['Low']) | (data['High'] < data['Open']) | (data['High'] < data['Close']) | (data['Low'] > data['Open']) | (data['Low'] > data['Close'])
+                if invalid_ohlc.any():
+                    self.timeprint(f"Data Quality: Invalid OHLC logic detected in {invalid_ohlc.sum()} rows", color="red")
+            
+            # Check time consistency
+            if len(data) > 1:
+                time_diffs = data.index.to_series().diff().dropna()
+                if len(time_diffs.unique()) > 3:  # Allow some variation
+                    self.timeprint("Data Quality: Inconsistent time intervals detected", color="yellow")
+            
+            # Overall data summary
+            latest_candle = data.iloc[-1]
+            self.timeprint(f"Data Quality: {len(data)} candles, Latest: O:{latest_candle.get('Open', 'N/A'):.4f} H:{latest_candle.get('High', 'N/A'):.4f} L:{latest_candle.get('Low', 'N/A'):.4f} C:{latest_candle.get('Close', 'N/A'):.4f}", color="cyan")
+            
+        except Exception as e:
+            self.timeprint(f"Error checking data quality: {e}", color="red")
 
 class LiveTradingMonitor:
     """Monitor and display live trading system status."""
