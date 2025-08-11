@@ -293,6 +293,7 @@ class QuantitativeScreener:
         
         best_row = self.results.loc[self.results['metric'].idxmax() if self.direction == "maximize" else self.results['metric'].idxmin()]
         return {
+            "strategy": self.strategy_func.__name__,
             "symbol": best_row["symbol"],
             "interval": best_row["interval"],
             "metric": best_row["metric"],
@@ -355,8 +356,8 @@ class QuantitativeScreener:
 if __name__ == "__main__":
     qs = QuantitativeScreener(
         symbols=["SOL-USDT"],
-        days=10,
-        intervals=["5m"],
+        days=50,
+        intervals=["15m"],
         age_days=0,
         data_source="binance",
         initial_capital=100,
@@ -367,16 +368,16 @@ if __name__ == "__main__":
     qs.optimize(
         strategy_func=strategy.trend_reversal_strategy,
         param_space={
-            "supertrend_window": (1,200),
-            "supertrend_multiplier": (1,200),
-            "bb_window": (1,200),
-            "bb_dev": (1,200),
-            "bbw_ma_window": (1,200),
+            "supertrend_window": (1,50),
+            "supertrend_multiplier": (1,10),
+            "bb_window": (1, 200),
+            "bb_dev": (1,5),
+            "bbw_ma_window": (1,50),
         },
-        float_exceptions=[],
+        float_exceptions=["supertrend_multiplier"],
         fixed_exceptions=[],
-        metric="Alpha",
-        n_trials=500,
+        metric="Sharpe_Ratio",
+        n_trials=1000,
         direction="maximize",
         save_params=False
     )

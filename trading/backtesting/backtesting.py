@@ -750,24 +750,19 @@ if __name__ == "__main__":
         reinvest=False,
         leverage=1
     )
+
+    optim_set = {'symbol': 'SOL-USDT', 'interval': '15m', 'metric': np.float64(10.340510002150115), 'params': {'supertrend_window': 8, 'supertrend_multiplier': 1.224743711629419, 'bb_window': 55, 'bb_dev': 2, 'bbw_ma_window': 10}}
+
     backtest.fetch_data(
-        symbol="BTC-USDT",
-        chunks=10,
-        interval="1m",
+        symbol=optim_set['symbol'],
+        days=100,
+        interval=optim_set['interval'],
         age_days=0,
         data_source="binance",
-        use_cache=False
+        use_cache=True
     )
 
-    params = {
-            'supertrend_window': 10,
-            'supertrend_multiplier': 2,
-            'bb_window': 20,
-            'bb_dev': 2,
-            'bbw_ma_window': 13
-        }
-    
-    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **params)
+    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **optim_set['params'])
 
     print(backtest.get_performance_metrics())
     backtest.plot_performance(extended=False)
