@@ -127,7 +127,6 @@ class JupiterWalletHandler:
         if token_address == "So11111111111111111111111111111111111111112":
             token_address = "SOL"
         wallet_info = self.get_wallet_balances(self.wallet_address)
-        print(wallet_info)
         return wallet_info[token_address]["uiAmount"]
             
 
