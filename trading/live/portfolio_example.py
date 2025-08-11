@@ -4,6 +4,7 @@ import sys
 from rich.console import Console
 from typing import Dict
 import requests
+import numpy as np
 
 sys.path.append("trading")
 sys.path.append("trading/backtesting")
@@ -43,7 +44,7 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
         if jupiter_price is None:
             console.print(f"[red]Warning: Could not get Jupiter price, using Binance price ${binance_price:.2f}[/red]")
             execution_price = binance_price
-            jupiter_slippage_bps = 50.0  # Default 0.5% slippage
+            jupiter_slippage_bps = 5.0  # Default 0.05% slippage
         else:
             execution_price = jupiter_price
             
@@ -78,8 +79,8 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
                 price_diff = jupiter_price - binance_price
                 price_diff_pct = (price_diff / binance_price) * 100
                 console.print(f"[yellow]Price Difference: Binance ${binance_price:.2f} vs Jupiter ${jupiter_price:.2f} ({price_diff_pct:+.2f}%)[/yellow]")
-        else:  # HOLD (0) - no trade
-            jupiter_slippage_bps = 50.0  # Default slippage for HOLD
+        elif new_signal == 0:
+            jupiter_slippage_bps = 0.00
             trade_result = portfolio.execute_trade(new_signal, execution_price, timestamp, slippage_bps=jupiter_slippage_bps)
         
         if trade_result['action'] != 'HOLD':
@@ -152,14 +153,16 @@ async def run_single_coin_test(webhook_url: str = None, private_key: str = None)
     console = Console()
     
     callback = create_enhanced_portfolio_callback(portfolio, wallethandler, console, log_interval=1, webhook_url=webhook_url)
+
+    optim_set = {'symbol': 'SOL-USDT', 'interval': '15m', 'metric': np.float64(10.340510002150115), 'params': {'supertrend_window': 8, 'supertrend_multiplier': 1.224743711629419, 'bb_window': 55, 'bb_dev': 2, 'bbw_ma_window': 10}}
         
     system = LiveTradingSystem(
-        symbol="SOL-USDT",
-        interval="30m",
+        symbol=optim_set['symbol'],
+        interval=optim_set['interval'],
         data_source="binance",
         buffer_size=500,
-        strategy_func=strategy.trend_strategy,
-        strategy_params={"supertrend_window":75, "supertrend_multiplier":0.6},
+        strategy_func=strategy.trend_reversal_strategy,
+        strategy_params=optim_set['params'],
         signal_callback=callback
     )
     

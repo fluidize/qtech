@@ -14,6 +14,7 @@ class Token:
     wBTC = "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"
     cbBTC = "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij"
     wETH = "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"
+    JitoSOL = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"
 
 def get_token_info(contract_address: str) -> Dict:
     url = f"https://lite-api.jup.ag/tokens/v1/token/{contract_address}"
@@ -33,6 +34,7 @@ class JupiterWalletHandler:
     def __init__(self, private_key: str):
         self.private_key = private_key
         self.wallet = Keypair.from_bytes(base58.b58decode(private_key))
+        self.wallet_address = self.wallet.pubkey()
     
     def get_order(self, input_mint: str, output_mint: str, input_amount: float, retry: bool = True, retry_limit: int = 5) -> Optional[Tuple[float, float, float, float, float, float, str]]:
         """
@@ -50,7 +52,7 @@ class JupiterWalletHandler:
                     "inputMint": input_mint,
                     "outputMint": output_mint,
                     "amount": raw_input_amount,
-                    "taker": str(self.wallet.pubkey()),
+                    "taker": str(self.wallet_address),
                 }
 
                 response = requests.get("https://lite-api.jup.ag/ultra/v1/order", params=order_params)
@@ -76,11 +78,11 @@ class JupiterWalletHandler:
             return None
         
     def execute_order(self, unsigned_tx: str, request_id: str):
-        bytes = base64.b64decode(unsigned_tx)
-        raw_tx = VersionedTransaction.from_bytes(bytes)
+        tx_bytes = base64.b64decode(unsigned_tx)
+        raw_tx = VersionedTransaction.from_bytes(tx_bytes)
 
         account_keys = raw_tx.message.account_keys
-        wallet_index = account_keys.index(self.wallet.pubkey())
+        wallet_index = account_keys.index(self.wallet_address)
 
         signers = list(raw_tx.signatures)
         signers[wallet_index] = self.wallet
@@ -116,10 +118,19 @@ class JupiterWalletHandler:
         in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx, request_id = self.get_order(input_mint, output_mint, input_amount, retry, retry_limit)
         signature = self.execute_order(unsigned_tx, request_id)
         return signature
+
+    def get_wallet_balances(self, wallet_address):
+        response = requests.get(f"https://lite-api.jup.ag/ultra/v1/balances/{wallet_address}")
+        return response.json()
+
+    def get_wallet_token_amount(self, token_address):
+        if token_address == "So11111111111111111111111111111111111111112":
+            token_address = "SOL"
+        wallet_info = self.get_wallet_balances(self.wallet_address)
+        return wallet_info[token_address]["uiAmount"]
             
 
 if __name__ == "__main__":
-    jupiter = JupiterWalletHandler("2BmZhw6gq2VyyvQNhzbXSPp1riXVDQqfiBNPeALf54gsZ9Wh4bLzQrzbysRUgxZVmi862VcXTwFvcAnfC1KYwWsz") #placeholder
-    for i in range(10):
-        result = jupiter.get_order(Token.USDC, Token.SOL, 2)
-        print(result)
+    jupiter = JupiterWalletHandler("") #placeholder
+    
+    jupiter.order_and_execute(Token.JitoSOL, Token.USDC, jupiter.get_wallet_token_amount(Token.JitoSOL))

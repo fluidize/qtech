@@ -46,21 +46,22 @@ class VectorizedBacktesting:
 
     def fetch_data(self,
         symbol: str = "None",
-        chunks: int = "None",
+        days: int = "None",
         interval: str = "None",
         age_days: int = "None",
         data_source: str = "kucoin",
-        verbose: bool = True
+        verbose: bool = True,
+        use_cache: bool = True
     ):
         self.symbol = symbol
-        self.chunks = chunks
+        self.days = days
         self.interval = interval
         self.age_days = age_days
         self.data_source = data_source
-        if any([symbol, chunks, interval, age_days]) == "None":
+        if any([symbol, days, interval, age_days]) == "None":
             pass
         else:
-            self.data = mt.fetch_data(symbol, chunks, interval, age_days, data_source=data_source, verbose=verbose)
+            self.data = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, verbose=verbose, use_cache=use_cache)
             # self._validate_data_quality()
             self._set_n_days()
 
@@ -749,17 +750,19 @@ if __name__ == "__main__":
         reinvest=False,
         leverage=1
     )
+
+    optim_set = {'symbol': 'SOL-USDT', 'interval': '15m', 'metric': np.float64(10.340510002150115), 'params': {'supertrend_window': 8, 'supertrend_multiplier': 1.224743711629419, 'bb_window': 55, 'bb_dev': 2, 'bbw_ma_window': 10}}
+
     backtest.fetch_data(
-        symbol="SOL-USDT",
-        chunks=50,
-        interval="5m",
+        symbol=optim_set['symbol'],
+        days=100,
+        interval=optim_set['interval'],
         age_days=0,
-        data_source="kucoin"
+        data_source="binance",
+        use_cache=True
     )
 
-    params = {}
-    
-    backtest.run_strategy(strategy.heikin_ashi_strategy, verbose=True, **params)
+    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **optim_set['params'])
 
     print(backtest.get_performance_metrics())
     backtest.plot_performance(extended=False)

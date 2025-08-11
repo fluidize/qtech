@@ -205,11 +205,11 @@ def trend_reversal_strategy(
     
     return signals
 
-def ma_crossover_strategy(data: pd.DataFrame, ma_fast: int = 50, ma_slow: int = 200) -> pd.Series:
+def ma_crossover_strategy(data: pd.DataFrame, fast_period: int = 50, slow_period: int = 200) -> pd.Series:
     signals = pd.Series(0, index=data.index)
 
-    ma_fast = ta.sma(data['Close'], timeperiod=ma_fast) 
-    ma_slow = ta.sma(data['Close'], timeperiod=ma_slow)
+    ma_fast = ta.sma(data['Close'], timeperiod=fast_period) 
+    ma_slow = ta.sma(data['Close'], timeperiod=slow_period)
     signals[ma_fast > ma_slow] = 3
     signals[ma_fast < ma_slow] = 2
 
