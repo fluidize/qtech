@@ -35,7 +35,8 @@ async def debug_live_trading():
         },
         debug_plot=True,  # Enable debug plotting
         debug_plot_window=500,  # Show last 50 candles
-        signal_callback=debug_signal_callback
+        signal_callback=debug_signal_callback,
+        always_call_callback=True
     )
     
     print("Starting live trading system with debug plotting...")
@@ -51,7 +52,7 @@ async def debug_live_trading():
 
 def debug_signal_callback(signal_info):
     """Callback function to handle signal changes"""
-    print(f"🚨 SIGNAL CHANGE: {signal_info['action']} @ ${signal_info['current_price']:.4f}")
+    print(f"🚨 SIGNAL: {signal_info['action']} @ ${signal_info['current_price']:.4f}")
     print(f"   Previous: {signal_info['previous_signal']} -> New: {signal_info['new_signal']}")
     print(f"   Time: {signal_info['timestamp'].strftime('%H:%M:%S')}")
     print("-" * 50)

@@ -16,8 +16,9 @@ import strategy
 
 def create_discord_callback(webhook_url: str):
     def discord_callback(signal_info: Dict):
-        webhook = DiscordWebhook(url=webhook_url)
+        # Only send Discord notifications on actual signal changes, not on every candle close
         if signal_info['new_signal'] != signal_info['previous_signal'] and signal_info['new_signal'] != 0:
+            webhook = DiscordWebhook(url=webhook_url)
             if signal_info['new_signal'] == 3:
                 color = "39FF14"
             elif signal_info['new_signal'] == 2:
@@ -45,7 +46,8 @@ async def main(webhook_url: str = None):
         buffer_size=500,
         strategy_func=strategy.trend_reversal_strategy,
         strategy_params=params,
-        signal_callback=discord_callback
+        signal_callback=discord_callback,
+        always_call_callback=True
     )
 
     if webhook_url:

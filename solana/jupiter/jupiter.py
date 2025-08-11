@@ -131,6 +131,4 @@ class JupiterWalletHandler:
             
 
 if __name__ == "__main__":
-    jupiter = JupiterWalletHandler("") #placeholder
-    
-    jupiter.order_and_execute(Token.JitoSOL, Token.USDC, jupiter.get_wallet_token_amount(Token.JitoSOL))
+    jupiter = JupiterWalletHandler("")

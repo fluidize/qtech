@@ -38,6 +38,7 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
         timestamp = signal_info['timestamp']
         binance_price = float(signal_info['current_price'])  # This is the Binance SOL-USDT price for signals
         new_signal = signal_info['new_signal']
+        last_signal = signal_info['previous_signal']
         
         # Get real Jupiter SOL-USDC price for execution
         jupiter_price = jup.get_usd_price(jup.Token.SOL)
@@ -57,7 +58,7 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
         # debug_order = wallethandler.get_order(jup.Token.USDC, jup.Token.SOL, estimated_trade_size_usd)
         # print(debug_order)
 
-        if new_signal != 0:  # Not HOLD - execute trade
+        if (new_signal != 0) & (new_signal != last_signal):  # Not HOLD - execute trade
             if new_signal == 1:  # SHORT
                 order_result = wallethandler.get_order(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol, retry=True)
             elif new_signal == 3:  # LONG
@@ -80,8 +81,22 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
                 price_diff_pct = (price_diff / binance_price) * 100
                 console.print(f"[yellow]Price Difference: Binance ${binance_price:.2f} vs Jupiter ${jupiter_price:.2f} ({price_diff_pct:+.2f}%)[/yellow]")
         elif new_signal == 0:
+            # HOLD signal - don't execute trade, just update portfolio tracking
             jupiter_slippage_bps = 0.00
-            trade_result = portfolio.execute_trade(new_signal, execution_price, timestamp, slippage_bps=jupiter_slippage_bps)
+            # Only execute trade if we have an open position to maintain
+            if portfolio.position != 0:
+                trade_result = portfolio.execute_trade(new_signal, execution_price, timestamp, slippage_bps=jupiter_slippage_bps)
+            else:
+                # No position to maintain, just create a dummy trade result for logging
+                trade_result = {
+                    'action': 'HOLD',
+                    'position_change': 0.0,
+                    'slippage_cost': 0.0,
+                    'post_trade_value': portfolio.get_portfolio_value(execution_price),
+                    'execution_price': execution_price,
+                    'slippage_bps_used': jupiter_slippage_bps,
+                    'pre_trade_value': portfolio.get_portfolio_value(execution_price)
+                }
         
         if trade_result['action'] != 'HOLD':
             trade_count += 1
@@ -107,7 +122,8 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
                 pnl_color = 'green' if realized_pnl >= 0 else 'red'
                 console.print(f"[{pnl_color}]  Realized P&L: ${realized_pnl:+.2f}[/{pnl_color}]")
         
-        if trade_count > 0 and trade_count % log_interval == 0:
+        # Only log portfolio statistics on actual trades, not on every candle close
+        if trade_result['action'] != 'HOLD' and trade_count > 0 and trade_count % log_interval == 0:
             stats = portfolio.get_statistics()
             console.print(f"[cyan]{'='*60}[/cyan]")
             console.print(f"[cyan]PORTFOLIO STATISTICS (Trade #{trade_count})[/cyan]")
@@ -163,7 +179,8 @@ async def run_single_coin_test(webhook_url: str = None, private_key: str = None)
         buffer_size=500,
         strategy_func=strategy.trend_reversal_strategy,
         strategy_params=optim_set['params'],
-        signal_callback=callback
+        signal_callback=callback,
+        always_call_callback=True
     )
     
     if webhook_url:

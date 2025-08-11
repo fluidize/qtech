@@ -28,17 +28,16 @@ def create_trader_callback(wallethandler: jup.JupiterWalletHandler, webhook_url:
     
     def trader_callback(signal_info: Dict):
         new_signal = signal_info['new_signal']
+        last_signal = signal_info['previous_signal']
         
-        if new_signal != 0:
+        if (new_signal != 0) & (new_signal != last_signal):
             estimated_trade_size_sol = 1.0
             estimated_trade_size_usd = 100.0
             
-            if new_signal == 1:
-                wallethandler.get_order(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol, retry=True)
+            if new_signal == 2:
+                wallethandler.order_and_execute(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol, retry=True)
             elif new_signal == 3:
-                wallethandler.get_order(jup.Token.USDC, jup.Token.SOL, estimated_trade_size_usd, retry=True)
-            else:
-                wallethandler.get_order(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol, retry=True)
+                wallethandler.order_and_execute(jup.Token.USDC, jup.Token.SOL, estimated_trade_size_usd, retry=True)
 
     return trader_callback
 
@@ -61,7 +60,8 @@ async def run_live_trader(webhook_url: str = None, private_key: str = None):
         buffer_size=500,
         strategy_func=strategy.trend_reversal_strategy,
         strategy_params=optim_set['params'],
-        signal_callback=callback
+        signal_callback=callback,
+        always_call_callback=True
     )
     
     try:

@@ -45,6 +45,7 @@ class LiveTradingSystem:
         strategy_func: Callable = None,
         strategy_params: Dict = None,
         signal_callback: Callable = None,
+        always_call_callback: bool = True,
         debug_plot: bool = False,
         debug_plot_window: int = 100
     ):
@@ -58,6 +59,7 @@ class LiveTradingSystem:
             strategy_func: Strategy function from Strategy class
             strategy_params: Parameters for the strategy
             signal_callback: Function to call when new signal is generated
+            always_call_callback: If True, callback is called on every candle close regardless of signal changes
             debug_plot: Enable debug plotting on each candle close
             debug_plot_window: Number of recent candles to show in debug plot
         """
@@ -68,6 +70,7 @@ class LiveTradingSystem:
         self.strategy_func = strategy_func
         self.strategy_params = strategy_params or {}
         self.signal_callback = signal_callback
+        self.always_call_callback = always_call_callback
         self.debug_plot = debug_plot
         self.debug_plot_window = debug_plot_window
         
@@ -83,14 +86,12 @@ class LiveTradingSystem:
         
         # State management
         self.running = False
-        self.last_signal = 0  # Start with HOLD position (0) instead of FLAT (2)
+        self.last_signal = 0  # Start with HOLD position. Last signal is either 1, 2, or 3, never 0 following init.
         self.signal_history = deque(maxlen=100)
         self.last_data_is_closed = False  # Track if last candle was closed
         
-        # Console for rich output
         self.console = Console()
         
-        # Data provider will be initialized async in start() method
         self._initialized = False
     
     async def _initialize_provider(self):
@@ -259,29 +260,31 @@ class LiveTradingSystem:
     
     def _handle_signal_change(self, new_signal: int):
         """Handle when strategy generates a new signal. Adds signal info to instance log and prints to console."""
-        if new_signal != self.last_signal:
-            # Get current price from current_data, buffer, or dataframe
-            current_price = 0
-            if not self.current_data.empty:
-                current_price = self.current_data['Close'].iloc[-1]
-            elif self.data_buffer:
-                current_price = self.data_buffer[-1]['Close']
-            
-            signal_info = {
-                'timestamp': datetime.now(),
-                'symbol': self.symbol,
-                'previous_signal': self.last_signal,
-                'new_signal': new_signal,
-                'current_price': current_price,
-                'action': self._signal_to_action(self.last_signal, new_signal)
-            }
-            
+        # Get current price from current_data, buffer, or dataframe
+        current_price = 0
+        if not self.current_data.empty:
+            current_price = self.current_data['Close'].iloc[-1]
+        elif self.data_buffer:
+            current_price = self.data_buffer[-1]['Close']
+        
+        # Always create signal info for callback
+        signal_info = {
+            'timestamp': datetime.now(),
+            'symbol': self.symbol,
+            'previous_signal': self.last_signal,
+            'new_signal': new_signal,
+            'current_price': current_price,
+            'action': self._signal_to_action(self.last_signal, new_signal)
+        }
+        
+        # Call user callback if provided (either always or only on signal changes)
+        if self.signal_callback and (self.always_call_callback or new_signal != 0):
+            self.signal_callback(signal_info)
+        
+        # Only log and track signal changes
+        if (new_signal != self.last_signal) & (new_signal != 0):
             self.signal_history.append(signal_info)
             self.last_signal = new_signal
-            
-            # Call user callback if provided
-            if self.signal_callback:
-                self.signal_callback(signal_info)
             
             # Log the signal
             self._log_signal(signal_info)
@@ -290,7 +293,7 @@ class LiveTradingSystem:
         """Convert signal change to human-readable action."""
         signal_names = {0: 'HOLD', 1: 'SHORT', 2: 'FLAT', 3: 'LONG'}
         
-        if old_signal == new_signal:
+        if (old_signal == new_signal) or (new_signal == 0):
             return f"MAINTAIN {signal_names.get(new_signal, 'UNKNOWN')}"
         
         old_name = signal_names.get(old_signal, 'UNKNOWN')
@@ -299,10 +302,6 @@ class LiveTradingSystem:
         if new_signal == 2:  # Going to flat
             return f"CLOSE {old_name} → FLAT"
         elif old_signal == 2:  # Opening from flat
-            return f"OPEN {new_name}"
-        elif new_signal == 0:  # Going to hold
-            return f"HOLD {old_name} → HOLD"
-        elif old_signal == 0:  # Opening from hold
             return f"OPEN {new_name}"
         else:  # Direct switch
             return f"SWITCH {old_name} → {new_name}"
