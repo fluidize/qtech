@@ -97,6 +97,16 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
                     'slippage_bps_used': jupiter_slippage_bps,
                     'pre_trade_value': portfolio.get_portfolio_value(execution_price)
                 }
+        else:
+            trade_result = {
+                'action': 'HOLD',
+                'position_change': 0.0,
+                'slippage_cost': 0.0,
+                'post_trade_value': portfolio.get_portfolio_value(execution_price),
+                'execution_price': execution_price,
+                'slippage_bps_used': 0.0,
+                'pre_trade_value': portfolio.get_portfolio_value(execution_price)
+            }
         
         if trade_result['action'] != 'HOLD':
             trade_count += 1
