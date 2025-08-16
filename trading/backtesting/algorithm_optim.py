@@ -356,8 +356,8 @@ class QuantitativeScreener:
 if __name__ == "__main__":
     qs = QuantitativeScreener(
         symbols=["SOL-USDT"],
-        days=50,
-        intervals=["15m"],
+        days=100,
+        intervals=["5m"],
         age_days=0,
         data_source="binance",
         initial_capital=100,
@@ -366,17 +366,13 @@ if __name__ == "__main__":
     )
 
     qs.optimize(
-        strategy_func=strategy.trend_reversal_strategy,
+        strategy_func=strategy.indicator_plot,
         param_space={
-            "supertrend_window": (1,50),
-            "supertrend_multiplier": (1,10),
-            "bb_window": (1, 200),
-            "bb_dev": (1,5),
-            "bbw_ma_window": (1,50),
+            "threshold": (0.0, 1.0),
         },
-        float_exceptions=["supertrend_multiplier"],
+        float_exceptions=["threshold"],
         fixed_exceptions=[],
-        metric="Sharpe_Ratio",
+        metric="Alpha",
         n_trials=1000,
         direction="maximize",
         save_params=False

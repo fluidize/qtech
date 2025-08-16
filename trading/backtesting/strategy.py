@@ -110,7 +110,8 @@ def signal_spam(data: pd.DataFrame) -> pd.Series:
     signals[data['Close'] > data['Open']] = 3
     signals[data['Close'] < data['Open']] = 1
     return signals
-def indicator_plot(data: pd.DataFrame) -> None:
+
+def indicator_plot(data: pd.DataFrame, threshold: float = 0.0) -> None:
     signals = pd.Series(0, index=data.index)
 
     def efficient_work(close: pd.Series, length: int = 1) -> pd.Series:
@@ -162,15 +163,17 @@ def indicator_plot(data: pd.DataFrame) -> None:
             ((bar_dn & rising_volume) * 2).astype(int)
         )
 
-        # range of weights
-        weight_range = np.where(rising_volume.isna(), 11.0, 13.0)
-
         # final sott line
-        result = (up - dn) / weight_range
+        result = (up - dn) / 13.0
 
         return result
 
-    return signals, sott(data)
+    sott = sott(data)
+    sott = ta.sma(sott, timeperiod=20)
+    signals[sott >= threshold] = 2
+    signals[sott <= -threshold] = 3
+
+    return signals, sott
 
 def perfect_strategy(data: pd.DataFrame) -> pd.Series:
     """

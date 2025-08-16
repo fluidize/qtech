@@ -776,15 +776,15 @@ if __name__ == "__main__":
     )
 
     backtest.fetch_data(
-        symbol="BTC-USDT",
-        days=1,
+        symbol="SOL-USDT",
+        days=100,
         interval="5m",
         age_days=0,
         data_source="binance",
         use_cache=True
     )
 
-    backtest.run_strategy(strategy.indicator_plot, verbose=True)
+    backtest.run_strategy(strategy.indicator_plot, verbose=True, threshold=0.0)
 
     print(backtest.get_performance_metrics())
     backtest.plot_performance(extended=False)
