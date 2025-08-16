@@ -242,7 +242,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
     else:
         raise ValueError(f"Unknown data_source: {data_source}. Choose from 'binance', 'kucoin', 'yfinance'.")
 
-    if use_cache and not data.empty and len(data) > 0:
+    if not data.empty and len(data) > 0:
         try:
             data.to_parquet(cache_file)
             print(f"[blue]Data cached to {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB)")
