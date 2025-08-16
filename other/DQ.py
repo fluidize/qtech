@@ -9,16 +9,20 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch import nn
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 class brain(nn.Module):
     def __init__(self, state_dim: int, action_dim: int):
         super().__init__()
         self.fc1 = nn.Linear(state_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, action_dim)
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, action_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = self.fc1(x)
+        
+        x = self.fc2(x)
+
         x = self.fc3(x)
         return x
 
@@ -56,7 +60,7 @@ class BlackjackAgent:
         print(env.observation_space)
         print(env.action_space)
 
-        self.model = brain(state_dim=len(env.observation_space), action_dim=env.action_space.n)
+        self.model = brain(state_dim=len(env.observation_space), action_dim=env.action_space.n).to(device)
 
         self.training_error = []
 
@@ -69,7 +73,7 @@ class BlackjackAgent:
         if np.random.random() < self.epsilon:
             return self.env.action_space.sample()
         else:
-            return int(np.argmax(self.model(torch.tensor(obs, dtype=torch.float32)).detach().numpy()))
+            return int(np.argmax(self.model(torch.tensor(obs, dtype=torch.float32).to(device)).detach().numpy()))
 
     def update(
         self,
@@ -85,12 +89,12 @@ class BlackjackAgent:
         """
 
         #future_q_value = (not terminated) * np.max(self.q_values[next_obs])
-        future_q_value = (not terminated) * self.model(torch.tensor(next_obs, dtype=torch.float32)).max()
+        future_q_value = (not terminated) * self.model(torch.tensor(next_obs, dtype=torch.float32).to(device)).max()
 
         target = reward + self.discount_factor * future_q_value
 
         #temporal_difference = target - self.q_values[obs][action]
-        temporal_difference = target - self.model(torch.tensor(obs, dtype=torch.float32))[action]
+        temporal_difference = target - self.model(torch.tensor(obs, dtype=torch.float32).to(device))[action]
 
         #self.q_values[obs][action] = (
         #    self.q_values[obs][action] + self.lr * temporal_difference
@@ -98,7 +102,7 @@ class BlackjackAgent:
 
         X = torch.tensor(obs, dtype=torch.float32)
         y = torch.tensor(target, dtype=torch.float32)
-        yhat = self.model(X)
+        yhat = self.model(X.to(device))
 
         criterion = nn.MSELoss()
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
@@ -119,7 +123,7 @@ learning_rate = 0.01
 n_episodes = 100000
 start_epsilon = 1.0
 epsilon_decay = start_epsilon / (n_episodes / 2)
-final_epsilon = 0.1
+final_epsilon = 0.01
 
 # Create environment and agent
 env = gym.make("Blackjack-v1", sab=False)
