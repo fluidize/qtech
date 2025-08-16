@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import time
-from scipy.stats import percentileofscore
+from scipy.stats import alpha, percentileofscore
 from scipy import signal
 from typing import Optional
 
@@ -26,8 +26,8 @@ def ema(series: pd.Series, timeperiod: int = 20) -> pd.Series:
 def rsi(series: pd.Series, timeperiod: int = 14) -> pd.Series:
     """Relative Strength Index"""
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=timeperiod).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=timeperiod).mean()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/timeperiod, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/timeperiod, adjust=False).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
