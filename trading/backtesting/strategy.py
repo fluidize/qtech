@@ -110,6 +110,67 @@ def signal_spam(data: pd.DataFrame) -> pd.Series:
     signals[data['Close'] > data['Open']] = 3
     signals[data['Close'] < data['Open']] = 1
     return signals
+def indicator_plot(data: pd.DataFrame) -> None:
+    signals = pd.Series(0, index=data.index)
+
+    def efficient_work(close: pd.Series, length: int = 1) -> pd.Series:
+        """Efficient Work: net move vs path length, range [-1, 1]."""
+        change = close - close.shift(length)
+        path = close.diff().abs().rolling(length).sum()
+        ew = change / path
+        return ew.fillna(0)
+
+    def sott(df: pd.DataFrame) -> pd.Series:
+        """
+        Signs of the Times (SOTT) indicator.
+        df must contain: ['open', 'high', 'low', 'close', 'volume'].
+        Returns a Series of SOTT values in [-1, 1].
+        """
+        o, h, l, c, v = df['Open'], df['High'], df['Low'], df['Close'], df['Volume']
+
+        bar_up = c > o
+        bar_dn = c < o
+        body   = (c - o).abs()
+        wicks  = h - l - body
+        rising_volume = v.diff(1) > 0
+
+        # up weights
+        up = (
+            (bar_up.astype(int)) +
+            (o > o.shift(1)).astype(int) +
+            (h > h.shift(1)).astype(int) +
+            (l > l.shift(1)).astype(int) +
+            (c > c.shift(1)).astype(int) +
+            ((bar_up & (body > body.shift(1))).astype(int)) +
+            ((bar_up & (body > wicks)).astype(int)) +
+            ((o > c.shift(1)) * 2).astype(int) +
+            (np.maximum(0, efficient_work(c, 1)) * 2) +
+            ((bar_up & rising_volume) * 2).astype(int)
+        )
+
+        # down weights
+        dn = (
+            (bar_dn.astype(int)) +
+            (o < o.shift(1)).astype(int) +
+            (h < h.shift(1)).astype(int) +
+            (l < l.shift(1)).astype(int) +
+            (c < c.shift(1)).astype(int) +
+            ((bar_dn & (body > body.shift(1))).astype(int)) +
+            ((bar_dn & (body > wicks)).astype(int)) +
+            ((o < c.shift(1)) * 2).astype(int) +
+            (np.abs(np.minimum(0, efficient_work(c, 1))) * 2) +
+            ((bar_dn & rising_volume) * 2).astype(int)
+        )
+
+        # range of weights
+        weight_range = np.where(rising_volume.isna(), 11.0, 13.0)
+
+        # final sott line
+        result = (up - dn) / weight_range
+
+        return result
+
+    return signals, sott(data)
 
 def perfect_strategy(data: pd.DataFrame) -> pd.Series:
     """

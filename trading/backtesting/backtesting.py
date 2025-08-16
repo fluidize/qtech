@@ -418,7 +418,7 @@ class VectorizedBacktesting:
                                 y=self.strategy_output[output_idx],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
-                                yaxis='y1'
+                                yaxis='y4'
                             )
                         )
                     else:
@@ -428,7 +428,7 @@ class VectorizedBacktesting:
                                 y=self.strategy_output[output_idx],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
-                                yaxis='y1'
+                                yaxis='y4'
                             )
                         )
             fig.update_layout(
@@ -743,6 +743,30 @@ class VectorizedBacktesting:
         }
 
 if __name__ == "__main__":
+    # backtest = VectorizedBacktesting(
+    #     initial_capital=20,
+    #     slippage_pct=0.00,
+    #     commission_fixed=0.00,
+    #     reinvest=False,
+    #     leverage=1
+    # )
+
+    # optim_set = {'symbol': 'SOL-USDT', 'interval': '15m', 'metric': np.float64(10.340510002150115), 'params': {'supertrend_window': 8, 'supertrend_multiplier': 1.224743711629419, 'bb_window': 55, 'bb_dev': 2, 'bbw_ma_window': 10}}
+
+    # backtest.fetch_data(
+    #     symbol=optim_set['symbol'],
+    #     days=100,
+    #     interval=optim_set['interval'],
+    #     age_days=0,
+    #     data_source="binance",
+    #     use_cache=False
+    # )
+
+    # backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **optim_set['params'])
+
+    # print(backtest.get_performance_metrics())
+    # backtest.plot_performance(extended=False)
+
     backtest = VectorizedBacktesting(
         initial_capital=20,
         slippage_pct=0.00,
@@ -751,18 +775,16 @@ if __name__ == "__main__":
         leverage=1
     )
 
-    optim_set = {'symbol': 'SOL-USDT', 'interval': '15m', 'metric': np.float64(10.340510002150115), 'params': {'supertrend_window': 8, 'supertrend_multiplier': 1.224743711629419, 'bb_window': 55, 'bb_dev': 2, 'bbw_ma_window': 10}}
-
     backtest.fetch_data(
-        symbol=optim_set['symbol'],
-        days=100,
-        interval=optim_set['interval'],
+        symbol="BTC-USDT",
+        days=1,
+        interval="5m",
         age_days=0,
         data_source="binance",
         use_cache=True
     )
 
-    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **optim_set['params'])
+    backtest.run_strategy(strategy.indicator_plot, verbose=True)
 
     print(backtest.get_performance_metrics())
     backtest.plot_performance(extended=False)
