@@ -9,21 +9,24 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch import nn
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda")
 
 class brain(nn.Module):
     def __init__(self, state_dim: int, action_dim: int):
         super().__init__()
         self.fc1 = nn.Linear(state_dim, 128)
         self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, action_dim)
+        self.fc3 = nn.Linear(64, 32)
+        self.fc4 = nn.Linear(32, action_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.fc1(x)
+        x = F.relu(self.fc1(x))
         
-        x = self.fc2(x)
+        x = F.relu(self.fc2(x))
 
-        x = self.fc3(x)
+        x = F.relu(self.fc3(x))
+
+        x = self.fc4(x)
         return x
 
 class BlackjackAgent:
@@ -73,7 +76,9 @@ class BlackjackAgent:
         if np.random.random() < self.epsilon:
             return self.env.action_space.sample()
         else:
-            return int(np.argmax(self.model(torch.tensor(obs, dtype=torch.float32).to(device)).detach().numpy()))
+            obs_tensor = torch.tensor(obs, dtype=torch.float32, device=device)
+            q_values = self.model(obs_tensor).detach()
+            return int(q_values.argmax().cpu().numpy())
 
     def update(
         self,
@@ -100,9 +105,9 @@ class BlackjackAgent:
         #    self.q_values[obs][action] + self.lr * temporal_difference
         #)
 
-        X = torch.tensor(obs, dtype=torch.float32)
-        y = torch.tensor(target, dtype=torch.float32)
-        yhat = self.model(X.to(device))
+        X = torch.tensor(obs, dtype=torch.float32).to(device)
+        y = torch.tensor(target.detach().clone(), dtype=torch.float32).to(device)
+        yhat = self.model(X)
 
         criterion = nn.MSELoss()
         optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
@@ -112,7 +117,7 @@ class BlackjackAgent:
         optimizer.step()
         
 
-        self.training_error.append(temporal_difference.detach().numpy())
+        self.training_error.append(temporal_difference.cpu().detach().numpy())
 
     def decay_epsilon(self):
         """Reduce exploration rate after each episode."""
@@ -120,7 +125,7 @@ class BlackjackAgent:
 
 # Training hyperparameters
 learning_rate = 0.01
-n_episodes = 100000
+n_episodes = 20000
 start_epsilon = 1.0
 epsilon_decay = start_epsilon / (n_episodes / 2)
 final_epsilon = 0.01
