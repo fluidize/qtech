@@ -9,9 +9,9 @@ import plotly.io as pio
 pio.renderers.default = "browser"
 
 import sys
-sys.path.append("trading")
+sys.path.append("")
 
-import model_tools as mt
+import trading.model_tools as mt
 import strategy
 import vb_metrics as metrics
 
@@ -22,7 +22,7 @@ class VectorizedBacktesting:
         initial_capital: float = 10000.0,
         slippage_pct: float = 0.001,  # 0.1% slippage per trade
         commission_fixed: float = 1.0,  # Fixed commission per trade in dollars
-        reinvest: bool = True,  # True for compound returns, False for linear returns
+        reinvest: bool = False,  # True for compound returns, False for linear returns
         leverage: float = 1.0,  # Leverage multiplier (1.0 = no leverage, 2.0 = 2x leverage)
     ):
         self.instance_name = instance_name
@@ -784,7 +784,7 @@ if __name__ == "__main__":
         use_cache=True
     )
 
-    backtest.run_strategy(strategy.indicator_plot, verbose=True, threshold=0.0)
+    backtest.run_strategy(strategy.sott_strategy, verbose=True, threshold=0.0)
 
     print(backtest.get_performance_metrics())
     backtest.plot_performance(extended=False)

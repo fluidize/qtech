@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple
-import statsmodels.api as sm
 
 def stateful_position_to_multiplier(position: pd.Series) -> pd.Series:
     """Convert stateful position to multiplier."""

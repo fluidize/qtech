@@ -16,8 +16,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from rich import print
-import technical_analysis as ta
-import smc_analysis as smc
+
+import sys
+sys.path.append("")
+import trading.technical_analysis as ta
+import trading.smc_analysis as smc
 
 def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, verbose: bool = True):
     print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None

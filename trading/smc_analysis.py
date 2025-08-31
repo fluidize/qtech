@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import model_tools as mt
 
 def pivot_points(open: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, window: int = 10) -> np.ndarray:
     """
@@ -73,18 +72,3 @@ def fvg(open: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, pct_
                 fvg.loc[i, "Upper_Range"] = low[i-2]
                 fvg.loc[i, "Direction"] = "Bearish"
     return fvg
-
-if __name__ == "__main__":
-    data = mt.fetch_data("BTC-USDT", 1, "5m", 0, data_source="kucoin", use_cache=True)
-    pivots = pivot_points(data["Open"], data["High"], data["Low"], data["Close"])
-    support, resistance = support_resistance_levels(data["Open"], data["High"], data["Low"], data["Close"])
-    fvg = fvg(data["Open"], data["High"], data["Low"], data["Close"])
-
-    fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=data.index, open=data["Open"], high=data["High"], low=data["Low"], close=data["Close"], name="Close"))
-    
-    # Add support and resistance lines
-    fig.add_trace(go.Scatter(x=data.index, y=support, name="Support", line=dict(color="green", width=1)))
-    fig.add_trace(go.Scatter(x=data.index, y=resistance, name="Resistance", line=dict(color="red", width=1)))
-
-    fig.show()
