@@ -157,15 +157,20 @@ class BayesianOptimizer:
         invalid = float('-inf') if self.direction == "maximize" else float('inf')
 
         def objective(trial):
-            param_dict = self._suggest_params(trial)
+            try:
+                param_dict = self._suggest_params(trial)
 
-            self.engine.run_strategy(self.strategy_func, **param_dict)
-            metrics = self.engine.get_performance_metrics()
+                self.engine.run_strategy(self.strategy_func, **param_dict)
+                metrics = self.engine.get_performance_metrics()
 
-            if metrics[self.metric] == np.nan:
+                if metrics[self.metric] == np.nan or np.isnan(metrics[self.metric]):
+                    return -1000 if self.direction == "maximize" else 1000
+
+                return metrics[self.metric]
+            except Exception as e:
+                # Return a very bad score if the strategy fails, but ensure the trial completes
+                print(f"Trial failed with error: {e}")
                 return -1000 if self.direction == "maximize" else 1000
-
-            return metrics[self.metric]
         
         self.objective_function = objective
 
@@ -173,12 +178,8 @@ class BayesianOptimizer:
         params = {}
         
         for k, v in self.param_space.items():
-            # Check if this is a fixed parameter that should not be optimized
-            is_fixed = k in self.fixed_exceptions
-            
-            if is_fixed:
-                # For fixed parameters, just use the first value if it's a tuple/list, otherwise use the value directly
-                params[k] = v[0] if isinstance(v, (tuple, list)) else v
+            if k in self.fixed_exceptions:
+                params[k] = v[0] if isinstance(v, (tuple, list)) else v # For fixed parameters, just use the first value if it's a tuple/list, otherwise use the value directly
             elif k in self.float_exceptions:
                 params[k] = trial.suggest_float(k, v[0], v[1])
             else:
@@ -188,6 +189,11 @@ class BayesianOptimizer:
     def run(self, show_progress_bar: bool = True):
         study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
         study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=show_progress_bar)
+        
+        # Check if any trials were completed
+        if len(study.trials) == 0 or all(trial.state != optuna.trial.TrialState.COMPLETE for trial in study.trials):
+            raise ValueError("No trials were completed successfully. Check if the strategy function is working properly.")
+        
         self.best_params = study.best_params
         self.best_metric = study.best_value
         return self.best_metric, self.best_params
@@ -196,7 +202,10 @@ class BayesianOptimizer:
         return self.best_params, self.best_metric
 
 class QuantitativeScreener:
-    """Optimize on all symbols and intervals for a given strategy to find the highest performing pairs and timeframes."""
+    """
+    Optimize on all symbols and intervals for a given strategy to find the highest performing pairs and timeframes.
+    Float and fixed exceptions are done by using (float , float) or (n,) respectively.
+    """
     def __init__(self,
                  symbols: List[str],
                  days: int,
@@ -230,9 +239,7 @@ class QuantitativeScreener:
     def optimize(
         self,
         strategy_func: Callable, 
-        param_space: Dict[str, tuple],
-        float_exceptions: List[str] = None, 
-        fixed_exceptions: List[str] = None,
+        param_space: Dict[str, tuple], 
         metric: str = "Total_Return", 
         n_trials: int = 100, 
         direction: str = "maximize", 
@@ -244,6 +251,16 @@ class QuantitativeScreener:
 
         total = len(self.symbols) * len(self.intervals)
         progress_count = 1
+
+        float_exceptions = [] #auto add exceptions
+        fixed_exceptions = []
+        for param in param_space.keys():
+            print(param_space)
+            if len(param_space[param]) == 1:
+                fixed_exceptions.append(param)
+                continue
+            if isinstance(param_space[param][0], float):
+                float_exceptions.append(param)
 
         for symbol in self.symbols:
             for interval in self.intervals:
@@ -354,26 +371,26 @@ class QuantitativeScreener:
         return results_table
 
 if __name__ == "__main__":
+    sol_onchains = ["SOL-USDT", "JTO-USDT", "RAY-USDT", "JUP-USDT", "BONK-USDT", "RENDER-USDT"]
     qs = QuantitativeScreener(
-        symbols=["SOL-USDT"],
+        symbols=sol_onchains,
         days=100,
-        intervals=["5m"],
+        intervals=["1h"],
         age_days=0,
         data_source="binance",
         initial_capital=100,
-        slippage_pct=0.0002,
+        slippage_pct=0.00,
         commission_fixed=0.0
     )
 
     qs.optimize(
-        strategy_func=strategy.indicator_plot,
+        strategy_func=strategy.wavetrend_strategy,
         param_space={
-            "threshold": (0.0, 1.0),
+            "channel_length": (2, 100),
+            "average_length": (2, 100),
         },
-        float_exceptions=["threshold"],
-        fixed_exceptions=[],
         metric="Alpha",
-        n_trials=1000,
+        n_trials=500,
         direction="maximize",
         save_params=False
     )
