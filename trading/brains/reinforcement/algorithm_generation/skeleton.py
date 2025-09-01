@@ -44,8 +44,8 @@ class Skeleton:
 
     def __call__(self, data: pd.DataFrame) -> pd.DataFrame:
         signals = pd.Series(0, index=data.index)
-        long_logic = Logic(Logic.OPERATORS.keys()[self.indicator_params[0]])
-        short_logic = Logic(Logic.OPERATORS.keys()[self.indicator_params[1]])
-        signals[long_logic(self.indicator_func(data['Close'], timeperiod=self.indicator_params[2]), self.long_threshold)] = 3
-        signals[short_logic(self.indicator_func(data['Close'], timeperiod=self.indicator_params[3]), self.short_threshold)] = 1
+        long_logic = Logic(list(Logic.OPERATORS.keys())[self.indicator_params[0]])
+        short_logic = Logic(list(Logic.OPERATORS.keys())[self.indicator_params[1]])
+        signals[long_logic(self.indicator_func(data['Close'], timeperiod=self.indicator_params[2]), self.indicator_params[3])] = 3
+        signals[short_logic(self.indicator_func(data['Close'], timeperiod=self.indicator_params[4]), self.indicator_params[5])] = 1
         return signals
