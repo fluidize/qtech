@@ -1,8 +1,6 @@
 from collections import defaultdict
 import gymnasium as gym
 import numpy as np
-from regex import F
-import torch
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 

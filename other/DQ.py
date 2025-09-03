@@ -60,10 +60,9 @@ class BlackjackAgent:
         self.epsilon_decay = epsilon_decay
         self.final_epsilon = final_epsilon
 
-        print(env.observation_space)
-        print(env.action_space)
-
-        self.model = brain(state_dim=len(env.observation_space), action_dim=env.action_space.n).to(device)
+        self.model = brain(state_dim=len(env.observation_space), action_dim=env.action_space.n)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        self.criterion = nn.MSELoss()
 
         self.training_error = []
 
@@ -76,7 +75,7 @@ class BlackjackAgent:
         if np.random.random() < self.epsilon:
             return self.env.action_space.sample()
         else:
-            obs_tensor = torch.tensor(obs, dtype=torch.float32, device=device)
+            obs_tensor = torch.tensor(obs, dtype=torch.float32)
             q_values = self.model(obs_tensor).detach()
             return int(q_values.argmax().cpu().numpy())
 
@@ -88,34 +87,28 @@ class BlackjackAgent:
         terminated: bool,
         next_obs: tuple[int, int, bool],
     ):
-        """Update Q-value based on experience.
+        """Update Q-value based on experience. any 
 
         This is the heart of Q-learning: learn from (state, action, reward, next_state)
         """
 
-        #future_q_value = (not terminated) * np.max(self.q_values[next_obs])
-        future_q_value = (not terminated) * self.model(torch.tensor(next_obs, dtype=torch.float32).to(device)).max()
+        future_q_value = (not terminated) * self.model(torch.tensor(next_obs, dtype=torch.float32)).max()
 
         target = reward + self.discount_factor * future_q_value
 
-        #temporal_difference = target - self.q_values[obs][action]
-        temporal_difference = target - self.model(torch.tensor(obs, dtype=torch.float32).to(device))[action]
+        temporal_difference = target - self.model(torch.tensor(obs, dtype=torch.float32))[action]
 
-        #self.q_values[obs][action] = (
-        #    self.q_values[obs][action] + self.lr * temporal_difference
-        #)
+        X = torch.tensor(obs, dtype=torch.float32)
+        y = torch.tensor(target.detach().clone(), dtype=torch.float32)
+        yhat = self.model(X)[action] # WE UPDATE BASED ON THE ACTION WE CHOOSE!
+        # print("future_q_value", future_q_value)
+        # print("target", target.detach().clone())
+        # print("yhat", yhat)
 
-        X = torch.tensor(obs, dtype=torch.float32).to(device)
-        y = torch.tensor(target.detach().clone(), dtype=torch.float32).to(device)
-        yhat = self.model(X)
-
-        criterion = nn.MSELoss()
-        optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-        loss = criterion(yhat, y)
-        optimizer.zero_grad()
+        loss = self.criterion(yhat, y)
+        self.optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
-        
+        self.optimizer.step()
 
         self.training_error.append(temporal_difference.cpu().detach().numpy())
 
@@ -123,14 +116,12 @@ class BlackjackAgent:
         """Reduce exploration rate after each episode."""
         self.epsilon = max(self.final_epsilon, self.epsilon - self.epsilon_decay)
 
-# Training hyperparameters
 learning_rate = 0.01
-n_episodes = 20000
+n_episodes = 100000
 start_epsilon = 1.0
-epsilon_decay = start_epsilon / (n_episodes / 2)
+epsilon_decay = 1e-7
 final_epsilon = 0.01
 
-# Create environment and agent
 env = gym.make("Blackjack-v1", sab=False)
 env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=n_episodes)
 
@@ -166,11 +157,9 @@ def get_moving_avgs(arr, window, convolution_mode):
         mode=convolution_mode
     ) / window
 
-# Smooth over a 500-episode window
-rolling_length = 500
+rolling_length = 1000
 fig, axs = plt.subplots(ncols=3, figsize=(12, 5))
 
-# Episode rewards (win/loss performance)
 axs[0].set_title("Episode rewards")
 reward_moving_average = get_moving_avgs(
     env.return_queue,
@@ -181,7 +170,6 @@ axs[0].plot(range(len(reward_moving_average)), reward_moving_average)
 axs[0].set_ylabel("Average Reward")
 axs[0].set_xlabel("Episode")
 
-# Episode lengths (how many actions per hand)
 axs[1].set_title("Episode lengths")
 length_moving_average = get_moving_avgs(
     env.length_queue,
@@ -192,7 +180,6 @@ axs[1].plot(range(len(length_moving_average)), length_moving_average)
 axs[1].set_ylabel("Average Episode Length")
 axs[1].set_xlabel("Episode")
 
-# Training error (how much we're still learning)
 axs[2].set_title("Training Error")
 training_error_moving_average = get_moving_avgs(
     agent.training_error,
