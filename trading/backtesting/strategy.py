@@ -326,7 +326,31 @@ def sott_strategy(data: pd.DataFrame, threshold: float = 0.0) -> None:
 
     return signals
 
-def wavetrend_strategy(data: pd.DataFrame, threshold: float = 0.0) -> pd.Series:
+def wavetrend_strategy(data: pd.DataFrame, channel_length: int = 10, average_length: int = 21, threshold: float = 0.0) -> pd.Series:
     signals = pd.Series(0, index=data.index)
+
+    def wavetrend(data: pd.DataFrame, channel_length: int = 10, average_length: int = 21) -> pd.Series:
+        n1 = channel_length
+        n2 = average_length
+
+        hlc3 = (data['High'] + data['Low'] + data['Close']) / 3
+
+        ap = hlc3
+        esa = ta.ema(ap, n1)
+        d = ta.ema(abs(ap - esa), n1)
+        ci = (ap - esa) / (0.015 * d)
+        tci = ta.ema(ci, n2)
+
+        wt1 = tci
+        wt2 = ta.sma(wt1, 4)
+        
+        return wt1, wt2
+    
+    wt1, wt2 = wavetrend(data, channel_length, average_length) 
+
+    buy_conditions = (wt1 > wt2)
+    sell_conditions = (wt1 < wt2)
+    signals[buy_conditions] = 3
+    signals[sell_conditions] = 1
 
     return signals
