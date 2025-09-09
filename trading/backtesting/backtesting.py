@@ -690,6 +690,9 @@ class VectorizedBacktesting:
 
             end = time.time()
             print(f"[green]Advanced Plotting Done ({end - start:.2f} seconds)[/green]")
+        
+        if mode == "standard" or mode == "extended":
+            fig.show()
 
     def get_cost_summary(self) -> dict:
         """Get a summary of trading costs impact."""

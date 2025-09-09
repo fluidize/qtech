@@ -255,7 +255,6 @@ class QuantitativeScreener:
         float_exceptions = [] #auto add exceptions
         fixed_exceptions = []
         for param in param_space.keys():
-            print(param_space)
             if len(param_space[param]) == 1:
                 fixed_exceptions.append(param)
                 continue
@@ -330,7 +329,7 @@ class QuantitativeScreener:
 
         return self.engine.get_performance_metrics()
     
-    def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
+    def plot_best_performance(self, mode: str = "basic"):
         """Plot the performance of the best parameter combination."""
         best = self.get_best()
         self.engine.fetch_data(
@@ -341,7 +340,7 @@ class QuantitativeScreener:
             data_source=self.data_source
         )
         self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
-        return self.engine.plot_performance(show_graph=show_graph, extended=extended)
+        return self.engine.plot_performance(mode=mode)
     
     def _generate_chart(self, print_results: bool = True):
         """Show the performance chart of all strategies."""
@@ -375,7 +374,7 @@ if __name__ == "__main__":
     qs = QuantitativeScreener(
         symbols=sol_onchains,
         days=100,
-        intervals=["1h"],
+        intervals=["15m", "30m", "1h", "4h"],
         age_days=0,
         data_source="binance",
         initial_capital=100,
@@ -395,8 +394,7 @@ if __name__ == "__main__":
         save_params=False
     )
 
-    qs.plot_best_performance(show_graph=True, extended=False)
-    qs.plot_best_performance(show_graph=True, extended=True)
+    qs.plot_best_performance(mode="basic")
     print(qs.get_best_metrics())
     print(qs.get_best())
 
