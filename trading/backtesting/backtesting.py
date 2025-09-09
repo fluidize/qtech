@@ -7,9 +7,11 @@ import plotly
 import plotly.graph_objects as go
 import plotly.io as pio
 pio.renderers.default = "browser"
+import matplotlib.pyplot as plt
 
 import sys
 sys.path.append("")
+sys.path.append("trading/backtesting")
 
 import trading.model_tools as mt
 import strategy
@@ -51,7 +53,8 @@ class VectorizedBacktesting:
         age_days: int = "None",
         data_source: str = "kucoin",
         verbose: bool = True,
-        use_cache: bool = True
+        use_cache: bool = True,
+        retry: int = 0
     ):
         self.symbol = symbol
         self.days = days
@@ -297,13 +300,20 @@ class VectorizedBacktesting:
             'Combined_Objective': combined_objective,
         }
 
-    def plot_performance(self, show_graph: bool = True, extended: bool = False) -> plotly.graph_objects:
+    def plot_performance(self, mode: str = "basic"):
+        """
+        Modes: "basic", "standard", "extended"
+        """
         if self.data is None or 'Portfolio_Value' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
         summary = self.get_performance_metrics()
+        if mode == "basic":
+            plt.plot(self.data['Datetime'], self.data['Portfolio_Value'])
+            plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | RR: {summary['RR_Ratio']:.3f} | WR: {summary['Win_Rate']*100:.3f}% | PT: {summary['PT_Ratio']*100:.3f}% | PF: {summary['Profit_Factor']:.3f} | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
+            plt.show()
 
-        if not extended:
+        elif mode == "standard":
             #y1 for price, y2 for portfolio, y3 for active returns, y4 for indicators
             fig = go.Figure()
             fig.add_trace(
@@ -477,7 +487,7 @@ class VectorizedBacktesting:
             
             fig.update_yaxes(title_text="Price ($)")
             fig.update_yaxes(title_text="Portfolio Value ($)")
-        else:
+        elif mode == "extended":
             start = time.time()
             fig = go.Figure().set_subplots(
                 rows=4, cols=2,
@@ -681,11 +691,6 @@ class VectorizedBacktesting:
             end = time.time()
             print(f"[green]Advanced Plotting Done ({end - start:.2f} seconds)[/green]")
 
-        if show_graph:
-            fig.show()
-        
-        return fig
-
     def get_cost_summary(self) -> dict:
         """Get a summary of trading costs impact."""
         if self.data is None or 'Position' not in self.data.columns:
@@ -778,14 +783,14 @@ if __name__ == "__main__":
     backtest.fetch_data(
         symbol="SOL-USDT",
         days=100,
-        interval="5m",
+        interval="1h",
         age_days=0,
         data_source="binance",
         use_cache=True
     )
 
-    backtest.run_strategy(strategy.sott_strategy, verbose=True, threshold=0.0)
+    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True)
 
     print(backtest.get_performance_metrics())
-    backtest.plot_performance(extended=False)
+    backtest.plot_performance(mode="basic")
     
