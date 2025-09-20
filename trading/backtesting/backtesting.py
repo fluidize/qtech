@@ -158,6 +158,8 @@ class VectorizedBacktesting:
         - Signal generated at Close[t] using all data up to time t
         - Trade executed at Open[t+1] (next period's open)
         - Return earned from Open[t+1] to Open[t+2]
+
+        Returns a pd.Series of the data.
         """
         if self.data is None or self.data.empty:
             raise ValueError("No data available. Call fetch_data() first.")
@@ -204,13 +206,13 @@ class VectorizedBacktesting:
         # Calculate portfolio value based on reinvestment setting
         if self.reinvest:
             # Compound returns: each period's return compounds on previous value
-            self.data['Cumulative_Returns'] = (1 + self.data['Strategy_Returns']).cumprod()
+            self.data['Percentage_Return'] = (1 + self.data['Strategy_Returns']).cumprod()
             self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
         else:
             # Linear returns: profits don't compound, always trade with initial capital
             self.data['Linear_Profit'] = (self.initial_capital * self.data['Strategy_Returns']).cumsum()
             self.data['Portfolio_Value'] = self.initial_capital + self.data['Linear_Profit']
-            self.data['Cumulative_Returns'] = self.data['Portfolio_Value'] / self.initial_capital
+            self.data['Percentage_Return'] = self.data['Portfolio_Value'] / self.initial_capital
 
         # Calculate drawdowns
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
