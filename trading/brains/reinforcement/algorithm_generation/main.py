@@ -2,7 +2,8 @@ import sys
 sys.path.append("")
 
 from trading.backtesting import backtesting as bt
-from skeleton import Skeleton
+from skeleton import Skeleton, Logic
+import optuna
 
 backtest = bt.VectorizedBacktesting(
     instance_name="default",
@@ -15,14 +16,29 @@ backtest = bt.VectorizedBacktesting(
 
 backtest.fetch_data(
     symbol="SOL-USDT",
-    chunks=20,
+    days=20,
     interval="5m",
     age_days=0,
     data_source="binance",
     use_cache=True
 )
 
-strategy = Skeleton("SMA", [0, 1, 2, 3])
-backtest.run_strategy(strategy, verbose=True)
-print(backtest.get_performance_metrics())
+def objective(trial):
+    try:
+        indicator = trial.suggest_categorical("indicator", list(Skeleton.INDICATORS.keys()))
+        # [longlog, shortlog, longthreshold, shortthreshold, longperiod, shortperiod]
+        values = [trial.suggest_categorical("longlog", list(Logic.OPERATORS.keys())), trial.suggest_categorical("shortlog", list(Logic.OPERATORS.keys())), trial.suggest_int("longthreshold", 0, 100), trial.suggest_int("shortthreshold", 0, 100), trial.suggest_int("longperiod", 0, 100), trial.suggest_int("shortperiod", 0, 100)]
+        strategy = Skeleton(indicator, values)
+        backtest.run_strategy(strategy, verbose=False)
+        return backtest.get_performance_metrics()["Total_Return"]
+    except:
+        return -1000
+
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=10000)
+print(study.best_trial.params)
+print(study.best_trial.value)
+print(study.best_params)
+print(study.best_value)
+
 backtest.plot_performance(extended=False)
