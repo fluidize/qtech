@@ -148,11 +148,13 @@ class BayesianOptimizer:
         self.metric = metric
         self.param_names = list(param_space.keys())
         self.best_params = None
-        self.best_metrics = None
+        self.best_metric = None
         self.n_trials = n_trials
         self.direction = direction
         self.float_exceptions = float_exceptions or []
         self.fixed_exceptions = fixed_exceptions or []
+
+        self.study = None
 
         invalid = float('-inf') if self.direction == "maximize" else float('inf')
 
@@ -164,13 +166,13 @@ class BayesianOptimizer:
                 metrics = self.engine.get_performance_metrics()
 
                 if metrics[self.metric] == np.nan or np.isnan(metrics[self.metric]):
-                    return -1000 if self.direction == "maximize" else 1000
+                    return invalid
 
                 return metrics[self.metric]
             except Exception as e:
                 # Return a very bad score if the strategy fails, but ensure the trial completes
                 print(f"Trial failed with error: {e}")
-                return -1000 if self.direction == "maximize" else 1000
+                return invalid
         
         self.objective_function = objective
 
@@ -187,19 +189,29 @@ class BayesianOptimizer:
         return params
 
     def run(self, show_progress_bar: bool = True):
-        study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
-        study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=show_progress_bar)
+        self.study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
+        self.study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=show_progress_bar)
         
         # Check if any trials were completed
-        if len(study.trials) == 0 or all(trial.state != optuna.trial.TrialState.COMPLETE for trial in study.trials):
+        if len(self.study.trials) == 0 or all(trial.state != optuna.trial.TrialState.COMPLETE for trial in self.study.trials):
             raise ValueError("No trials were completed successfully. Check if the strategy function is working properly.")
         
-        self.best_params = study.best_params
-        self.best_metric = study.best_value
-        return self.best_metric, self.best_params
+        self.best_params = self.study.best_params
+        self.best_metric = self.study.best_value
 
     def get_best(self):
         return self.best_params, self.best_metric
+
+    def get_study(self):
+        return self.study
+    
+    def plot_optimization_history(self):
+        fig = self.study.plot_optimization_history()
+        fig.show()
+    
+    def plot_hyperparameter_importance(self):
+        fig = self.study.plot_hyperparameter_importance()
+        fig.show()
 
 class QuantitativeScreener:
     """
@@ -207,14 +219,16 @@ class QuantitativeScreener:
     Float and fixed exceptions are done by using (float , float) or (n,) respectively.
     """
     def __init__(self,
-                 symbols: List[str],
-                 days: int,
-                 intervals: List[str],
-                 age_days: int,
-                 data_source: str = "binance",
-                 initial_capital: float = 10000,
-                 slippage_pct: float = 0.005,
-                 commission_fixed: float = 0.00):
+                symbols: List[str],
+                days: int,
+                intervals: List[str],
+                age_days: int,
+                data_source: str = "binance",
+                initial_capital: float = 10000,
+                slippage_pct: float = 0.005,
+                commission_fixed: float = 0.00,
+                cache_expiry_hours: int = 24
+            ):
         
         self.engine = VectorizedBacktesting(
             instance_name="QuantitativeScreener",
@@ -231,8 +245,8 @@ class QuantitativeScreener:
         self.data_source = data_source
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
-    
-        self.results = pd.DataFrame(columns=["symbol", "interval", "metric", "params"])
+        self.cache_expiry_hours = cache_expiry_hours
+        self.results = pd.DataFrame(columns=["symbol", "interval", "metric", "params", "study"])
 
         self.console = Console()
 
@@ -243,7 +257,7 @@ class QuantitativeScreener:
         metric: str = "Total_Return", 
         n_trials: int = 100, 
         direction: str = "maximize", 
-        save_params: bool = False
+        save_params: bool = False,
     ):
         self.strategy_func = strategy_func
         self.metric = metric
@@ -271,7 +285,8 @@ class QuantitativeScreener:
                     days=self.days,
                     age_days=self.age_days,
                     data_source=self.data_source,
-                    verbose=False
+                    verbose=False,
+                    cache_expiry_hours=self.cache_expiry_hours
                 )
 
                 BO = BayesianOptimizer(
@@ -285,13 +300,16 @@ class QuantitativeScreener:
                     fixed_exceptions=fixed_exceptions
                 )
 
-                best_metrics, best_params = BO.run()
+                BO.run()
+                best_params, best_metric = BO.get_best()
+                study = BO.get_study()
 
                 self.results.loc[len(self.results)] = {
                     "symbol": symbol,
                     "interval": interval,
-                    "metric": best_metrics,
-                    "params": best_params
+                    "metric": best_metric,
+                    "params": best_params,
+                    "study": study
                 }
 
                 progress_count += 1
@@ -313,7 +331,8 @@ class QuantitativeScreener:
             "symbol": best_row["symbol"],
             "interval": best_row["interval"],
             "metric": best_row["metric"],
-            "params": best_row["params"]
+            "params": best_row["params"],
+            "study": best_row["study"]
         }
     
     def get_best_metrics(self):
@@ -323,11 +342,16 @@ class QuantitativeScreener:
             interval=best["interval"],
             days=self.days,
             age_days=self.age_days,
-            data_source=self.data_source
+            data_source=self.data_source,
+            cache_expiry_hours=self.cache_expiry_hours
         )
         self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
 
         return self.engine.get_performance_metrics()
+    
+    def get_best_study(self):
+        best = self.get_best()
+        return best["study"]
     
     def plot_best_performance(self, mode: str = "basic"):
         """Plot the performance of the best parameter combination."""
@@ -337,7 +361,8 @@ class QuantitativeScreener:
             interval=best["interval"],
             days=self.days,
             age_days=self.age_days,
-            data_source=self.data_source
+            data_source=self.data_source,
+            cache_expiry_hours=self.cache_expiry_hours
         )
         self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
         return self.engine.plot_performance(mode=mode)
@@ -372,31 +397,39 @@ class QuantitativeScreener:
 if __name__ == "__main__":
     sol_onchains = ["SOL-USDT", "JTO-USDT", "RAY-USDT", "JUP-USDT", "BONK-USDT", "RENDER-USDT"]
     qs = QuantitativeScreener(
-        symbols=sol_onchains,
-        days=100,
-        intervals=["15m", "30m", "1h", "4h"],
+        symbols=["SOL-USDT"],
+        days=365,
+        intervals=["1h"],
         age_days=0,
-        data_source="binance",
+        data_source="kucoin",
         initial_capital=100,
         slippage_pct=0.00,
-        commission_fixed=0.0
+        commission_fixed=0.0,
+        cache_expiry_hours=24
     )
 
     qs.optimize(
-        strategy_func=strategy.wavetrend_strategy,
+        strategy_func=strategy.trend_reversal_strategy,
         param_space={
-            "channel_length": (2, 100),
-            "average_length": (2, 100),
+            "supertrend_window":(2, 100),
+            "supertrend_multiplier":(1, 10),
+            "vol_ma_window":(2, 100),
+            "vol_threshold":(0, 100)
         },
         metric="Alpha",
-        n_trials=500,
+        n_trials=2025,
         direction="maximize",
         save_params=False
     )
 
-    qs.plot_best_performance(mode="basic")
+    qs.plot_best_performance(mode="standard")
     print(qs.get_best_metrics())
     print(qs.get_best())
+
+    fig1 = optuna.visualization.plot_optimization_history(qs.get_best_study())
+    fig2 = optuna.visualization.plot_param_importances(qs.get_best_study())
+    fig1.show()
+    fig2.show()
 
 
 

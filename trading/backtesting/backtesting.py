@@ -54,7 +54,7 @@ class VectorizedBacktesting:
         data_source: str = "kucoin",
         verbose: bool = True,
         use_cache: bool = True,
-        retry: int = 0
+        cache_expiry_hours: int = 24
     ):
         self.symbol = symbol
         self.days = days
@@ -64,7 +64,7 @@ class VectorizedBacktesting:
         if any([symbol, days, interval, age_days]) == "None":
             pass
         else:
-            self.data = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, verbose=verbose, use_cache=use_cache)
+            self.data = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, verbose=verbose, use_cache=use_cache, cache_expiry_hours=cache_expiry_hours)
             # self._validate_data_quality()
             self._set_n_days()
 
@@ -791,7 +791,8 @@ if __name__ == "__main__":
         interval="1h",
         age_days=0,
         data_source="binance",
-        use_cache=True
+        use_cache=True,
+        cache_expiry_hours=24
     )
 
     backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True)
