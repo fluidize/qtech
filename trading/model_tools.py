@@ -22,7 +22,7 @@ sys.path.append("")
 import trading.technical_analysis as ta
 import trading.smc_analysis as smc
 
-def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, verbose: bool = True):
+def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, retry_limit: int = 3, verbose: bool = True):
     print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None
 
     # Create a temp directory for market data
@@ -180,6 +180,8 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
 
         progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS", ascii="#>")
         for x in range(chunks):
+            retries = 0
+
             end_time = datetime.now() - timedelta(minutes=1000*x) - timedelta(days=age_days)
             start_time = end_time - timedelta(minutes=1000) - timedelta(days=age_days)
 
@@ -198,7 +200,14 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
                 request_data = response.json()
             except Exception as e:
                 print(f"[red]Error fetching {binance_symbol} from Binance: {e}[/red]")
-                raise e
+                if retries < retry_limit:
+                    print("[yellow]Retrying...[/yellow]")
+                    retries += 1
+                    response = requests.get("https://api.binance.com/api/v3/klines", params=params)
+                    response.raise_for_status()
+                    request_data = response.json()
+                else:
+                    raise Exception(f"Error fetching {binance_symbol} after {retry_limit} retries: {e}")
 
             records = []
             for kline in request_data:
