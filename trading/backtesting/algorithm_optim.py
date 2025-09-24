@@ -11,7 +11,6 @@ from tqdm import tqdm
 import numpy as np
 
 from backtesting import VectorizedBacktesting
-import strategy
 import optuna
 
 optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
@@ -285,8 +284,8 @@ class QuantitativeScreener:
                     days=self.days,
                     age_days=self.age_days,
                     data_source=self.data_source,
-                    verbose=False,
-                    cache_expiry_hours=self.cache_expiry_hours
+                    cache_expiry_hours=self.cache_expiry_hours,
+                    verbose=False
                 )
 
                 BO = BayesianOptimizer(
@@ -395,13 +394,17 @@ class QuantitativeScreener:
         return results_table
 
 if __name__ == "__main__":
+    import sys
+    sys.path.append("")
+
+    import trading.backtesting.cstrats as cs
     sol_onchains = ["SOL-USDT", "JTO-USDT", "RAY-USDT", "JUP-USDT", "BONK-USDT", "RENDER-USDT"]
     qs = QuantitativeScreener(
         symbols=["SOL-USDT"],
         days=365,
         intervals=["1h"],
         age_days=0,
-        data_source="kucoin",
+        data_source="binance",
         initial_capital=100,
         slippage_pct=0.00,
         commission_fixed=0.0,
@@ -409,15 +412,14 @@ if __name__ == "__main__":
     )
 
     qs.optimize(
-        strategy_func=strategy.trend_reversal_strategy,
+        strategy_func=cs.trend_reversal_strategy,
         param_space={
             "supertrend_window":(2, 100),
             "supertrend_multiplier":(1, 10),
-            "vol_ma_window":(2, 100),
-            "vol_threshold":(0, 100)
+            "vol_ma_window":(2, 50),
         },
-        metric="Alpha",
-        n_trials=2025,
+        metric="Sharpe_Ratio",
+        n_trials=1000,
         direction="maximize",
         save_params=False
     )
@@ -425,11 +427,6 @@ if __name__ == "__main__":
     qs.plot_best_performance(mode="standard")
     print(qs.get_best_metrics())
     print(qs.get_best())
-
-    fig1 = optuna.visualization.plot_optimization_history(qs.get_best_study())
-    fig2 = optuna.visualization.plot_param_importances(qs.get_best_study())
-    fig1.show()
-    fig2.show()
 
 
 

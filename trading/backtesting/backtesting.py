@@ -14,7 +14,6 @@ sys.path.append("")
 sys.path.append("trading/backtesting")
 
 import trading.model_tools as mt
-import strategy
 import vb_metrics as metrics
 
 class VectorizedBacktesting:
@@ -52,9 +51,10 @@ class VectorizedBacktesting:
         interval: str = "None",
         age_days: int = "None",
         data_source: str = "kucoin",
-        verbose: bool = True,
         use_cache: bool = True,
-        cache_expiry_hours: int = 24
+        cache_expiry_hours: int = 24,
+        retry_limit: int = 3,
+        verbose: bool = True
     ):
         self.symbol = symbol
         self.days = days
@@ -64,7 +64,7 @@ class VectorizedBacktesting:
         if any([symbol, days, interval, age_days]) == "None":
             pass
         else:
-            self.data = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, verbose=verbose, use_cache=use_cache, cache_expiry_hours=cache_expiry_hours)
+            self.data = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, use_cache=use_cache, cache_expiry_hours=cache_expiry_hours, retry_limit=retry_limit, verbose=verbose)
             # self._validate_data_quality()
             self._set_n_days()
 
@@ -753,29 +753,7 @@ class VectorizedBacktesting:
         }
 
 if __name__ == "__main__":
-    # backtest = VectorizedBacktesting(
-    #     initial_capital=20,
-    #     slippage_pct=0.00,
-    #     commission_fixed=0.00,
-    #     reinvest=False,
-    #     leverage=1
-    # )
-
-    # optim_set = {'symbol': 'SOL-USDT', 'interval': '15m', 'metric': np.float64(10.340510002150115), 'params': {'supertrend_window': 8, 'supertrend_multiplier': 1.224743711629419, 'bb_window': 55, 'bb_dev': 2, 'bbw_ma_window': 10}}
-
-    # backtest.fetch_data(
-    #     symbol=optim_set['symbol'],
-    #     days=100,
-    #     interval=optim_set['interval'],
-    #     age_days=0,
-    #     data_source="binance",
-    #     use_cache=False
-    # )
-
-    # backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True, **optim_set['params'])
-
-    # print(backtest.get_performance_metrics())
-    # backtest.plot_performance(extended=False)
+    import basic_strategies as bs
 
     backtest = VectorizedBacktesting(
         initial_capital=20,
@@ -787,7 +765,7 @@ if __name__ == "__main__":
 
     backtest.fetch_data(
         symbol="SOL-USDT",
-        days=100,
+        days=365,
         interval="1h",
         age_days=0,
         data_source="binance",
@@ -795,7 +773,7 @@ if __name__ == "__main__":
         cache_expiry_hours=24
     )
 
-    backtest.run_strategy(strategy.trend_reversal_strategy, verbose=True)
+    backtest.run_strategy(bs.ma_crossover_strategy, verbose=True)
 
     print(backtest.get_performance_metrics())
     backtest.plot_performance(mode="basic")
