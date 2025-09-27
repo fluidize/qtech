@@ -25,7 +25,6 @@ sys.path.append("trading")
 sys.path.append("trading/backtesting")
 sys.path.append("trading/live")
 
-import strategy
 import technical_analysis as ta
 from data_provider_factory import DataProviderFactory
 
@@ -274,7 +273,6 @@ class LiveTradingSystem:
             'previous_signal': self.last_signal,
             'new_signal': new_signal,
             'current_price': current_price,
-            'action': self._signal_to_action(self.last_signal, new_signal)
         }
         
         # Call user callback if provided (either always or only on signal changes)
@@ -288,24 +286,7 @@ class LiveTradingSystem:
             
             # Log the signal
             self._log_signal(signal_info)
-    
-    def _signal_to_action(self, old_signal: int, new_signal: int) -> str:
-        """Convert signal change to human-readable action."""
-        signal_names = {0: 'HOLD', 1: 'SHORT', 2: 'FLAT', 3: 'LONG'}
-        
-        if (old_signal == new_signal) or (new_signal == 0):
-            return f"MAINTAIN {signal_names.get(new_signal, 'UNKNOWN')}"
-        
-        old_name = signal_names.get(old_signal, 'UNKNOWN')
-        new_name = signal_names.get(new_signal, 'UNKNOWN')
-        
-        if new_signal == 2:  # Going to flat
-            return f"CLOSE {old_name} → FLAT"
-        elif old_signal == 2:  # Opening from flat
-            return f"OPEN {new_name}"
-        else:  # Direct switch
-            return f"SWITCH {old_name} → {new_name}"
-    
+     
     def _log_signal(self, signal_info: Dict):
         """Log the trading signal."""
         timestamp = signal_info['timestamp'].strftime('%H:%M:%S')
