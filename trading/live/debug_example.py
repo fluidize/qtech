@@ -9,12 +9,10 @@ import sys
 import os
 
 # Add paths for imports
-sys.path.append("trading")
-sys.path.append("trading/backtesting")
-sys.path.append("trading/live")
+sys.path.append("")
 
 from live_system import LiveTradingSystem
-import strategy
+import trading.backtesting.cstrats as cs
 
 async def debug_live_trading():
     """Example of running live trading system with debug plotting"""
@@ -23,18 +21,16 @@ async def debug_live_trading():
     live_system = LiveTradingSystem(
         symbol="BTC-USDT",
         interval="1m",
-        data_source="binance",  # or "kucoin"
+        data_source="binance",
         buffer_size=500,
-        strategy_func=strategy.trend_reversal_strategy,  # Use the causality-safe version
+        strategy_func=cs.trend_reversal_strategy_v1,
         strategy_params={
-            'supertrend_window': 10,
+            'supertrend_window': 37,
             'supertrend_multiplier': 2,
-            'bb_window': 20,
-            'bb_dev': 2,
-            'bbw_ma_window': 13
+            'ma_window': 35,
         },
-        debug_plot=True,  # Enable debug plotting
-        debug_plot_window=500,  # Show last 50 candles
+        debug_plot=True,
+        debug_plot_window=500,
         signal_callback=debug_signal_callback,
         always_call_callback=True
     )
@@ -52,7 +48,7 @@ async def debug_live_trading():
 
 def debug_signal_callback(signal_info):
     """Callback function to handle signal changes"""
-    print(f"🚨 SIGNAL: {signal_info['action']} @ ${signal_info['current_price']:.4f}")
+    print(f"🚨 SIGNAL: {signal_info['new_signal']} @ ${signal_info['current_price']:.4f}")
     print(f"   Previous: {signal_info['previous_signal']} -> New: {signal_info['new_signal']}")
     print(f"   Time: {signal_info['timestamp'].strftime('%H:%M:%S')}")
     print("-" * 50)
