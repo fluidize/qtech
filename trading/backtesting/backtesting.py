@@ -206,13 +206,13 @@ class VectorizedBacktesting:
         # Calculate portfolio value based on reinvestment setting
         if self.reinvest:
             # Compound returns: each period's return compounds on previous value
-            self.data['Percentage_Return'] = (1 + self.data['Strategy_Returns']).cumprod()
+            self.data['Percent_Return'] = (1 + self.data['Strategy_Returns']).cumprod()
             self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
         else:
             # Linear returns: profits don't compound, always trade with initial capital
             self.data['Linear_Profit'] = (self.initial_capital * self.data['Strategy_Returns']).cumsum()
             self.data['Portfolio_Value'] = self.initial_capital + self.data['Linear_Profit']
-            self.data['Percentage_Return'] = self.data['Portfolio_Value'] / self.initial_capital
+            self.data['Percent_Return'] = self.data['Portfolio_Value'] / self.initial_capital
 
         # Calculate drawdowns
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
@@ -277,12 +277,7 @@ class VectorizedBacktesting:
         
         profit_factor = metrics.get_profit_factor(position, open_prices)
 
-        if (alpha < 0) or (sortino_ratio < 0): #when both are negative this can encourage bad optimizations
-            sign_factor = -1
-        else:
-            sign_factor = 1
-        
-        combined_objective = win_rate * profit_factor * abs(alpha) * abs(sortino_ratio) * sign_factor
+        r, r2 = metrics.get_r_and_r2(portfolio_value)
 
         return {
             'Total_Return': total_return,
@@ -299,7 +294,8 @@ class VectorizedBacktesting:
             'PT_Ratio': pt_ratio,
             'Profit_Factor': profit_factor,
             'Total_Trades': len(trade_pnls),
-            'Combined_Objective': combined_objective,
+            'R': r,
+            'R2': r2,
         }
 
     def plot_performance(self, mode: str = "basic"):
@@ -752,29 +748,152 @@ class VectorizedBacktesting:
             'total_costs': total_slippage_paid + total_commission_paid
         }
 
+class MultiAssetBacktesting:
+    def __init__(self,
+                 initial_capitals: list[float] = [10000],
+                 slippage_pct: float = 0.001,
+                 commission_fixed: float = 0.0,
+                 reinvest: bool = False,
+                 leverage: float = 1.0):
+        self.initial_capitals = initial_capitals
+        self.slippage_pct = slippage_pct
+        self.commission_fixed = commission_fixed
+        self.reinvest = reinvest
+        self.leverage = leverage
+
+        self.data = {}
+        self.equity_curves_pct = {}
+        self.weighted_portfolio_value = None
+    
+    def fetch_data(self,
+        symbols: list[str] = [],
+        days: int = "None",
+        interval: str = "None",
+        age_days: int = "None",
+        data_source: str = "kucoin",
+        use_cache: bool = True,
+        cache_expiry_hours: int = 24,
+        retry_limit: int = 3,
+        verbose: bool = True
+    ):
+        self.symbols = symbols
+        self.days = days
+        self.interval = interval
+        self.age_days = age_days
+        self.data_source = data_source
+        if any([days, interval, age_days]) == "None":
+            pass
+        else:
+            for symbol in self.symbols:
+                self.data[symbol] = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, use_cache=use_cache, cache_expiry_hours=cache_expiry_hours, retry_limit=retry_limit, verbose=verbose)
+            return self.data
+    
+    def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
+        for symbol in self.data.keys():
+            vb = VectorizedBacktesting(
+                instance_name=symbol,
+                initial_capital=self.initial_capitals[self.symbols.index(symbol)],
+                slippage_pct=self.slippage_pct,
+                commission_fixed=self.commission_fixed,
+                reinvest=self.reinvest,
+                leverage=self.leverage)
+            vb.load_data(self.data[symbol])
+            vb.run_strategy(strategy_func, verbose=verbose, **kwargs)
+            self.equity_curves_pct[symbol] = vb.data['Percent_Return']
+        
+        weighted_curves = []
+        for i, symbol in enumerate(self.equity_curves_pct.keys()):
+            weighted_curve = self.equity_curves_pct[symbol] * self.initial_capitals[i]
+            weighted_curves.append(weighted_curve)
+        
+        self.weighted_portfolio_value = sum(weighted_curves)
+        self.weighted_portfolio_value.dropna(inplace=True)
+        return self.weighted_portfolio_value
+    
+    def get_performance_metrics(self):
+        if not self.equity_curves_pct:
+            raise ValueError("No strategy results available. Run a strategy first.")
+        total_return = (self.weighted_portfolio_value.iloc[-1] / self.weighted_portfolio_value.iloc[0]) - 1
+        
+        peak = self.weighted_portfolio_value.cummax()
+        drawdown = (self.weighted_portfolio_value - peak) / peak
+        max_drawdown = drawdown.min()
+        
+        strategy_returns = self.weighted_portfolio_value.pct_change().dropna()
+        
+        oldest = self.data[list(self.data.keys())[0]]['Datetime'].iloc[0]
+        newest = self.data[list(self.data.keys())[0]]['Datetime'].iloc[-1]
+        n_days = (newest - oldest).days
+        
+        sharpe_ratio = metrics.get_sharpe_ratio(strategy_returns, self.interval, n_days)
+        
+        sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, n_days)
+        
+        return {
+            'Total_Return': total_return,
+            'Max_Drawdown': max_drawdown,
+            'Sharpe_Ratio': sharpe_ratio,
+            'Sortino_Ratio': sortino_ratio
+        }
+    
+    def plot_performance(self):
+        summary = self.get_performance_metrics()
+        plt.title(f"Multi-Asset Backtesting Performance {summary['Total_Return']*100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f}")
+        plt.xlabel("Time")
+        plt.ylabel("Portfolio Value")
+        plt.plot(self.weighted_portfolio_value)
+        plt.show()
+
+
 if __name__ == "__main__":
     import basic_strategies as bs
+    import cstrats as cs
 
-    backtest = VectorizedBacktesting(
-        initial_capital=20,
+    sector_funds = ['XLC', 'XLY', 'XLP', 'XLE', 'XLF','XLV', 'XLI', 'XLB', 'XLRE', 'XLK', 'XLU']
+
+    MAB = MultiAssetBacktesting(
+        initial_capitals=[100 for _ in sector_funds],
         slippage_pct=0.00,
-        commission_fixed=0.00,
+        commission_fixed=0.0,
         reinvest=False,
-        leverage=1
+        leverage=1.0
     )
-
-    backtest.fetch_data(
-        symbol="SOL-USDT",
+    MAB.fetch_data(
+        symbols=sector_funds,
         days=365,
-        interval="1h",
+        interval="1d",
         age_days=0,
-        data_source="binance",
-        use_cache=True,
-        cache_expiry_hours=24
+        data_source="yfinance",
+        verbose=False
     )
+    MAB.run_strategy(bs.supertrend_strategy, verbose=False)
+    print(MAB.get_performance_metrics())
+    MAB.plot_performance()
 
-    backtest.run_strategy(bs.ma_crossover_strategy, verbose=True)
+# if __name__ == "__main__":
+#     import basic_strategies as bs
+#     import cstrats as cs
 
-    print(backtest.get_performance_metrics())
-    backtest.plot_performance(mode="basic")
+#     backtest = VectorizedBacktesting(
+#         initial_capital=20,
+#         slippage_pct=0.00,
+#         commission_fixed=0.00,
+#         reinvest=False,
+#         leverage=1
+#     )
+
+#     backtest.fetch_data(
+#         symbol="BTC-USDT",
+#         days=1,
+#         interval="1m",
+#         age_days=0,
+#         data_source="binance",
+#         use_cache=True,
+#         cache_expiry_hours=24
+#     )
+
+#     backtest.run_strategy(cs.trend_reversal_strategy_v1, verbose=True)
+
+#     print(backtest.get_performance_metrics())
+#     backtest.plot_performance(mode="standard")
     
