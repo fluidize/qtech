@@ -393,3 +393,11 @@ def get_trade_returns(position: pd.Series, open_prices: pd.Series) -> List[float
         prev_pos = current_pos
     
     return return_list
+
+def get_r_and_r2(portfolio_value: pd.Series) -> tuple[float, float]:
+    """Calculate R and R^2 from portfolio value. Returns R and R^2."""
+    model = sm.OLS(portfolio_value, portfolio_value.index).fit()
+    r = np.sqrt(model.rsquared)
+    r2 = model.rsquared
+    return r, r2
+    
