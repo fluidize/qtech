@@ -4,40 +4,49 @@ import sys
 from typing import Dict
 import numpy as np
 
-sys.path.append("trading")
-sys.path.append("trading/backtesting")
-sys.path.append("trading/live")
-sys.path.append("solana/jupiter")
+sys.path.append("")
 
 from live_system import LiveTradingSystem
-import strategy
-import jupiter as jup
+import trading.backtesting.cstrats as strategy
+import solana.jupiter as jup
 
-def create_trader_callback(wallethandler: jup.JupiterWalletHandler, webhook_url: str = None):
+def create_trader_callback(wallethandler: jup.JupiterWalletHandler, starting_usdc_size: float = 100.0, webhook_url: str = None):
     """
     Create a trading callback for live execution using Jupiter.
     Uses Jupiter for SOL-USDC pricing and execution while getting signals from Binance.
     
     Args:
         wallethandler: JupiterWalletHandler for getting real prices and slippage
+        starting_usdc_size: Amount of USDC to trade
         webhook_url: Discord webhook URL for notifications (optional)
     
     Returns:
         Trading callback function
     """
     
+    # Track the exact amount of SOL bought
+    usdc_amount_to_buy = 0.0
+    sol_amount_to_sell = 0.0
+    
     def trader_callback(signal_info: Dict):
+        nonlocal sol_amount_to_sell, usdc_amount_to_buy
         new_signal = signal_info['new_signal']
         last_signal = signal_info['previous_signal']
         
         if (new_signal != 0) & (new_signal != last_signal):
-            estimated_trade_size_sol = 1.0
-            estimated_trade_size_usd = 100.0
             
-            if new_signal == 2:
-                wallethandler.order_and_execute(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol, retry=True)
-            elif new_signal == 3:
-                wallethandler.order_and_execute(jup.Token.USDC, jup.Token.SOL, estimated_trade_size_usd, retry=True)
+            if new_signal == 2:  # Buy SOL with USDC
+                response_info, signature = wallethandler.order_and_execute(jup.Token.USDC, jup.Token.SOL, starting_usdc_size, retry=True)
+                if response_info and signature:
+                    sol_amount_to_sell = response_info['out_amount_decimals']
+                    
+            elif new_signal == 3:  # Sell SOL for USDC
+                if sol_amount_to_sell > 0:
+                    response_info, signature = wallethandler.order_and_execute(jup.Token.SOL, jup.Token.USDC, sol_amount_to_sell, retry=True)
+                    if response_info and signature:
+                        usdc_amount_to_buy = response_info['out_amount_decimals']
+                else:
+                    print("No SOL to sell")
 
     return trader_callback
 
