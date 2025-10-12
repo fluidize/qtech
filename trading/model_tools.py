@@ -9,7 +9,6 @@ import pandas as pd
 import numpy as np
 import hashlib
 import os
-import tempfile
 import json
 
 import plotly.graph_objects as go
@@ -18,15 +17,16 @@ from plotly.subplots import make_subplots
 from rich import print
 
 import sys
-sys.path.append("")
-import trading.technical_analysis as ta
-import trading.smc_analysis as smc
+sys.path.append("trading")
+
+import technical_analysis as ta
+import smc_analysis as smc
 
 def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, retry_limit: int = 3, verbose: bool = True):
     print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None
 
     # Create a temp directory for market data
-    temp_dir = os.path.join(tempfile.gettempdir(), "market_data")
+    temp_dir = os.path.join(os.getenv("APPDATA"), "market_data")
     os.makedirs(temp_dir, exist_ok=True)
 
     cache_key = f"{symbol}_{days}_{interval}_{age_days}_{data_source}"
@@ -68,7 +68,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
             chunksize = 1
             start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=age_days)
             end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=age_days)
-            temp_data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False)
+            temp_data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False, auto_adjust=True)
             if data.empty:
                 data = temp_data
             else:
