@@ -1,4 +1,3 @@
-import os
 import requests
 import base58
 import base64
@@ -17,9 +16,9 @@ class Token:
     JitoSOL = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"
 
 def get_token_info(contract_address: str) -> Dict:
-    url = f"https://lite-api.jup.ag/tokens/v1/token/{contract_address}"
+    url = f"https://lite-api.jup.ag/ultra/v1/search?query={contract_address}"
     response = requests.get(url)
-    return response.json()
+    return response.json()[0]
 
 def get_usd_price(contract_address: str) -> Optional[float]:
     try:
@@ -36,8 +35,9 @@ class JupiterWalletHandler:
         self.wallet = Keypair.from_bytes(base58.b58decode(private_key))
         self.wallet_address = self.wallet.pubkey()
     
-    def get_order(self, input_mint: str, output_mint: str, input_amount: float, retry: bool = True, retry_limit: int = 5) -> Optional[Tuple[float, float, float, float, float, float, str]]:
+    def get_order(self, input_mint: str, output_mint: str, input_amount_decimals: float, retry: bool = True, retry_limit: int = 5) -> Optional[Tuple[float, float, float, float, float, float, str]]:
         """
+        Input amount is in decimals of the input mint
         Get an order from Jupiter with ultra API. Automatically scales UI to raw.
         Returns a tuple of (in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx)
         """
@@ -45,8 +45,10 @@ class JupiterWalletHandler:
             for i in range(retry_limit if retry else 1):
                 input_mint_info = get_token_info(input_mint)
                 input_decimals = input_mint_info['decimals']
+                output_mint_info = get_token_info(output_mint)
+                output_decimals = output_mint_info['decimals']
 
-                raw_input_amount = int(input_amount * (10 ** input_decimals))
+                raw_input_amount = int(input_amount_decimals * (10 ** input_decimals))
 
                 order_params = {
                     "inputMint": input_mint,
@@ -63,19 +65,27 @@ class JupiterWalletHandler:
                     sleep(0.5)
                     continue
                 else:
-                    in_usd = float(response_json['inUsdValue'])
-                    out_usd = float(response_json['outUsdValue'])
-                    slippage_bps = float(response_json['slippageBps'])
-                    fee_bps = float(response_json['feeBps'])
-                    price_impact_pct = float(response_json['priceImpactPct']) #positive pi is good
-                    price_impact_usd = float(response_json['priceImpact'])
-                    unsigned_tx = str(response_json['transaction'])
-                    request_id = response_json['requestId']
+                    response_info = {
+                        "input_mint": str(response_json['inputMint']),
+                        "output_mint": str(response_json['outputMint']),
+                        "in_amount": float(response_json['inAmount']),
+                        "out_amount": float(response_json['outAmount']),
+                        "in_amount_decimals": float(response_json['inAmount']) / (10 ** input_decimals),
+                        "out_amount_decimals": float(response_json['outAmount']) / (10 ** output_decimals),
+                        "in_usd": float(response_json['inUsdValue']),
+                        "out_usd": float(response_json['outUsdValue']),
+                        "slippage_bps": float(response_json['slippageBps']),
+                        "fee_bps": float(response_json['feeBps']),
+                        "price_impact_pct": float(response_json['priceImpactPct']),
+                        "price_impact_usd": float(response_json['priceImpact']),
+                        "unsigned_tx": str(response_json['transaction']),
+                        "request_id": str(response_json['requestId'])
+                    }
                     
-                    return in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx, request_id
+                    return response_info
         except Exception as e:
             print(f"Error in get_order: {e}")
-            return None
+            raise e
         
     def execute_order(self, unsigned_tx: str, request_id: str):
         tx_bytes = base64.b64decode(unsigned_tx)
@@ -114,10 +124,15 @@ class JupiterWalletHandler:
                 print(f"View transaction on Solscan: https://solscan.io/tx/{signature}")
                 return None
             
-    def order_and_execute(self, input_mint: str, output_mint: str, input_amount: float, retry: bool = True, retry_limit: int = 5) -> Optional[Tuple[float, float, float, float, float, float, str]]:
-        in_usd, out_usd, slippage_bps, fee_bps, price_impact_pct, price_impact_usd, unsigned_tx, request_id = self.get_order(input_mint, output_mint, input_amount, retry, retry_limit)
+    def order_and_execute(self, input_mint: str, output_mint: str, input_amount_decimals: float, retry: bool = True, retry_limit: int = 5) -> Optional[Tuple[float, float, float, float, float, float, str]]:
+        """
+        Returns order response info and signature
+        """
+        response_info = self.get_order(input_mint, output_mint, input_amount_decimals, retry, retry_limit)
+        unsigned_tx = response_info['unsigned_tx']
+        request_id = response_info['request_id']
         signature = self.execute_order(unsigned_tx, request_id)
-        return signature
+        return response_info, signature
 
     def get_wallet_balances(self, wallet_address):
         response = requests.get(f"https://lite-api.jup.ag/ultra/v1/balances/{wallet_address}")
@@ -131,4 +146,5 @@ class JupiterWalletHandler:
             
 
 if __name__ == "__main__":
-    jupiter = JupiterWalletHandler("")
+    jupiter = JupiterWalletHandler("2BmZhw6gq2VyyvQNhzbXSPp1riXVDQqfiBNPeALf54gsZ9Wh4bLzQrzbysRUgxZVmi862VcXTwFvcAnfC1KYwWsz")
+    print(jupiter.get_order(Token.USDC, Token.SOL, 100.0, retry=True))
