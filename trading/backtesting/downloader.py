@@ -215,7 +215,7 @@ class DataDownloaderApp(QMainWindow):
         input_layout.setSpacing(10)
         
         input_layout.addWidget(QLabel("Symbols:"), 0, 0)
-        self.symbol_edit = QLineEdit("BTC-USDT, ETH-USDT, ADA-USDT")
+        self.symbol_edit = QLineEdit("SOL-USDT")
         self.symbol_edit.setPlaceholderText("e.g., BTC-USDT, ETH-USDT, ADA-USDT (comma-separated)")
         input_layout.addWidget(self.symbol_edit, 0, 1)
         
@@ -230,7 +230,7 @@ class DataDownloaderApp(QMainWindow):
         input_layout.addWidget(self.days_edit, 2, 1)
         
         input_layout.addWidget(QLabel("Intervals:"), 3, 0)
-        self.interval_edit = QLineEdit("1m, 5m, 1h")
+        self.interval_edit = QLineEdit("15m, 30m, 1h, 4h")
         self.interval_edit.setPlaceholderText("e.g., 1m, 5m, 1h, 1d (comma-separated)")
         input_layout.addWidget(self.interval_edit, 3, 1)
         
