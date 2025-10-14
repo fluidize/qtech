@@ -10,11 +10,11 @@ import trading.smc_analysis as smc
 
 #cryptocurrency specific strategies
 
-def trend_reversal_strategy(
+def trend_reversal_strategy_v1(
         data: pd.DataFrame,
-        supertrend_window: int = 10,
+        supertrend_window: int = 37,
         supertrend_multiplier: float = 2,
-        vol_ma_window: int = 13,
+        ma_window: int = 35,
     ) -> pd.Series:
     signals = pd.Series(0, index=data.index)
     
@@ -26,24 +26,78 @@ def trend_reversal_strategy(
         multiplier=supertrend_multiplier
     )
 
-    # upper, middle, lower = ta.bbands(data['Close'], timeperiod=bb_window, devup=bb_dev, devdn=bb_dev)
-    # bbw = (upper - lower) / middle #utilizing BBW as a volatility proxy
-    # bbw_ma = ta.sma(bbw, timeperiod=bbw_ma_window)
-
-    # volatility_contraction = (bbw < bbw_ma) & (bbw.shift(1) > bbw_ma.shift(1))
     hlc3 = (data["High"] + data["Low"] + data["Close"]) / 3
 
-    volatility = ((hlc3 - ta.sma(hlc3, timeperiod=vol_ma_window)) / hlc3) * 667
+    price_ma_gap = ((hlc3 - ta.sma(hlc3, timeperiod=ma_window)) / hlc3)
 
-    bullish_volatility_contraction = volatility > 0.1 #volatility spike upwards
-    bearish_volatility_contraction = volatility < 0.1 #volatility spike downwards
-    buy_conditions = (supertrend == -1) & (bullish_volatility_contraction) #buy into bearish trend
-    sell_conditions = (supertrend == 1) & (bearish_volatility_contraction) #sell into bullish trend
+    bullish_trend_reversal = price_ma_gap > 0 #short term trend reversal up
+    bearish_trend_reversal = price_ma_gap < 0 #short term trend reversal down
+    buy_conditions = (supertrend == -1) & (bullish_trend_reversal) #buy into bearish trend
+    sell_conditions = (supertrend == 1) & (bearish_trend_reversal) #sell into bullish trend
 
     signals[buy_conditions] = 3
     signals[sell_conditions] = 2
     
-    return signals, volatility
+    return signals
+
+def trend_reversal_strategy_v2(
+        data: pd.DataFrame,
+        supertrend_window: int = 6,
+        supertrend_multiplier: float = 1,
+        bbdev: int = 7,
+        bb_window: int = 45,
+        bbw_ma_window: int = 38,
+    ) -> pd.Series:
+    #tuned for solusdt 15m
+
+    signals = pd.Series(0, index=data.index)
+    
+    supertrend, supertrend_line = ta.supertrend(
+        data['High'], 
+        data['Low'], 
+        data['Close'], 
+        period=supertrend_window, 
+        multiplier=supertrend_multiplier
+    )
+
+    upper, middle, lower = ta.bbands(data['Close'], timeperiod=bb_window, devup=bbdev, devdn=bbdev)
+    bbw = (upper - lower) / middle #utilizing BBW as a volatility proxy
+    bbw_ma = ta.sma(bbw, timeperiod=bbw_ma_window)
+
+    volatility_contraction = (bbw > bbw_ma) & (bbw < bbw.shift(1))
+
+    buy_conditions = (supertrend == -1) & (volatility_contraction) #buy into bearish trend
+    sell_conditions = (supertrend == 1) & (volatility_contraction) #sell into bullish trend
+
+    signals[buy_conditions] = 3
+    signals[sell_conditions] = 2
+    
+    return signals
+
+def directional_atr_strategy(data: pd.DataFrame,
+        supertrend_window: int = 14,
+        supertrend_multiplier: float = 1,
+        threshold: float = 0.03,
+    ) -> pd.Series:
+    signals = pd.Series(0, index=data.index)
+    supertrend, supertrend_line = ta.supertrend(
+        data['High'], 
+        data['Low'], 
+        data['Close'], 
+        period=supertrend_window, 
+        multiplier=supertrend_multiplier
+    )
+
+    hlc3 = (data["High"] + data["Low"] + data["Close"]) / 3
+    atr_gap = (hlc3 - supertrend_line) / hlc3
+
+    overbought_conditions =  (atr_gap > threshold) #buy into bearish trend
+    oversold_conditions = (atr_gap < -threshold) #sell into bullish trend
+
+    signals[oversold_conditions] = 3
+    signals[overbought_conditions] = 2
+
+    return signals
 
 def sott_strategy(data: pd.DataFrame, threshold: float = 0.0) -> None:
     signals = pd.Series(0, index=data.index)
@@ -135,5 +189,22 @@ def wavetrend_strategy(data: pd.DataFrame, channel_length: int = 10, average_len
     sell_conditions = (wt1 < wt2)
     signals[buy_conditions] = 3
     signals[sell_conditions] = 2
+
+    return signals
+
+def trend_oscillation_strategy(data: pd.DataFrame, fast_ma_period: int = 20, slow_ma_period: int = 75) -> pd.Series:
+    signals = pd.Series(0, index=data.index)
+
+    slow_ma = ta.sma(data['Close'], timeperiod=slow_ma_period)
+    fast_ma = ta.ema(data['Close'], timeperiod=fast_ma_period)
+
+    line = (fast_ma - slow_ma) / slow_ma
+    smooth_line = ta.sma(line, timeperiod=4)
+    
+    long_condition = smooth_line > smooth_line.shift(1)
+    short_condition = smooth_line < smooth_line.shift(1)
+
+    signals[long_condition] = 3
+    signals[short_condition] = 2
 
     return signals
