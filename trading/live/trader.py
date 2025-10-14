@@ -8,7 +8,7 @@ sys.path.append("")
 
 from live_system import LiveTradingSystem
 import trading.backtesting.testing.cstrats as strategy
-import solana.jupiter as jup
+import solana.jupiter.jupiter_api as jup
 
 def create_trader_callback(wallethandler: jup.JupiterWalletHandler, starting_usdc_size: float = 100.0, webhook_url: str = None):
     """
