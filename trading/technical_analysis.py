@@ -137,23 +137,20 @@ def dpo(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     return series - series.shift(int(timeperiod/2) + 1).rolling(window=timeperiod).mean()
 
 def dema(series: pd.Series, timeperiod: int = 20) -> pd.Series:
-    """Double Exponential Moving Average
-    Reduces lag of traditional EMAs"""
+    """Double Exponential Moving Average"""
     ema1 = ema(series, timeperiod)
     ema2 = ema(ema1, timeperiod)
     return 2 * ema1 - ema2
 
 def tema(series: pd.Series, timeperiod: int = 20) -> pd.Series:
-    """Triple Exponential Moving Average
-    Further reduces lag compared to DEMA"""
+    """Triple Exponential Moving Average"""
     ema1 = ema(series, timeperiod)
     ema2 = ema(ema1, timeperiod)
     ema3 = ema(ema2, timeperiod)
     return 3 * ema1 - 3 * ema2 + ema3
 
 def fisher_transform(series: pd.Series, timeperiod: int = 10) -> pd.Series:
-    """Ehlers Fisher Transform
-    Converts prices to a Gaussian normal distribution"""
+    """Ehlers Fisher Transform"""
     # Normalize price to range [-1, 1]
     max_high = series.rolling(window=timeperiod).max()
     min_low = series.rolling(window=timeperiod).min()
@@ -176,8 +173,7 @@ def fisher_transform(series: pd.Series, timeperiod: int = 10) -> pd.Series:
     return fisher
 
 def aroon(high: pd.Series, low: pd.Series, timeperiod: int = 14) -> tuple[pd.Series, pd.Series]:
-    """Aroon Indicator
-    Measures the strength of a trend by time from high/low"""
+    """Aroon Indicator"""
     periods = np.arange(timeperiod)
     
     # Calculate Aroon Up
@@ -191,15 +187,13 @@ def aroon(high: pd.Series, low: pd.Series, timeperiod: int = 14) -> tuple[pd.Ser
     return aroon_up, aroon_down
 
 def awesome_oscillator(high: pd.Series, low: pd.Series, fast_period: int = 5, slow_period: int = 34) -> pd.Series:
-    """Awesome Oscillator (AO)
-    Measures market momentum"""
+    """Awesome Oscillator (AO)"""
     median_price = (high + low) / 2
     ao = sma(median_price, fast_period) - sma(median_price, slow_period)
     return ao
 
 def keltner_channels(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 20, atr_multiplier: int = 2) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Keltner Channels
-    Volatility-based bands with EMA and ATR"""
+    """Keltner Channels"""
     middle = ema(close, timeperiod)
     atr_val = atr(high, low, close, timeperiod)
     
@@ -209,15 +203,13 @@ def keltner_channels(high: pd.Series, low: pd.Series, close: pd.Series, timeperi
     return upper, middle, lower
 
 def pvt(close: pd.Series, volume: pd.Series) -> pd.Series:
-    """Price Volume Trend
-    Cumulation of volume weighted by relative price change"""
+    """Price Volume Trend"""
     pct_change = close.pct_change()
     pvt = (pct_change * volume).cumsum()
     return pvt
 
 def vwap_bands(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, timeperiod: int = 20, stdev_multiplier: int = 2) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """VWAP with Standard Deviation Bands
-    Adds upper and lower bands to VWAP based on standard deviation"""
+    """VWAP with Standard Deviation Bands"""
     typical_price = (high + low + close) / 3
     vwap_data = vwap(high, low, close, volume)
     
@@ -230,8 +222,7 @@ def vwap_bands(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Ser
     return upper_band, vwap_data, lower_band
 
 def elder_ray(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 13) -> tuple[pd.Series, pd.Series]:
-    """Elder Ray
-    Shows buying and selling pressure"""
+    """Elder Ray"""
     ema_val = ema(close, timeperiod)
     
     bull_power = high - ema_val  # Buying pressure
@@ -240,8 +231,7 @@ def elder_ray(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int
     return bull_power, bear_power
 
 def rvi(open_price: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 10) -> pd.Series:
-    """Relative Vigor Index
-    Compares closing price to opening price to determine market vigor"""
+    """Relative Vigor Index"""
     # Calculate numerator: (close-open)
     numerator = close - open_price
     # Calculate denominator: (high-low)
@@ -261,8 +251,7 @@ def rvi(open_price: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series
     return rvi_value
 
 def choppiness_index(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> pd.Series:
-    """Choppiness Index
-    Determines if market is choppy (trading sideways) or trending"""
+    """Choppiness Index"""
     atr_sum = atr(high, low, close, 1).rolling(window=timeperiod).sum()
     high_low_range = high.rolling(window=timeperiod).max() - low.rolling(window=timeperiod).min()
     
@@ -270,8 +259,7 @@ def choppiness_index(high: pd.Series, low: pd.Series, close: pd.Series, timeperi
     return ci
 
 def mass_index(high: pd.Series, low: pd.Series, timeperiod: int = 25, ema_period: int = 9) -> pd.Series:
-    """Mass Index
-    Identifies potential trend reversals by analyzing the narrowing and widening of trading ranges"""
+    """Mass Index"""
     high_low_range = high - low
     
     # Calculate single and double EMAs of the range
@@ -287,8 +275,7 @@ def mass_index(high: pd.Series, low: pd.Series, timeperiod: int = 25, ema_period
     return mass
 
 def volume_zone_oscillator(close: pd.Series, volume: pd.Series, short_period: int = 14, long_period: int = 28) -> pd.Series:
-    """Volume Zone Oscillator (VZO)
-    Measures volume pressure with both price and volume data"""
+    """Volume Zone Oscillator (VZO)"""
     # Calculate price change direction
     price_change = close.diff()
     
@@ -320,8 +307,7 @@ def volume_zone_oscillator(close: pd.Series, volume: pd.Series, short_period: in
     return vzo
 
 def volatility_ratio(high: pd.Series, low: pd.Series, close: pd.Series, roc_period: int = 14, atr_period: int = 14) -> pd.Series:
-    """Volatility Ratio
-    Compares price momentum to volatility to identify potential trend changes"""
+    """Volatility Ratio"""
     # Calculate ROC (momentum)
     roc_val = roc(close, roc_period)
     
@@ -379,21 +365,18 @@ def hurst_exponent(series: pd.Series, max_lag: int = 20) -> pd.Series:
     return result.ffill()
 
 def zscore(series: pd.Series, timeperiod: int = 20) -> pd.Series:
-    """Rolling Z-Score
-    Measures how many standard deviations a value is from the mean"""
+    """Rolling Z-Score"""
     mean = series.rolling(window=timeperiod).mean()
     std = series.rolling(window=timeperiod).std()
     z_score = (series - mean) / std
     return z_score
 
 def volatility(series: pd.Series, timeperiod: int = 20) -> pd.Series:
-    """Volatility
-    Measures the standard deviation of price changes"""
+    """Volatility"""
     return series.rolling(window=timeperiod).std()
 
 def percent_rank(series: pd.Series, timeperiod: int = 14) -> pd.Series:
-    """Percent Rank
-    Ranks the current value within its recent history on a 0-100 scale"""
+    """Percent Rank"""
     def percentile_rank(window):
         if len(window) == 0:
             return np.nan
@@ -464,8 +447,7 @@ def historical_volatility(close: pd.Series, output_period: float = -1, df: Optio
     return hist_vol
 
 def fractal_indicator(high: pd.Series, low: pd.Series, n: int = 2) -> tuple[pd.Series, pd.Series]:
-    """Williams Fractal Indicator
-    Identifies potential support and resistance points (local highs and lows)"""
+    """Williams Fractal Indicator"""
     # Initialize empty series for up and down fractals
     up_fractals = pd.Series(index=high.index, data=False)
     down_fractals = pd.Series(index=low.index, data=False)
@@ -487,8 +469,7 @@ def fractal_indicator(high: pd.Series, low: pd.Series, n: int = 2) -> tuple[pd.S
     return up_fractals, down_fractals
 
 def donchian_channel(high: pd.Series, low: pd.Series, timeperiod: int = 20) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Donchian Channel
-    Shows the highest high and lowest low over a given period"""
+    """Donchian Channel"""
     upper = high.rolling(window=timeperiod).max()
     lower = low.rolling(window=timeperiod).min()
     middle = (upper + lower) / 2
@@ -496,8 +477,7 @@ def donchian_channel(high: pd.Series, low: pd.Series, timeperiod: int = 20) -> t
     return upper, middle, lower
 
 def price_cycle(close: pd.Series, cycle_period: int = 20) -> pd.Series:
-    """Price Cycle Oscillator
-    Attempts to isolate the cyclical component of price movements"""
+    """Price Cycle Oscillator"""
     # Apply bandpass filter to isolate cyclical component
     # Parameters tuned to the given cycle period
     b, a = signal.butter(2, [0.5/cycle_period, 2.0/cycle_period], 'bandpass')
