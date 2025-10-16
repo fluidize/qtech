@@ -7,7 +7,6 @@ import yfinance as yf
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
-import hashlib
 import os
 import json
 
@@ -62,23 +61,12 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
 
     print("[green]DOWNLOADING DATA[/green]")
     if data_source == "yfinance":
-        data = pd.DataFrame()
-        times = []
-        for x in range(days):
-            chunksize = 1
-            start_date = datetime.now() - timedelta(days=chunksize) - timedelta(days=chunksize*x) - timedelta(days=age_days)
-            end_date = datetime.now() - timedelta(days=chunksize*x) - timedelta(days=age_days)
-            temp_data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False, auto_adjust=True)
-            if data.empty:
-                data = temp_data
-            else:
-                data = pd.concat([data, temp_data])
-            times.append(start_date)
-            times.append(end_date)
-
-        earliest = min(times)
-        latest = max(times)
-        difference = latest - earliest
+        end_date = datetime.now() - timedelta(days=age_days)
+        start_date = end_date - timedelta(days=days)
+        
+        data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False, auto_adjust=True, threads=False)
+        
+        difference = end_date - start_date
         print(f"\n{symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
 
         data.sort_index(inplace=True)
