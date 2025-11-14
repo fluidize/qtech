@@ -10,7 +10,9 @@ from rich.console import Console
 from tqdm import tqdm
 import numpy as np
 
-from backtesting import VectorizedBacktesting, MultiAssetBacktesting
+import sys
+sys.path.append("")
+from trading.backtesting.backtesting import VectorizedBacktesting, MultiAssetBacktesting
 import optuna
 
 optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
@@ -268,10 +270,6 @@ class MultiAssetBayesianOptimizer:
         self.reinvest = reinvest
         self.leverage = leverage
         self.cache_expiry_hours = cache_expiry_hours
-        self.n_trials = n_trials
-        self.direction = direction
-        self.float_exceptions = float_exceptions or []
-        self.fixed_exceptions = fixed_exceptions or []
         
         # Initialize MultiAssetBacktesting engine
         self.engine = MultiAssetBacktesting(
@@ -297,6 +295,10 @@ class MultiAssetBayesianOptimizer:
         strategy_func: Callable,
         param_space: Dict[str, tuple],
         metric: str = "Total_Return",
+        n_trials: int = 100,
+        direction: str = "maximize",
+        float_exceptions: List[str] = None,
+        fixed_exceptions: List[str] = None,
         save_params: bool = False
     ):
         """
@@ -311,6 +313,8 @@ class MultiAssetBayesianOptimizer:
         self.strategy_func = strategy_func
         self.param_space = param_space
         self.metric = metric
+        self.n_trials = n_trials
+        self.direction = direction
         
         float_exceptions = []
         fixed_exceptions = []
@@ -320,9 +324,6 @@ class MultiAssetBayesianOptimizer:
                 continue
             if isinstance(param_space[param][0], float):
                 float_exceptions.append(param)
-        
-        self.float_exceptions = float_exceptions
-        self.fixed_exceptions = fixed_exceptions
         
         total = len(self.intervals)
         progress_count = 1
@@ -345,8 +346,8 @@ class MultiAssetBayesianOptimizer:
                 strategy_func=strategy_func,
                 param_space=param_space,
                 metric=metric,
-                n_trials=self.n_trials,
-                direction=self.direction,
+                n_trials=n_trials,
+                direction=direction,
                 float_exceptions=float_exceptions,
                 fixed_exceptions=fixed_exceptions
             )
