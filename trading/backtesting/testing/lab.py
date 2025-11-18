@@ -1,14 +1,13 @@
 import sys
 sys.path.append("")
 
-from trading.backtesting.backtesting import VectorizedBacktesting
 from trading.backtesting.algorithm_optim import QuantitativeScreener
 import trading.backtesting.testing.cstrats as cs
 
 qs = QuantitativeScreener(
     symbols=["SOL-USDT"],
     days=365,
-    intervals=["15m", "30m", "1h", "4h"],
+    intervals=["1h", "4h"],
     age_days=0,
     data_source="binance",
     initial_capital=10000,
@@ -18,12 +17,15 @@ qs = QuantitativeScreener(
 )
 
 qs.optimize(
-    strategy_func=cs.trend_oscillation_strategy,
+    strategy_func=cs.trend_reversal_strategy_v2,
     param_space={
-        "slow_ma_period": (2, 50),
-        "fast_ma_period": (2, 50)
+        "supertrend_window": (2, 50),
+        "supertrend_multiplier": (1, 5),
+        "bbdev": (1, 10),
+        "bb_window": (1, 100),
+        "bbw_ma_window": (1, 100)
     },
-    metric="Sharpe_Ratio * Sortino_Ratio",
+    metric="Sharpe_Ratio * (1 + Max_Drawdown)",
     n_trials=100,
     direction="maximize",
     save_params=True
