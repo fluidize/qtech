@@ -10,6 +10,17 @@ import trading.smc_analysis as smc
 
 #cryptocurrency specific strategies
 
+def param_space(**param_space):
+    def decorator(func):
+        func.param_space = param_space
+        return func
+    return decorator
+
+@param_space(
+    supertrend_window=(2, 100),
+    supertrend_multiplier=(1, 10),
+    ma_window=(2, 100)
+)
 def trend_reversal_strategy_v1(
         data: pd.DataFrame,
         supertrend_window: int = 37,
@@ -40,6 +51,13 @@ def trend_reversal_strategy_v1(
     
     return signals
 
+@param_space(
+    supertrend_window=(2, 100),
+    supertrend_multiplier=(1, 10),
+    bbdev=(1, 10),
+    bb_window=(2, 100),
+    bbw_ma_window=(2, 100)
+)
 def trend_reversal_strategy_v2(
         data: pd.DataFrame,
         supertrend_window: int = 6,
@@ -48,8 +66,6 @@ def trend_reversal_strategy_v2(
         bb_window: int = 45,
         bbw_ma_window: int = 38,
     ) -> pd.Series:
-    #tuned for solusdt 15m
-
     signals = pd.Series(0, index=data.index)
     
     supertrend, supertrend_line = ta.supertrend(
@@ -192,17 +208,22 @@ def wavetrend_strategy(data: pd.DataFrame, channel_length: int = 10, average_len
 
     return signals
 
-def trend_oscillation_strategy(data: pd.DataFrame, fast_ma_period: int = 20, slow_ma_period: int = 75) -> pd.Series:
+@param_space(
+    fast_ma_period=(2, 100),
+    slow_ma_period=(2, 100),
+    smoothing=(2, 10)
+)
+def trend_oscillation_strategy(data: pd.DataFrame, fast_ma_period: int = 20, slow_ma_period: int = 75, smoothing: int = 4) -> pd.Series:
     signals = pd.Series(0, index=data.index)
 
-    slow_ma = ta.sma(data['Close'], timeperiod=slow_ma_period)
+    slow_ma = ta.ema(data['Close'], timeperiod=slow_ma_period)
     fast_ma = ta.ema(data['Close'], timeperiod=fast_ma_period)
 
     line = (fast_ma - slow_ma) / slow_ma
-    smooth_line = ta.sma(line, timeperiod=4)
+    smooth_line = ta.ema(line, timeperiod=smoothing)
     
-    long_condition = smooth_line > smooth_line.shift(1)
-    short_condition = smooth_line < smooth_line.shift(1)
+    long_condition = (smooth_line > smooth_line.shift(1))
+    short_condition = (smooth_line < smooth_line.shift(1))
 
     signals[long_condition] = 3
     signals[short_condition] = 2
