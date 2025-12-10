@@ -301,6 +301,10 @@ class VectorizedBacktesting:
     def plot_performance(self, mode: str = "basic"):
         """
         Modes: "basic", "standard", "extended"
+        Standard mode can plot indicators attached as a tuple in the strategy output containing either True or False for using price scale.
+
+        Ex: return signals, (indicator, True)
+        
         """
         if self.data is None or 'Portfolio_Value' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
@@ -419,17 +423,18 @@ class VectorizedBacktesting:
                 )
             if isinstance(self.strategy_output, tuple):
                 for output_idx in range(1, len(self.strategy_output)):
-                    if self.strategy_output[output_idx][1]: #if true add to price axis
+                    print(self.strategy_output[output_idx])
+                    if self.strategy_output[output_idx][1] == True: #if output is a tuple AND true, send to price axis
                         fig.add_trace(
                             go.Scatter(
                                 x=self.data['Datetime'],
                                 y=self.strategy_output[output_idx],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
-                                yaxis='y4'
+                                yaxis='y'
                             )
                         )
-                    else:
+                    elif self.strategy_output[output_idx][1] == False:
                         fig.add_trace(
                             go.Scatter(
                                 x=self.data['Datetime'],
