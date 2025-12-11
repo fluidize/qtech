@@ -353,7 +353,8 @@ class VectorizedBacktesting:
                     mode='lines',
                     name=f'Buy & Hold',
                     line=dict(width=2),
-                    yaxis='y2'
+                    yaxis='y2',
+                    visible="legendonly"
                 )
             )
             fig.add_trace(
@@ -363,7 +364,8 @@ class VectorizedBacktesting:
                     mode='lines',
                     name='Active Return',
                     line=dict(dash='dash', width=2),
-                    yaxis='y3'
+                    yaxis='y3',
+                    visible="legendonly"
                 )
             )
             position_changes = np.diff(self.data['Position'].values)
@@ -423,7 +425,6 @@ class VectorizedBacktesting:
                 )
             if isinstance(self.strategy_output, tuple):
                 for output_idx in range(1, len(self.strategy_output)):
-                    print(self.strategy_output[output_idx])
                     if self.strategy_output[output_idx][1] == True: #if output is a tuple AND true, send to price axis
                         fig.add_trace(
                             go.Scatter(
