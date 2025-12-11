@@ -428,7 +428,7 @@ class VectorizedBacktesting:
                         fig.add_trace(
                             go.Scatter(
                                 x=self.data['Datetime'],
-                                y=self.strategy_output[output_idx],
+                                y=self.strategy_output[output_idx][0],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
                                 yaxis='y'
@@ -438,7 +438,7 @@ class VectorizedBacktesting:
                         fig.add_trace(
                             go.Scatter(
                                 x=self.data['Datetime'],
-                                y=self.strategy_output[output_idx],
+                                y=self.strategy_output[output_idx][0],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
                                 yaxis='y4'
