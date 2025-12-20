@@ -301,6 +301,10 @@ class VectorizedBacktesting:
     def plot_performance(self, mode: str = "basic"):
         """
         Modes: "basic", "standard", "extended"
+        Standard mode can plot indicators attached as a tuple in the strategy output containing either True or False for using price scale.
+
+        Ex: return signals, (indicator, True)
+        
         """
         if self.data is None or 'Portfolio_Value' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
@@ -349,7 +353,8 @@ class VectorizedBacktesting:
                     mode='lines',
                     name=f'Buy & Hold',
                     line=dict(width=2),
-                    yaxis='y2'
+                    yaxis='y2',
+                    visible="legendonly"
                 )
             )
             fig.add_trace(
@@ -359,7 +364,8 @@ class VectorizedBacktesting:
                     mode='lines',
                     name='Active Return',
                     line=dict(dash='dash', width=2),
-                    yaxis='y3'
+                    yaxis='y3',
+                    visible="legendonly"
                 )
             )
             position_changes = np.diff(self.data['Position'].values)
@@ -419,21 +425,21 @@ class VectorizedBacktesting:
                 )
             if isinstance(self.strategy_output, tuple):
                 for output_idx in range(1, len(self.strategy_output)):
-                    if self.strategy_output[output_idx][1]: #if true add to price axis
+                    if self.strategy_output[output_idx][1] == True: #if output is a tuple AND true, send to price axis
                         fig.add_trace(
                             go.Scatter(
                                 x=self.data['Datetime'],
-                                y=self.strategy_output[output_idx],
+                                y=self.strategy_output[output_idx][0],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
-                                yaxis='y4'
+                                yaxis='y'
                             )
                         )
-                    else:
+                    elif self.strategy_output[output_idx][1] == False:
                         fig.add_trace(
                             go.Scatter(
                                 x=self.data['Datetime'],
-                                y=self.strategy_output[output_idx],
+                                y=self.strategy_output[output_idx][0],
                                 mode='lines',
                                 name=f'Indicator {output_idx}',
                                 yaxis='y4'

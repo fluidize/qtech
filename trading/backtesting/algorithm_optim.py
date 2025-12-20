@@ -165,7 +165,8 @@ class BayesianOptimizer:
 
                 self.engine.run_strategy(self.strategy_func, **param_dict)
                 metrics = self.engine.get_performance_metrics()
-                eval_metric = eval(self.metric, {"__builtins__": None}, metrics)
+                safe_dict = {"__builtins__": None, "abs": abs, "max": max, "min": min}
+                eval_metric = eval(self.metric, safe_dict, metrics)
 
                 if eval_metric == np.nan or np.isnan(eval_metric):
                     return invalid
