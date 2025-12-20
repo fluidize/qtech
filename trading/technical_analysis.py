@@ -490,7 +490,7 @@ def price_cycle(close: pd.Series, cycle_period: int = 20) -> pd.Series:
 
 def stddev(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Standard Deviation"""
-    return series.rolling(window=timeperiod).std()
+    return series.rolling(window=timeperiod).std(ddof=0)
 
 def roc(series: pd.Series, timeperiod: int = 10) -> pd.Series:
     """Rate of Change"""
