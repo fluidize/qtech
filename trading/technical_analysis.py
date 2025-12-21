@@ -759,6 +759,23 @@ def psar(high: np.ndarray, low: np.ndarray, acceleration_start: float = 0.02, ac
 
     return psar
 
+def kalman_filter(series: pd.Series, process_noise: float = 0.01, measurement_noise: float = 0.1) -> pd.Series:
+    """Kalman Filter"""
+    x_estimate = np.zeros_like(series)
+    P = 1
+    Q = process_noise
+    R = measurement_noise
+
+    for i in range(1, len(series)):
+        x_prediction = x_estimate[i-1]
+        P_prediction = P + Q #increase uncertainty
+
+        K = P_prediction / (P_prediction + R) #kalman gain
+        x_estimate[i] = x_prediction + K * (series[i] - x_prediction) #correct estimate with new measurement
+        P = (1 - K) * P_prediction #update uncertainty
+
+    return pd.Series(x_estimate, index=series.index)
+
 def identify_candlestick_patterns(open_prices: np.ndarray, high_prices: np.ndarray, low_prices: np.ndarray, close_prices: np.ndarray, patterns: Optional[list[str]] = None) -> pd.DataFrame:
     """
     Identify various candlestick patterns in the data.
@@ -864,62 +881,3 @@ def get_candlestick_patterns(df: pd.DataFrame, patterns: Optional[list[str]] = N
     pattern_df = identify_candlestick_patterns(open_prices, high_prices, low_prices, close_prices, patterns)
     
     return pattern_df
-
-if __name__ == "__main__":
-    import sys
-    sys.path.append(r"trading")
-    import model_tools as mt
-    
-    print("Benchmarking technical indicators...")
-    data = mt.fetch_data("BTC-USDT", 365, "5min", 0, kucoin=True)
-    
-    # Dictionary to store execution times
-    execution_times = {}
-    
-    # First test prepare_data_classifier to see which sections are slowest
-    print("\nBenchmarking prepare_data_classifier sections...")
-    start_time = time.time()
-    X, y = mt.prepare_data_classifier(data, lagged_length=20)
-    print(f"Total prepare_data_classifier time: {time.time() - start_time:.4f} seconds")
-    
-    print("\nBenchmarking individual indicator functions...")
-    # Test individual complex indicators that might be slow
-    functions_to_test = [
-        ("hurst_exponent", lambda: hurst_exponent(data['Close'])),
-        ("fractal_indicator", lambda: fractal_indicator(data['High'], data['Low'])),
-        ("ichimoku", lambda: ichimoku(data['High'], data['Low'], data['Close'])),
-        ("psar", lambda: psar(data['High'].values, data['Low'].values)),
-        ("supertrend", lambda: supertrend(data['High'], data['Low'], data['Close'])),
-        ("kama", lambda: kama(data['Close'])),
-        ("wma", lambda: wma(data['Close'])),
-        ("price_cycle", lambda: price_cycle(data['Close'])),
-        ("percent_rank", lambda: percent_rank(data['Close'])),
-        ("adx", lambda: adx(data['High'], data['Low'], data['Close'])),
-        ("identify_candlestick_patterns", lambda: identify_candlestick_patterns(
-            data['Open'].values, data['High'].values, data['Low'].values, data['Close'].values
-        ))
-    ]
-    
-    # Run benchmarks for individual functions
-    for name, func in functions_to_test:
-        start_time = time.time()
-        result = func()
-        end_time = time.time()
-        execution_time = end_time - start_time
-        execution_times[name] = execution_time
-        print(f"{name}: {execution_time:.4f} seconds")
-    
-    # Find slowest function
-    slowest_func = max(execution_times.items(), key=lambda x: x[1])
-    print(f"\nSLOWEST FUNCTION: {slowest_func[0]} took {slowest_func[1]:.4f} seconds")
-    
-    # Sort functions by execution time
-    print("\nAll functions sorted by execution time (slowest to fastest):")
-    sorted_funcs = sorted(execution_times.items(), key=lambda x: x[1], reverse=True)
-    for name, time_taken in sorted_funcs:
-        print(f"{name}: {time_taken:.4f} seconds")
-    
-    
-    
-    
-    
