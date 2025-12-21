@@ -165,7 +165,7 @@ class BayesianOptimizer:
 
                 self.engine.run_strategy(self.strategy_func, **param_dict)
                 metrics = self.engine.get_performance_metrics()
-                safe_dict = {"__builtins__": None, "abs": abs, "max": max, "min": min}
+                safe_dict = {"__builtins__": None, "abs": abs, "max": max, "min": min, "np": np}
                 eval_metric = eval(self.metric, safe_dict, metrics)
 
                 if eval_metric == np.nan or np.isnan(eval_metric):
@@ -193,7 +193,7 @@ class BayesianOptimizer:
         return params
 
     def run(self, show_progress_bar: bool = True):
-        self.study = optuna.create_study(direction=self.direction, pruner=optuna.pruners.NopPruner())
+        self.study = optuna.create_study(direction=self.direction, sampler=optuna.samplers.TPESampler())
         self.study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=show_progress_bar)
         
         # Check if any trials were completed
@@ -208,14 +208,6 @@ class BayesianOptimizer:
 
     def get_study(self):
         return self.study
-    
-    def plot_optimization_history(self):
-        fig = self.study.plot_optimization_history()
-        fig.show()
-    
-    def plot_hyperparameter_importance(self):
-        fig = self.study.plot_hyperparameter_importance()
-        fig.show()
 
 class MultiAssetBayesianOptimizer:
     """
