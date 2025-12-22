@@ -1,6 +1,9 @@
 import pandas as pd
 import ast
-from rich import print
+
+from rich.panel import Panel
+from rich.console import Console
+from rich.syntax import Syntax
 
 from genes import IndicatorGene, IndicatorToPrice, IndicatorToConstant, IndicatorToIndicator, LogicGene
 
@@ -8,10 +11,12 @@ import sys
 sys.path.append("")
 import trading.technical_analysis as ta
 
-def unparsify(ast_node: ast.AST) -> str:
+def unparsify(ast_node: ast.AST):
     """Convert AST node to Python code string."""
+    console = Console()
     ast.fix_missing_locations(ast_node)
-    return ast.unparse(ast_node)
+    console.print(Panel(Syntax(ast.unparse(ast_node), "python", theme="native")))
+    
 
 class Builder:
     def __init__(self, indicator_genes: list[IndicatorGene], logic_genes: list[LogicGene]):
@@ -53,7 +58,22 @@ class Builder:
             )
         )
 
-        base_ast = ast.Module(body=[signals_init] + indicator_ast_list + logic_ast_list, type_ignores=[])
+        #start off with simple logic assignment
+        #signals[logic_variable_names[0]] = 3
+        #signals[logic_variable_names[1]] = 2
+        buy_conditions_assign = ast.Assign(
+            targets=[ast.Subscript(value=ast.Name(id="signals", ctx=ast.Load()), slice=ast.Name(id=logic_variable_names[0], ctx=ast.Load()), ctx=ast.Load())],
+            value=ast.Constant(value=3)
+        )
+        sell_conditions_assign = ast.Assign(
+            targets=[ast.Subscript(value=ast.Name(id="signals", ctx=ast.Load()), slice=ast.Name(id=logic_variable_names[1], ctx=ast.Load()), ctx=ast.Load())],
+            value=ast.Constant(value=2)
+        )
+
+        #return signals
+        return_signals = ast.Return(value=ast.Name(id="signals", ctx=ast.Load()))
+
+        base_ast = ast.Module(body=[signals_init] + indicator_ast_list + logic_ast_list + [buy_conditions_assign, sell_conditions_assign] + [return_signals], type_ignores=[])
 
         return base_ast, algorithm_parameter_specs
 
