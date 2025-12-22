@@ -10,12 +10,14 @@ from rich.console import Console
 from tqdm import tqdm
 import numpy as np
 
+import optuna
+import optunahub
+optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
+
 import sys
 sys.path.append("")
 from trading.backtesting.backtesting import VectorizedBacktesting, MultiAssetBacktesting
-import optuna
 
-optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
 
 class GridSearch:
     def __init__(
