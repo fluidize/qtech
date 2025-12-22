@@ -73,7 +73,24 @@ class Builder:
         #return signals
         return_signals = ast.Return(value=ast.Name(id="signals", ctx=ast.Load()))
 
-        base_ast = ast.Module(body=[signals_init] + indicator_ast_list + logic_ast_list + [buy_conditions_assign, sell_conditions_assign] + [return_signals], type_ignores=[])
+        body = [
+            signals_init,
+            *indicator_ast_list,
+            *logic_ast_list,
+            buy_conditions_assign,
+            sell_conditions_assign,
+            return_signals
+        ]
+
+        args = [ast.arg(arg="data")] + [ast.arg(arg=next(iter(dict.keys()))) for dict in algorithm_parameter_specs]
+        func_args = ast.arguments(
+            posonlyargs=[],
+            args=args,
+            kwonlyargs=[], 
+            kw_defaults=[], 
+            defaults=[]
+        )
+        base_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[])
 
         return base_ast, algorithm_parameter_specs
 
