@@ -187,11 +187,12 @@ class IndicatorToConstant(LogicGene):
         self.operator = operator
         self.variable_name = None
         self.left_indicator_variable_name = None
-        self.parameter_specs = [{f"{self.variable_name}_constant" : (-100, 100)}] #default to this range as constants can be compared to anything
+        self.parameter_specs = []
     
     def load_indicators(self, indicator_variable_names: list[str]):
         self.left_indicator_variable_name = indicator_variable_names[self.left_index]
         self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_{self.constant}"
+        self.parameter_specs = [{f"{self.variable_name}_constant" : (-100, 100)}] #default to this range as constants can be compared to anything
     
     def get_name(self):
         return self.variable_name
