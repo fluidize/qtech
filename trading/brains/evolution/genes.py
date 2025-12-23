@@ -1,31 +1,11 @@
-import pandas as pd
-import numpy as np
 import inspect
 import ast
 
 from param_space import registered_param_specs
 
-import sys
-sys.path.append("")
-import trading.technical_analysis as ta
+from ast_tools import unique_counter, make_compare
 
-FUNCTIONAL_ALIAS = "ta"
-COUNTER = 0  # Used to generate unique parameter names per run
-
-def unique_counter() -> str:
-    """Generate a unique integer string."""
-    global COUNTER
-    name = f"{COUNTER}"
-    COUNTER += 1
-    return name
-
-def make_compare(left: ast.expr, operator: ast.cmpop, right: ast.expr) -> ast.Compare:
-    """Create AST Compare node."""
-    return ast.Compare(
-        left=left,
-        ops=[operator],
-        comparators=[right]
-    )
+FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 
 class IndicatorGene:
     """Creates a variable that stores an indicator function."""
@@ -43,7 +23,7 @@ class IndicatorGene:
             "series" : "Close", #by default map all data to the close col
             "high" : "High",
             "low" : "Low",
-            "open" : "Open",
+            "open_price" : "Open", #open is a builtin function, use open_price instead in TA
             "close" : "Close",
             "volume" : "Volume"
         }
@@ -191,8 +171,10 @@ class IndicatorToConstant(LogicGene):
     
     def load_indicators(self, indicator_variable_names: list[str]):
         self.left_indicator_variable_name = indicator_variable_names[self.left_index]
-        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_{self.constant}"
-        self.parameter_specs = [{f"{self.variable_name}_constant" : (-100, 100)}] #default to this range as constants can be compared to anything
+        # Use unique counter instead of constant value (floats create invalid variable names)
+        unique_id = unique_counter()
+        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_const_{unique_id}"
+        self.parameter_specs = [{f"{self.variable_name}_constant": (-100, 100)}]
     
     def get_name(self):
         return self.variable_name

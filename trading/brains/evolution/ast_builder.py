@@ -7,17 +7,6 @@ from rich.syntax import Syntax
 
 from genes import IndicatorGene, IndicatorToPrice, IndicatorToConstant, IndicatorToIndicator, LogicGene
 
-import sys
-sys.path.append("")
-import trading.technical_analysis as ta
-
-def unparsify(ast_node: ast.AST):
-    """Convert AST node to Python code string."""
-    console = Console()
-    ast.fix_missing_locations(ast_node)
-    console.print(Panel(Syntax(ast.unparse(ast_node), "python", theme="native")))
-    
-
 class Builder:
     def __init__(self, indicator_genes: list[IndicatorGene], logic_genes: list[LogicGene]):
         self.indicator_genes = indicator_genes
