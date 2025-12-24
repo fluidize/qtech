@@ -3,12 +3,6 @@ import numpy as np
 import pandas as pd
 from rich import print
 
-import plotly
-import plotly.graph_objects as go
-import plotly.io as pio
-pio.renderers.default = "browser"
-import matplotlib.pyplot as plt
-
 import sys
 sys.path.append("")
 sys.path.append("trading/backtesting")
@@ -314,6 +308,11 @@ class VectorizedBacktesting:
         """
         if self.data is None or 'Portfolio_Value' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
+
+        import plotly.graph_objects as go
+        import plotly.io as pio
+        pio.renderers.default = "browser"
+        import matplotlib.pyplot as plt
 
         summary = self.get_performance_metrics()
         if mode == "basic":
@@ -855,3 +854,17 @@ class MultiAssetBacktesting:
         plt.ylabel("Portfolio Value")
         plt.plot(self.weighted_portfolio_value)
         plt.show()
+
+if __name__ == "__main__":
+    vb = VectorizedBacktesting(
+        instance_name="test",
+        initial_capital=10000.0,
+        slippage_pct=0.001,
+        commission_fixed=1.0,
+        reinvest=False,
+        leverage=1.0
+    )
+    vb.fetch_data(symbol="SOL-USDT", days=365, interval="1h", age_days=0, data_source="binance", cache_expiry_hours=720, verbose=True)
+    vb.run_strategy(strategy_func=lambda data: (pd.Series(0, index=data.index), (data["Close"], True)), verbose=True)
+    print(vb.get_performance_metrics(accelerate=True))
+    vb.plot_performance(mode="standard")
