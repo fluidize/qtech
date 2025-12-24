@@ -48,12 +48,17 @@ def trend_reversal_strategy_v2(
     return signals
 
 @param_space(
-    adx_period=(2, 100)
+    adx_period=(2, 100),
+    supertrend_period=(2, 100),
+    supertrend_multiplier=(1, 10),
+    adx_sma_period=(2, 100)
 )
-def trend_strength_strategy(data: pd.DataFrame, adx_period: int = 14) -> pd.Series:
+def trend_strength_strategy(data: pd.DataFrame, adx_period: int = 14, adx_sma_period: int = 3, supertrend_period: int = 5, supertrend_multiplier: float = 2) -> pd.Series:
     signals = pd.Series(2, index=data.index)
     adx, plus_di, minus_di = ta.adx(data['High'], data['Low'], data['Close'], timeperiod=adx_period)
-    supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=5, multiplier=2)
-    buy_conditions =(adx > ta.sma(adx, timeperiod=3)) & (supertrend == 1)
+    supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=supertrend_period, multiplier=supertrend_multiplier)
+    buy_conditions =(adx > ta.sma(adx, timeperiod=adx_sma_period)) & (supertrend == 1)
+    sell_conditions =(adx < ta.sma(adx, timeperiod=adx_sma_period)) & (supertrend == -1) 
     signals[buy_conditions] = 3
+    signals[sell_conditions] = 2
     return signals
