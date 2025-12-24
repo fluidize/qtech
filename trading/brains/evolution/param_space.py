@@ -3,180 +3,287 @@ from dataclasses import dataclass
 @dataclass
 class ParamSpec:
     """Specifies the space of values that a parameter can take."""
+    parameter_name: str
     search_space: tuple[int, int] | tuple[float, float]
 
-#full TA search space for every function and its parameters
+@dataclass
+class FunctionSpec:
+    """Specifies the function and its parameters."""
+    function_name: str
+    parameters: list[ParamSpec]
+    return_count: int
+
 registered_param_specs = {
-    "sma": {
-        "timeperiod": (2, 200)
-    },
-    "ema": {
-        "timeperiod": (2, 200)
-    },
-    "rsi": {
-        "timeperiod": (2, 200)
-    },
-    "macd": {
-        "fastperiod": (2, 100),
-        "slowperiod": (2, 200),
-        "signalperiod": (2, 50)
-    },
-    "macd_dema": {
-        "fastperiod": (2, 100),
-        "slowperiod": (2, 200),
-        "signalperiod": (2, 50)
-    },
-    "bbands": {
-        "timeperiod": (2, 200),
-        "devup": (1.0, 5.0),
-        "devdn": (1.0, 5.0)
-    },
-    "stoch": {
-        "fastk_period": (2, 50),
-        "slowk_period": (2, 20),
-        "slowd_period": (2, 20)
-    },
-    "atr": {
-        "timeperiod": (2, 200)
-    },
-    "cci": {
-        "timeperiod": (2, 200)
-    },
-    "adx": {
-        "timeperiod": (2, 200)
-    },
-    "dpo": {
-        "timeperiod": (2, 200)
-    },
-    "dema": {
-        "timeperiod": (2, 200)
-    },
-    "tema": {
-        "timeperiod": (2, 200)
-    },
-    "fisher_transform": {
-        "timeperiod": (2, 200)
-    },
-    "aroon": {
-        "timeperiod": (2, 200)
-    },
-    "awesome_oscillator": {
-        "fast_period": (2, 50),
-        "slow_period": (2, 200)
-    },
-    "keltner_channels": {
-        "timeperiod": (2, 200),
-        "atr_multiplier": (0.1, 5.0)
-    },
-    "vwap_bands": {
-        "timeperiod": (2, 200),
-        "stdev_multiplier": (1.0, 5.0)
-    },
-    "elder_ray": {
-        "timeperiod": (2, 200)
-    },
-    "rvi": {
-        "timeperiod": (2, 200)
-    },
-    "choppiness_index": {
-        "timeperiod": (2, 200)
-    },
-    "mass_index": {
-        "timeperiod": (2, 200),
-        "ema_period": (2, 50)
-    },
-    "volume_zone_oscillator": {
-        "short_period": (2, 50),
-        "long_period": (2, 200)
-    },
-    "volatility_ratio": {
-        "roc_period": (2, 200),
-        "atr_period": (2, 200)
-    },
-    "hurst_exponent": {
-        "max_lag": (5, 50)
-    },
-    "zscore": {
-        "timeperiod": (2, 200)
-    },
-    "volatility": {
-        "timeperiod": (2, 200)
-    },
-    "percent_rank": {
-        "timeperiod": (2, 200)
-    },
-    "historical_volatility": {
-        "output_period": (2.0, 365.0)
-    },
-    "fractal_indicator": {
-        "n": (2, 10)
-    },
-    "donchian_channel": {
-        "timeperiod": (2, 200)
-    },
-    "price_cycle": {
-        "cycle_period": (5, 100)
-    },
-    "stddev": {
-        "timeperiod": (2, 200)
-    },
-    "roc": {
-        "timeperiod": (2, 200)
-    },
-    "mom": {
-        "timeperiod": (2, 200)
-    },
-    "willr": {
-        "timeperiod": (2, 200)
-    },
-    "mfi": {
-        "timeperiod": (2, 200)
-    },
-    "kama": {
-        "er_period": (2, 50),
-        "fast_period": (2, 10),
-        "slow_period": (10, 100)
-    },
-    "supertrend": {
-        "period": (2, 200),
-        "multiplier": (1.0, 5.0)
-    },
-    "tsi": {
-        "long_period": (5, 100),
-        "short_period": (2, 50),
-        "signal_period": (2, 50)
-    },
-    "cmf": {
-        "timeperiod": (2, 200)
-    },
-    "hma": {
-        "timeperiod": (2, 200)
-    },
-    "wma": {
-        "timeperiod": (2, 200)
-    },
-    "ichimoku": {
-        "tenkan_period": (2, 50),
-        "kijun_period": (2, 100),
-        "senkou_period": (10, 200),
-        "chikou_period": (2, 100)
-    },
-    "ppo": {
-        "fast_period": (2, 100),
-        "slow_period": (2, 200),
-        "signal_period": (2, 50)
-    },
-    "aobv": {
-        "fast_period": (2, 50),
-        "slow_period": (2, 200)
-    },
-    "psar": {
-        "acceleration_start": (0.01, 0.1),
-        "acceleration_step": (0.01, 0.1),
-        "max_acceleration": (0.1, 0.5)
-    },
-    "kalman_filter": {
-        "process_noise": (0.001, 0.1),
-        "measurement_noise": (0.001, 0.5)
-    }
+    "sma": FunctionSpec(
+        function_name="sma",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "ema": FunctionSpec(
+        function_name="ema",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "rsi": FunctionSpec(
+        function_name="rsi",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "macd": FunctionSpec(
+        function_name="macd",
+        parameters=[
+            ParamSpec(parameter_name="fastperiod", search_space=(2, 100)),
+            ParamSpec(parameter_name="slowperiod", search_space=(2, 200)),
+            ParamSpec(parameter_name="signalperiod", search_space=(2, 50))
+        ],
+        return_count=3
+    ),
+    "macd_dema": FunctionSpec(
+        function_name="macd_dema",
+        parameters=[
+            ParamSpec(parameter_name="fastperiod", search_space=(2, 100)),
+            ParamSpec(parameter_name="slowperiod", search_space=(2, 200)),
+            ParamSpec(parameter_name="signalperiod", search_space=(2, 50))
+        ],
+        return_count=3
+    ),
+    "bbands": FunctionSpec(
+        function_name="bbands",
+        parameters=[
+            ParamSpec(parameter_name="timeperiod", search_space=(2, 200)),
+            ParamSpec(parameter_name="devup", search_space=(1.0, 5.0)),
+            ParamSpec(parameter_name="devdn", search_space=(1.0, 5.0))
+        ],
+        return_count=3
+    ),
+    "stoch": FunctionSpec(
+        function_name="stoch",
+        parameters=[
+            ParamSpec(parameter_name="fastk_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="slowk_period", search_space=(2, 20)),
+            ParamSpec(parameter_name="slowd_period", search_space=(2, 20))
+        ],
+        return_count=2
+    ),
+    "atr": FunctionSpec(
+        function_name="atr",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "cci": FunctionSpec(
+        function_name="cci",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "adx": FunctionSpec(
+        function_name="adx",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=3
+    ),
+    "dpo": FunctionSpec(
+        function_name="dpo",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "dema": FunctionSpec(
+        function_name="dema",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "tema": FunctionSpec(
+        function_name="tema",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "fisher_transform": FunctionSpec(
+        function_name="fisher_transform",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "aroon": FunctionSpec(
+        function_name="aroon",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=2
+    ),
+    "awesome_oscillator": FunctionSpec(
+        function_name="awesome_oscillator",
+        parameters=[
+            ParamSpec(parameter_name="fast_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="slow_period", search_space=(2, 200))
+        ],
+        return_count=1
+    ),
+    "keltner_channels": FunctionSpec(
+        function_name="keltner_channels",
+        parameters=[
+            ParamSpec(parameter_name="timeperiod", search_space=(2, 200)),
+            ParamSpec(parameter_name="atr_multiplier", search_space=(0.1, 5.0))
+        ],
+        return_count=3
+    ),
+    "vwap_bands": FunctionSpec(
+        function_name="vwap_bands",
+        parameters=[
+            ParamSpec(parameter_name="timeperiod", search_space=(2, 200)),
+            ParamSpec(parameter_name="stdev_multiplier", search_space=(1.0, 5.0))
+        ],
+        return_count=3
+    ),
+    "elder_ray": FunctionSpec(
+        function_name="elder_ray",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=2
+    ),
+    "rvi": FunctionSpec(
+        function_name="rvi",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "choppiness_index": FunctionSpec(
+        function_name="choppiness_index",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "mass_index": FunctionSpec(
+        function_name="mass_index",
+        parameters=[
+            ParamSpec(parameter_name="timeperiod", search_space=(2, 200)),
+            ParamSpec(parameter_name="ema_period", search_space=(2, 50))
+        ],
+        return_count=1
+    ),
+    "volume_zone_oscillator": FunctionSpec(
+        function_name="volume_zone_oscillator",
+        parameters=[
+            ParamSpec(parameter_name="short_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="long_period", search_space=(2, 200))
+        ],
+        return_count=1
+    ),
+    "volatility_ratio": FunctionSpec(
+        function_name="volatility_ratio",
+        parameters=[
+            ParamSpec(parameter_name="roc_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="atr_period", search_space=(2, 200))
+        ],
+        return_count=1
+    ),
+    "zscore": FunctionSpec(
+        function_name="zscore",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "volatility": FunctionSpec(
+        function_name="volatility",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "percent_rank": FunctionSpec(
+        function_name="percent_rank",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "donchian_channel": FunctionSpec(
+        function_name="donchian_channel",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=3
+    ),
+    "price_cycle": FunctionSpec(
+        function_name="price_cycle",
+        parameters=[ParamSpec(parameter_name="cycle_period", search_space=(5, 100))],
+        return_count=1
+    ),
+    "stddev": FunctionSpec(
+        function_name="stddev",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "roc": FunctionSpec(
+        function_name="roc",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "mom": FunctionSpec(
+        function_name="mom",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "willr": FunctionSpec(
+        function_name="willr",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "mfi": FunctionSpec(
+        function_name="mfi",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "kama": FunctionSpec(
+        function_name="kama",
+        parameters=[
+            ParamSpec(parameter_name="er_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="fast_period", search_space=(2, 10)),
+            ParamSpec(parameter_name="slow_period", search_space=(10, 100))
+        ],
+        return_count=1
+    ),
+    "supertrend": FunctionSpec(
+        function_name="supertrend",
+        parameters=[
+            ParamSpec(parameter_name="period", search_space=(2, 200)),
+            ParamSpec(parameter_name="multiplier", search_space=(1.0, 5.0))
+        ],
+        return_count=2
+    ),
+    "tsi": FunctionSpec(
+        function_name="tsi",
+        parameters=[
+            ParamSpec(parameter_name="long_period", search_space=(5, 100)),
+            ParamSpec(parameter_name="short_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="signal_period", search_space=(2, 50))
+        ],
+        return_count=2
+    ),
+    "cmf": FunctionSpec(
+        function_name="cmf",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "hma": FunctionSpec(
+        function_name="hma",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "wma": FunctionSpec(
+        function_name="wma",
+        parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
+        return_count=1
+    ),
+    "ichimoku": FunctionSpec(
+        function_name="ichimoku",
+        parameters=[
+            ParamSpec(parameter_name="tenkan_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="kijun_period", search_space=(2, 100)),
+            ParamSpec(parameter_name="senkou_period", search_space=(10, 200)),
+            ParamSpec(parameter_name="chikou_period", search_space=(2, 100))
+        ],
+        return_count=5
+    ),
+    "ppo": FunctionSpec(
+        function_name="ppo",
+        parameters=[
+            ParamSpec(parameter_name="fast_period", search_space=(2, 100)),
+            ParamSpec(parameter_name="slow_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="signal_period", search_space=(2, 50))
+        ],
+        return_count=3
+    ),
+    "aobv": FunctionSpec(
+        function_name="aobv",
+        parameters=[
+            ParamSpec(parameter_name="fast_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="slow_period", search_space=(2, 200))
+        ],
+        return_count=2
+    )
 }
