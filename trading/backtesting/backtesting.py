@@ -848,6 +848,7 @@ class MultiAssetBacktesting:
         }
     
     def plot_performance(self):
+        import matplotlib.pyplot as plt
         summary = self.get_performance_metrics()
         plt.title(f"Multi-Asset Backtesting Performance {summary['Total_Return']*100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f}")
         plt.xlabel("Time")
