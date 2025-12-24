@@ -273,7 +273,6 @@ class VectorizedBacktesting:
         win_rate = metrics.get_win_rate(position, open_prices)
         rr_ratio = metrics.get_rr_ratio(position, open_prices)
         breakeven_rate = metrics.get_breakeven_rate(position, open_prices)
-        pt_ratio = metrics.get_pt_ratio(position, open_prices)
         
         profit_factor = metrics.get_profit_factor(position, open_prices)
 
@@ -291,7 +290,6 @@ class VectorizedBacktesting:
             'Win_Rate': win_rate,
             'Breakeven_Rate': breakeven_rate,
             'RR_Ratio': rr_ratio,
-            'PT_Ratio': pt_ratio,
             'Profit_Factor': profit_factor,
             'Total_Trades': len(trade_pnls),
             'R': r,
@@ -312,7 +310,7 @@ class VectorizedBacktesting:
         summary = self.get_performance_metrics()
         if mode == "basic":
             plt.plot(self.data['Datetime'], self.data['Portfolio_Value'])
-            plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | RR: {summary['RR_Ratio']:.3f} | WR: {summary['Win_Rate']*100:.3f}% | PT: {summary['PT_Ratio']*100:.3f}% | PF: {summary['Profit_Factor']:.3f} | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
+            plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | RR: {summary['RR_Ratio']:.3f} | WR: {summary['Win_Rate']*100:.3f}% | PF: {summary['Profit_Factor']:.3f} | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
             plt.show()
 
         elif mode == "standard":
@@ -446,7 +444,7 @@ class VectorizedBacktesting:
                             )
                         )
             fig.update_layout(
-                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PT: {summary["PT_Ratio"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
+                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis=dict(
                     title='Date',
                     rangeslider=dict(visible=False),
