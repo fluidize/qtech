@@ -1,8 +1,7 @@
 import inspect
 import ast
 
-from param_space import registered_param_specs
-
+from param_space import registered_param_specs, ParamSpec
 from ast_tools import unique_counter, make_compare
 
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
@@ -10,9 +9,11 @@ FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 class IndicatorGene:
     """Creates a variable that stores an indicator function."""
     def __init__(self, function: callable):
-        self.variable_name = f"{function.__name__}_{unique_counter()}"
         self.function = function
-        self.parameter_specs = []
+        self.function_spec = registered_param_specs[self.function.__name__]
+        self.parameter_specs = self.function_spec.parameters
+        self.unique_parameter_specs = []
+        self.variable_names = [f"{self.function.__name__}_{unique_counter()}" for _ in range(self.function_spec.return_count)] #len = return_count
     
     def _get_keywords(self) -> list[ast.expr]:
         """Get the data arguments to be passed to the indicator function."""
@@ -28,7 +29,7 @@ class IndicatorGene:
             "volume" : "Volume"
         }
         
-        for param_name, param in sig.parameters.items():
+        for param_name in sig.parameters.keys():
             if param_name in data_keywords: #if the parameter should be mapped to a data column
                 column = data_keywords[param_name] #column to be accessed from the main df
                 keywords.append(
@@ -42,31 +43,30 @@ class IndicatorGene:
                     )
                 )
             else:
-                unique_param_name = f"{self.variable_name}_{param_name}"
+                unique_param_name = f"{self.variable_names[0]}_{param_name}"
                 keywords.append(
                     ast.keyword(
                         arg=param_name,
                         value=ast.Name(id=unique_param_name, ctx=ast.Load())
                     )
                 )
-                #add the unique parameter name to the list of parameter names that need to be FILLED OUT on compilation and exec
-                self.parameter_specs.append({unique_param_name : registered_param_specs[self.function.__name__][param_name]})
+                current_param_spec = next((p for p in self.parameter_specs if p.parameter_name == param_name), None)
+                self.unique_parameter_specs.append(ParamSpec(parameter_name=unique_param_name, search_space=current_param_spec.search_space))
         return keywords
     
-    def get_name(self):
-        return self.variable_name
+    def get_names(self):
+        return self.variable_names
     
     def get_parameter_specs(self):
-        return self.parameter_specs
+        return self.unique_parameter_specs
 
     def to_ast(self):
+        if self.function_spec.return_count > 1:
+            targets = ast.Tuple(elts=[ast.Name(id=variable_name, ctx=ast.Store()) for variable_name in self.variable_names], ctx=ast.Store())
+        else:
+            targets = ast.Name(id=self.variable_names[0], ctx=ast.Store())
         return ast.Assign(
-            targets=[
-                ast.Name(
-                    id=self.variable_name,
-                    ctx=ast.Store()
-                )
-            ],
+            targets=[targets],
             value=ast.Call(
                 func=ast.Attribute(
                     value=ast.Name(id=FUNCTIONAL_ALIAS, ctx=ast.Load()), #module alias
@@ -167,14 +167,12 @@ class IndicatorToConstant(LogicGene):
         self.operator = operator
         self.variable_name = None
         self.left_indicator_variable_name = None
-        self.parameter_specs = []
+        self.parameter_specs = None
     
     def load_indicators(self, indicator_variable_names: list[str]):
         self.left_indicator_variable_name = indicator_variable_names[self.left_index]
-        # Use unique counter instead of constant value (floats create invalid variable names)
-        unique_id = unique_counter()
-        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_const_{unique_id}"
-        self.parameter_specs = [{f"{self.variable_name}_constant": (-100, 100)}]
+        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_const_{unique_counter()}"
+        self.parameter_specs = [ParamSpec(parameter_name=f"{self.variable_name}_constant", search_space=(-100, 100))]
     
     def get_name(self):
         return self.variable_name

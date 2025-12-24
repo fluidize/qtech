@@ -20,7 +20,7 @@ class Builder:
         indicator_variable_names = []
         for gene in self.indicator_genes:
             indicator_ast_list.append(gene.to_ast())
-            indicator_variable_names.append(gene.get_name())
+            indicator_variable_names.extend(gene.get_names())
             algorithm_parameter_specs.extend(gene.get_parameter_specs())
 
         logic_ast_list = []
@@ -51,11 +51,19 @@ class Builder:
         #signals[logic_variable_names[0]] = 3
         #signals[logic_variable_names[1]] = 2
         buy_conditions_assign = ast.Assign(
-            targets=[ast.Subscript(value=ast.Name(id="signals", ctx=ast.Load()), slice=ast.Name(id=logic_variable_names[0], ctx=ast.Load()), ctx=ast.Load())],
+            targets=[ast.Subscript(
+                value=ast.Name(id="signals", ctx=ast.Load()), 
+                slice=ast.Name(id=logic_variable_names[0], ctx=ast.Load()), 
+                ctx=ast.Store()
+            )],
             value=ast.Constant(value=3)
         )
         sell_conditions_assign = ast.Assign(
-            targets=[ast.Subscript(value=ast.Name(id="signals", ctx=ast.Load()), slice=ast.Name(id=logic_variable_names[1], ctx=ast.Load()), ctx=ast.Load())],
+            targets=[ast.Subscript(
+                value=ast.Name(id="signals", ctx=ast.Load()), 
+                slice=ast.Name(id=logic_variable_names[1], ctx=ast.Load()), 
+                ctx=ast.Store()
+            )],
             value=ast.Constant(value=2)
         )
 
@@ -71,14 +79,8 @@ class Builder:
             return_signals
         ]
 
-        args = [ast.arg(arg="data")] + [ast.arg(arg=next(iter(dict.keys()))) for dict in algorithm_parameter_specs]
-        func_args = ast.arguments(
-            posonlyargs=[],
-            args=args,
-            kwonlyargs=[], 
-            kw_defaults=[], 
-            defaults=[]
-        )
+        args = [ast.arg(arg="data")] + [ast.arg(arg=sp.parameter_name) for sp in algorithm_parameter_specs]
+        func_args = ast.arguments(posonlyargs=[], args=args, kwonlyargs=[], kw_defaults=[], defaults=[])
         base_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[])
 
         return base_ast, algorithm_parameter_specs
