@@ -230,7 +230,8 @@ class VectorizedBacktesting:
 
         return self.data
 
-    def get_performance_metrics(self):
+    def get_performance_metrics(self, accelerate: bool = False):
+        """If accelerate is true, skip calculations that are computationally expensive."""
         if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
@@ -256,27 +257,34 @@ class VectorizedBacktesting:
         peak = portfolio_value.cummax()
         drawdown = (portfolio_value - peak) / peak
         max_drawdown = drawdown.min()
-        
+
+        #FAST METRICS
         sharpe_ratio = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+        r, r2 = metrics.get_r_and_r2(portfolio_value)
+        alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
 
-        if len(strategy_returns) >= 2 and len(asset_returns) >= 2:
-            try:
-                alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
-            except Exception:
-                alpha, beta = float('nan'), float('nan')
-        else:
-            alpha, beta = float('nan'), float('nan')
+        if accelerate:
+            return { #end code early if accelerate is true
+                'Total_Return': total_return,
+                'Alpha': alpha,
+                'Beta': beta,
+                'Active_Return': active_return,
+                'Max_Drawdown': max_drawdown,
+                'Sharpe_Ratio': sharpe_ratio,
+                'Sortino_Ratio': sortino_ratio,
+                'Information_Ratio': info_ratio,
+                'R': r,
+                'R2': r2,
+            }
         
+        #SLOW METRICS
         trade_pnls = metrics.get_trade_pnls(position, open_prices)
         win_rate = metrics.get_win_rate(position, open_prices)
         rr_ratio = metrics.get_rr_ratio(position, open_prices)
         breakeven_rate = metrics.get_breakeven_rate(position, open_prices)
-        
         profit_factor = metrics.get_profit_factor(position, open_prices)
-
-        r, r2 = metrics.get_r_and_r2(portfolio_value)
 
         return {
             'Total_Return': total_return,

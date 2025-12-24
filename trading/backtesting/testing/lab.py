@@ -34,7 +34,7 @@ qs.optimize(
     strategy_func=cs.trend_strength_strategy,
     param_space=cs.trend_strength_strategy.param_space,
     metric="Sharpe_Ratio * np.clip((1 + Max_Drawdown), 0, None)",
-    n_trials=100,
+    n_trials=1000,
     direction="maximize",
     save_params=False
 )
