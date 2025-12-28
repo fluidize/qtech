@@ -284,10 +284,9 @@ def get_profit_factor(position: pd.Series, open_prices: pd.Series) -> float:
 
 def get_total_trades(position: pd.Series) -> int:
     """Calculate total number of trades from position."""
-    dummy_prices = pd.Series(range(len(position)), index=position.index)  # Dummy prices for counting
-    pnl_list = get_trade_pnls(position, dummy_prices)
-    result = len(pnl_list)
-    return result
+    position_changes = position.diff().fillna(0)
+    total_trades = (position_changes != 0).sum()
+    return total_trades
 
 def get_rr_ratio_from_pnls(pnl_list: List[float]) -> float:
     """Calculate risk/reward ratio from pre-calculated PnL list."""
@@ -396,8 +395,19 @@ def get_trade_returns(position: pd.Series, open_prices: pd.Series) -> List[float
 
 def get_r_and_r2(portfolio_value: pd.Series) -> tuple[float, float]:
     """Calculate R and R^2 from portfolio value. Returns R and R^2."""
-    model = sm.OLS(portfolio_value, portfolio_value.index).fit()
-    r = np.sqrt(model.rsquared)
-    r2 = model.rsquared
-    return r, r2
+    y = portfolio_value
+    x = np.arange(len(y), dtype=np.float64)
+
+    # demean
+    x -= x.mean()
+    y = y - y.mean()
+
+    # correlation
+    denom = np.sqrt((x @ x) * (y @ y))
+    if denom == 0:
+        return 0.0, 0.0
+
+    r = (x @ y) / denom
+    r2 = r * r
+    return abs(r), r2
     
