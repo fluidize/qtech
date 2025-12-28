@@ -55,41 +55,38 @@ def get_portfolio_value(position: pd.Series, open_prices: pd.Series, initial_cap
 
 def get_alpha_beta(strategy_returns: pd.Series, market_returns: pd.Series, n_days: int, return_interval: str = None):
     """Calculate annualized Jensen's alpha and beta using regression with actual strategy returns."""
-    # Align time
-    common_index = strategy_returns.dropna().index.intersection(market_returns.dropna().index)
-    strategy_returns_aligned = strategy_returns.loc[common_index]
-    market_returns_aligned = market_returns.loc[common_index]
+    df = pd.concat([strategy_returns, market_returns], axis=1).dropna()
+    if len(df) < 2:
+        return np.nan, np.nan
 
-    if len(strategy_returns_aligned) < 2 or len(market_returns_aligned) < 2:
-        return float('nan'), float('nan')
+    rs = df.iloc[:, 0].to_numpy()
+    rm = df.iloc[:, 1].to_numpy()
 
-    X = sm.add_constant(market_returns_aligned.values)
-    y = strategy_returns_aligned.values
-    model = sm.OLS(y, X).fit()
-    alpha = model.params[0]  # Intercept is Jensen's alpha (per period)
-    beta = model.params[1]   # Slope is beta
+    ms = rs.mean()
+    mm = rm.mean()
 
-    # Annualize alpha properly
-    if return_interval == '1m':
-        periods_per_year = 365 * 24 * 60  # 525,600 minutes per year
-    elif return_interval == '3m':
-        periods_per_year = 365 * 24 * 20  # 175,200 3-minute periods per year
-    elif return_interval == '5m':
-        periods_per_year = 365 * 24 * 12  # 105,120 5-minute periods per year
-    elif return_interval == '15m':
-        periods_per_year = 365 * 24 * 4   # 35,040 15-minute periods per year
-    elif return_interval == '30m':
-        periods_per_year = 365 * 24 * 2   # 17,520 30-minute periods per year
-    elif return_interval == '1h':
-        periods_per_year = 365 * 24       # 8,760 hours per year
-    elif return_interval == '4h':
-        periods_per_year = 365 * 6        # 2,190 4-hour periods per year
-    elif return_interval == '1d':
-        periods_per_year = 365             # 365 days per year
-    else:
-        periods_per_year = 252  # Default to trading days
+    ds = rs - ms
+    dm = rm - mm
 
-    alpha_annualized = alpha * np.sqrt(periods_per_year)
+    var_m = dm @ dm
+    if var_m == 0:
+        return np.nan, np.nan
+
+    beta = (ds @ dm) / var_m
+    alpha = ms - beta * mm
+
+    periods_per_year = {
+        '1m': 365 * 24 * 60,
+        '3m': 365 * 24 * 20,
+        '5m': 365 * 24 * 12,
+        '15m': 365 * 24 * 4,
+        '30m': 365 * 24 * 2,
+        '1h': 365 * 24,
+        '4h': 365 * 6,
+        '1d': 365,
+    }.get(return_interval, 252)
+
+    alpha_annualized = alpha * periods_per_year
 
     return alpha_annualized, beta
 
