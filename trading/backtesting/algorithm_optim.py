@@ -144,21 +144,49 @@ class GridSearch:
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class BayesianOptimizer:
-    def __init__(self, engine: VectorizedBacktesting, strategy_func: Callable, param_space: Dict[str, tuple], metric: str = "Total_Return", n_trials: int = 30, direction: str = "maximize", float_exceptions: List[str] = None, fixed_exceptions: List[str] = None):
+    def __init__(self, engine: VectorizedBacktesting):
         self.engine = engine
+
+    def _suggest_params(self, trial):
+        params = {}
+        
+        for k, v in self.param_space.items():
+            if k in self.fixed_exceptions:
+                params[k] = v[0] if isinstance(v, (tuple, list)) else v # For fixed parameters, just use the first value if it's a tuple/list, otherwise use the value directly
+            elif k in self.float_exceptions:
+                params[k] = trial.suggest_float(k, v[0], v[1])
+            else:
+                params[k] = trial.suggest_int(k, v[0], v[1])
+        return params
+
+    def optimize(
+        self,
+        strategy_func: Callable,
+        param_space: Dict[str, tuple],
+        metric: str = "Total_Return",
+        n_trials: int = 100,
+        direction: str = "maximize",
+        callbacks: List[Callable] = None,
+        show_progress_bar: bool = True
+    ):
         self.strategy_func = strategy_func
-        self.param_space = param_space  # e.g., {"fast_period": (1, 50), "slow_period": (1, 50)}
+        self.param_space = param_space
         self.metric = metric
-        self.param_names = list(param_space.keys())
-        self.best_params = None
-        self.best_metric = None
         self.n_trials = n_trials
         self.direction = direction
-        self.float_exceptions = float_exceptions or []
-        self.fixed_exceptions = fixed_exceptions or []
+        self.callbacks = callbacks
 
-        self.study = None
-
+        float_exceptions = []
+        fixed_exceptions = []
+        for param in param_space.keys():
+            if len(param_space[param]) == 1:
+                fixed_exceptions.append(param)
+                continue
+            if isinstance(param_space[param][0], float):
+                float_exceptions.append(param)
+        self.float_exceptions = float_exceptions
+        self.fixed_exceptions = fixed_exceptions
+        
         invalid = float('-inf') if self.direction == "maximize" else float('inf')
 
         def objective(trial):
@@ -175,30 +203,14 @@ class BayesianOptimizer:
 
                 return eval_metric
             except Exception as e:
-                # Return a very bad score if the strategy fails, but ensure the trial completes
                 print(f"Trial failed with error: {e}")
                 raise e
-                return invalid
         
         self.objective_function = objective
-
-    def _suggest_params(self, trial):
-        params = {}
         
-        for k, v in self.param_space.items():
-            if k in self.fixed_exceptions:
-                params[k] = v[0] if isinstance(v, (tuple, list)) else v # For fixed parameters, just use the first value if it's a tuple/list, otherwise use the value directly
-            elif k in self.float_exceptions:
-                params[k] = trial.suggest_float(k, v[0], v[1])
-            else:
-                params[k] = trial.suggest_int(k, v[0], v[1])
-        return params
-
-    def run(self, show_progress_bar: bool = True):
         self.study = optuna.create_study(direction=self.direction, sampler=optuna.samplers.TPESampler())
-        self.study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=show_progress_bar)
+        self.study.optimize(self.objective_function, n_trials=self.n_trials, show_progress_bar=show_progress_bar, callbacks=self.callbacks)
         
-        # Check if any trials were completed
         if len(self.study.trials) == 0 or all(trial.state != optuna.trial.TrialState.COMPLETE for trial in self.study.trials):
             raise ValueError("No trials were completed successfully. Check if the strategy function is working properly.")
         
@@ -336,19 +348,16 @@ class MultiAssetBayesianOptimizer:
                 verbose=False
             )
             
-            bo = BayesianOptimizer(
-                engine=self.engine,
+            bo = BayesianOptimizer(engine=self.engine)
+            
+            # Run optimization
+            bo.optimize(
                 strategy_func=strategy_func,
                 param_space=param_space,
                 metric=metric,
                 n_trials=n_trials,
-                direction=direction,
-                float_exceptions=float_exceptions,
-                fixed_exceptions=fixed_exceptions
+                direction=direction
             )
-            
-            # Run optimization
-            bo.run()
             best_params, best_metric = bo.get_best()
             study = bo.get_study()
             
@@ -549,18 +558,15 @@ class QuantitativeScreener:
                     verbose=False
                 )
 
-                BO = BayesianOptimizer(
-                    engine=self.engine,
+                BO = BayesianOptimizer(engine=self.engine)
+
+                BO.optimize(
                     strategy_func=strategy_func,
                     param_space=param_space,
                     metric=metric,
                     n_trials=n_trials,
-                    direction=direction,
-                    float_exceptions=float_exceptions,
-                    fixed_exceptions=fixed_exceptions
+                    direction=direction
                 )
-
-                BO.run()
                 best_params, best_metric = BO.get_best()
                 study = BO.get_study()
 
