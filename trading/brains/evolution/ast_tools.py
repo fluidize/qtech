@@ -1,8 +1,16 @@
 import ast
+import inspect
 
 from rich.panel import Panel
 from rich.console import Console
 from rich.syntax import Syntax
+
+import numpy as np
+import pandas as pd
+
+import sys
+sys.path.append("")
+import trading.technical_analysis as ta
 
 COUNTER = 0  # Used to generate unique parameter names per run
 
@@ -18,6 +26,19 @@ def unparsify(ast_node: ast.AST):
     console = Console()
     ast.fix_missing_locations(ast_node)
     console.print(Panel(Syntax(ast.unparse(ast_node), "python", theme="native")))
+
+def ast_to_function(ast_node: ast.AST) -> callable:
+    """Convert AST node to Python function."""
+    module = ast.Module(body=[ast_node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    code = compile(module, "<ast>", "exec")
+    namespace = {}
+    exec(code, {"np": np, "pd": pd, "ta": ta}, namespace)
+    return namespace[ast_node.name]
+
+def function_to_ast(function: callable) -> ast.AST:
+    source = inspect.getsource(function)
+    return ast.parse(source).body[0]
 
 def make_compare(left: ast.expr, operator: ast.cmpop, right: ast.expr) -> ast.Compare:
     """Create AST Compare node."""
