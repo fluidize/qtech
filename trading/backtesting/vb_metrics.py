@@ -406,5 +406,5 @@ def get_r_and_r2(portfolio_value: pd.Series) -> tuple[float, float]:
 
     r = (x @ y) / denom
     r2 = r * r
-    return abs(r), r2
+    return r, r2
     
