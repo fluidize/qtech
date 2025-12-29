@@ -253,7 +253,7 @@ class VectorizedBacktesting:
         max_drawdown = drawdown.min()
 
         #FAST METRICS
-        sharpe_ratio = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+        sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
@@ -266,6 +266,7 @@ class VectorizedBacktesting:
                 'Active_Return': active_return,
                 'Max_Drawdown': max_drawdown,
                 'Sharpe_Ratio': sharpe_ratio,
+                'Sharpe_T_Stat': sharpe_t_stat,
                 'Sortino_Ratio': sortino_ratio,
                 'Information_Ratio': info_ratio,
                 'Total_Trades': metrics.get_total_trades(position),
@@ -284,6 +285,7 @@ class VectorizedBacktesting:
             'Active_Return': active_return,
             'Max_Drawdown': max_drawdown,
             'Sharpe_Ratio': sharpe_ratio,
+            'Sharpe_T_Stat': sharpe_t_stat,
             'Sortino_Ratio': sortino_ratio,
             'Information_Ratio': info_ratio,
             'Win_Rate': win_rate,

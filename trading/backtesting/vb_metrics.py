@@ -56,8 +56,6 @@ def get_portfolio_value(position: pd.Series, open_prices: pd.Series, initial_cap
 def get_alpha_beta(strategy_returns: pd.Series, market_returns: pd.Series, n_days: int, return_interval: str = None):
     """Calculate annualized Jensen's alpha and beta using regression with actual strategy returns."""
     df = pd.concat([strategy_returns, market_returns], axis=1).dropna()
-    if len(df) < 2:
-        return np.nan, np.nan
 
     rs = df.iloc[:, 0].to_numpy()
     rm = df.iloc[:, 1].to_numpy()
@@ -146,8 +144,9 @@ def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, n_days: 
     }.get(return_interval, 252)
 
     sharpe_annualized = sharpe_per_period * np.sqrt(periods_per_year)
+    sharpe_t_stat = sharpe_per_period * np.sqrt(len(strategy_returns))
     
-    return sharpe_annualized
+    return sharpe_annualized, sharpe_t_stat
 
 def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days: int, risk_free_rate: float = 0.00) -> float:
     """Calculate annualized Sortino ratio using actual strategy returns that include costs."""
