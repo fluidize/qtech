@@ -15,9 +15,9 @@ class VectorizedBacktesting:
         self,
         instance_name: str = "default",
         initial_capital: float = 10000.0,
-        slippage_pct: float = 0.001,  # 0.1% slippage per trade
-        commission_fixed: float = 1.0,  # Fixed commission per trade in dollars
-        leverage: float = 1.0,  # Leverage multiplier (1.0 = no leverage, 2.0 = 2x leverage)
+        slippage_pct: float = 0.001,
+        commission_fixed: float = 1.0,
+        leverage: float = 1.0,
     ):
         self.instance_name = instance_name
         self.initial_capital = initial_capital
@@ -57,14 +57,12 @@ class VectorizedBacktesting:
             pass
         else:
             self.data = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, use_cache=use_cache, cache_expiry_hours=cache_expiry_hours, retry_limit=retry_limit, verbose=verbose)
-            # self._validate_data_quality()
             self._set_n_days()
 
             return self.data
 
     def load_data(self, data: pd.DataFrame):
         self.data = data
-        # self._validate_data_quality()
         self._set_n_days()
 
     def _validate_data_quality(self):
@@ -92,37 +90,28 @@ class VectorizedBacktesting:
                 if large_gaps.any():
                     print(f"[yellow]Warning: {large_gaps.sum()} large time gaps detected[/yellow]")
 
-    def _apply_trading_costs(self, returns: pd.Series, position_changes: pd.Series, positions: pd.Series) -> pd.Series:
-        """Apply slippage and fixed commission based on actual trade notional value."""
+    def _apply_trading_costs(self, base_strategy_returns: pd.Series, positions: pd.Series) -> pd.Series:
+        """Apply slippage and fixed commission based on actual trade notional value (already leveraged)."""
         if self.slippage_pct == 0 and self.commission_fixed == 0:
-            return returns
-            
-        adjusted_returns = returns.copy()
-        
-        # Linear mode: always trade with initial capital
-        portfolio_values = pd.Series(self.initial_capital, index=returns.index)
-        
-        # Apply costs when positions change
-        for i in range(1, len(positions)):
-            prev_pos = positions.iloc[i-1]
-            curr_pos = positions.iloc[i]
-            
-            if prev_pos != curr_pos:  # Position changed
-                trade_capital = portfolio_values.iloc[i] * self.leverage
-                
-                slippage_cost_pct = self.slippage_pct
-                commission_cost_pct = self.commission_fixed / trade_capital if trade_capital > 0 else 0
-                
-                if prev_pos == 2:  # From flat (opening position)
-                    total_cost_pct = slippage_cost_pct + commission_cost_pct
-                elif curr_pos == 2:  # To flat (closing position)
-                    total_cost_pct = slippage_cost_pct + commission_cost_pct
-                else:  # Direct switch (close + open)
-                    total_cost_pct = (slippage_cost_pct + commission_cost_pct) * 2
-                
-                adjusted_returns.iloc[i] = returns.iloc[i] - total_cost_pct
-        
-        return adjusted_returns
+            return base_strategy_returns
+
+        trade_capital = self.initial_capital #fixed trade size
+
+        pos_change = positions.diff().fillna(0) != 0
+
+        slippage_cost_pct = self.slippage_pct / 100
+        commission_cost_pct = self.commission_fixed / trade_capital
+
+        prev_pos = positions.shift(1)
+        curr_pos = positions
+
+        total_cost_pct = np.where(
+            pos_change & ((prev_pos == 2) | (curr_pos == 2)),
+            slippage_cost_pct + commission_cost_pct,
+            np.where(pos_change, 2 * (slippage_cost_pct + commission_cost_pct), 0)
+        )
+
+        return base_strategy_returns - total_cost_pct
 
     def _set_n_days(self):
         oldest = self.data['Datetime'].iloc[0]
@@ -160,45 +149,25 @@ class VectorizedBacktesting:
             raw_signals = self.strategy_output
         position = self._signals_to_stateful_position(raw_signals)
         
-        # SHIFT(-1): Move returns forward to align with execution timing
-        # Open_Return[t] now represents return from Open[t] to Open[t+1] (next period's return)
-        # This aligns with our execution model where position at t earns return at t
         self.data['Open_Return'] = self.data['Open'].pct_change().shift(-1)
         
-        # SHIFT(1): Delay position execution by 1 period
-        # Signal at t → Position executed at t+1 (realistic execution delay)
-        execution_position = position.shift(1).fillna(2).astype(int)
+        self.data['Signal_Position'] = position
+        self.data['Position'] = position.shift(1).fillna(2).astype(int)
 
-        # Store positions for analysis
-        self.data['Signal_Position'] = position  # Original signal timing
-        self.data['Position'] = execution_position  # Actual execution timing
+        position_multiplier = metrics.stateful_position_to_multiplier(position)
+        base_strategy_returns = position_multiplier * self.leverage * self.data['Open_Return']
 
-        # Calculate position changes for cost application
-        position_changes = execution_position.diff().fillna(0)
+        self.data['Strategy_Returns'] = self._apply_trading_costs(
+            base_strategy_returns=base_strategy_returns, positions=position
+        )
 
-        # Calculate strategy returns: position[t] * return[t]
-        # Where position[t] was executed at Open[t] and earns return from Open[t] to Open[t+1]
-        position_multiplier = metrics.stateful_position_to_multiplier(execution_position)
-        base_returns = position_multiplier * self.leverage * self.data['Open_Return']
-
-        # Apply trading costs
-        if self.slippage_pct == 0 and self.commission_fixed == 0:
-            self.data['Strategy_Returns'] = base_returns
-        else:
-            self.data['Strategy_Returns'] = self._apply_trading_costs(
-                base_returns, position_changes, execution_position
-            )
-
-        # Linear returns: profits don't compound, always trade with initial capital
         self.data['Linear_Profit'] = (self.initial_capital * self.data['Strategy_Returns']).cumsum()
         self.data['Portfolio_Value'] = self.initial_capital + self.data['Linear_Profit']
         self.data['Percent_Return'] = self.data['Portfolio_Value'] / self.initial_capital
 
-        # Calculate drawdowns
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
         self.data['Drawdown'] = (self.data['Portfolio_Value'] - self.data['Peak']) / self.data['Peak']
 
-        # Execution report
         end_time = time.time()
         if verbose:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
@@ -214,7 +183,6 @@ class VectorizedBacktesting:
         if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
-        # Use the strategy returns that already include trading costs and proper timing
         position = self.data['Position']
         open_prices = self.data['Open']
         strategy_returns = self.data['Strategy_Returns'].dropna()

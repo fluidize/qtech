@@ -6,14 +6,12 @@ import statsmodels.api as sm
 def stateful_position_to_multiplier(position: pd.Series) -> pd.Series:
     """Convert stateful position to multiplier."""
     
-    # Vectorized implementation
     position_multiplier = position.copy().astype(float)
-    position_multiplier[position == 1] = -1  # Short
-    position_multiplier[position == 2] = 0   # Flat
-    position_multiplier[position == 3] = 1   # Long
-    position_multiplier[position == 0] = np.nan  # Hold positions
+    position_multiplier[position == 1] = -1
+    position_multiplier[position == 2] = 0
+    position_multiplier[position == 3] = 1
+    position_multiplier[position == 0] = np.nan
     
-    # Forward fill to handle hold positions, default to 0 (flat) at start
     position_multiplier = position_multiplier.ffill().fillna(0)
     
     return position_multiplier
