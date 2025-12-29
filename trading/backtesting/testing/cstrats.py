@@ -59,6 +59,6 @@ def trend_strength_strategy(data: pd.DataFrame, adx_period: int = 14, adx_sma_pe
     supertrend, supertrend_line = ta.supertrend(data['High'], data['Low'], data['Close'], period=supertrend_period, multiplier=supertrend_multiplier)
     buy_conditions =(adx > ta.sma(adx, timeperiod=adx_sma_period)) & (supertrend == 1)
     sell_conditions =(adx < ta.sma(adx, timeperiod=adx_sma_period)) & (supertrend == -1) 
-    signals[buy_conditions] = 3
-    signals[sell_conditions] = 2
+    signals[buy_conditions] = 2
+    signals[sell_conditions] = 3
     return signals
