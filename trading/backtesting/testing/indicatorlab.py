@@ -22,7 +22,6 @@ vb = VectorizedBacktesting(
     initial_capital=10000,
     slippage_pct=0.00,
     commission_fixed=0.0,
-    reinvest=False,
     leverage=1.0
 )
 vb.fetch_data(symbol="SOL-USDT", days=100, interval="1m", age_days=0, data_source="binance", cache_expiry_hours=0)

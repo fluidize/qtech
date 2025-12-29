@@ -128,7 +128,7 @@ def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, n_days: 
     """Calculate annualized Sharpe ratio using actual strategy returns that include costs."""
     excess_returns = strategy_returns - risk_free_rate
     if excess_returns.std(ddof=1) == 0:
-        return float('nan')
+        return float('nan'), float('nan')
     
     sharpe_per_period = excess_returns.mean() / excess_returns.std(ddof=1)
 

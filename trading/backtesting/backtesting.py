@@ -17,14 +17,12 @@ class VectorizedBacktesting:
         initial_capital: float = 10000.0,
         slippage_pct: float = 0.001,  # 0.1% slippage per trade
         commission_fixed: float = 1.0,  # Fixed commission per trade in dollars
-        reinvest: bool = False,  # True for compound returns, False for linear returns
         leverage: float = 1.0,  # Leverage multiplier (1.0 = no leverage, 2.0 = 2x leverage)
     ):
         self.instance_name = instance_name
         self.initial_capital = initial_capital
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
-        self.reinvest = reinvest
         self.leverage = leverage
 
         self.symbol = None
@@ -101,14 +99,8 @@ class VectorizedBacktesting:
             
         adjusted_returns = returns.copy()
         
-        # Calculate portfolio values for position sizing
-        if self.reinvest:
-            # Compound mode: portfolio grows with profits
-            # SHIFT(1): Use previous period's portfolio value for current trade sizing
-            portfolio_values = self.initial_capital * (1 + returns).cumprod().shift(1).fillna(self.initial_capital)
-        else:
-            # Linear mode: always trade with initial capital
-            portfolio_values = pd.Series(self.initial_capital, index=returns.index)
+        # Linear mode: always trade with initial capital
+        portfolio_values = pd.Series(self.initial_capital, index=returns.index)
         
         # Apply costs when positions change
         for i in range(1, len(positions)):
@@ -197,16 +189,10 @@ class VectorizedBacktesting:
                 base_returns, position_changes, execution_position
             )
 
-        # Calculate portfolio value based on reinvestment setting
-        if self.reinvest:
-            # Compound returns: each period's return compounds on previous value
-            self.data['Percent_Return'] = (1 + self.data['Strategy_Returns']).cumprod()
-            self.data['Portfolio_Value'] = self.initial_capital * self.data['Cumulative_Returns']
-        else:
-            # Linear returns: profits don't compound, always trade with initial capital
-            self.data['Linear_Profit'] = (self.initial_capital * self.data['Strategy_Returns']).cumsum()
-            self.data['Portfolio_Value'] = self.initial_capital + self.data['Linear_Profit']
-            self.data['Percent_Return'] = self.data['Portfolio_Value'] / self.initial_capital
+        # Linear returns: profits don't compound, always trade with initial capital
+        self.data['Linear_Profit'] = (self.initial_capital * self.data['Strategy_Returns']).cumsum()
+        self.data['Portfolio_Value'] = self.initial_capital + self.data['Linear_Profit']
+        self.data['Percent_Return'] = self.data['Portfolio_Value'] / self.initial_capital
 
         # Calculate drawdowns
         self.data['Peak'] = self.data['Portfolio_Value'].cummax()
@@ -218,7 +204,6 @@ class VectorizedBacktesting:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
             if self.slippage_pct > 0 or self.commission_fixed > 0:
                 print(f"[blue]Costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed[/blue]")
-            print(f"[cyan]Return model: {'Compound' if self.reinvest else 'Linear'}[/cyan]")
             if self.leverage != 1.0:
                 print(f"[yellow]Leverage: {self.leverage}x[/yellow]")
 
@@ -241,10 +226,7 @@ class VectorizedBacktesting:
             total_return = 0
         
         asset_returns = self.data['Open_Return'].dropna()
-        if self.reinvest:
-            benchmark_total_return = (1 + asset_returns).prod() - 1
-        else:
-            benchmark_total_return = asset_returns.sum()
+        benchmark_total_return = asset_returns.sum()
         
         active_return = total_return - benchmark_total_return
         
@@ -253,7 +235,7 @@ class VectorizedBacktesting:
         max_drawdown = drawdown.min()
 
         #FAST METRICS
-        sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
+        sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days)
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
@@ -314,7 +296,7 @@ class VectorizedBacktesting:
         summary = self.get_performance_metrics()
         if mode == "basic":
             plt.plot(self.data['Datetime'], self.data['Portfolio_Value'])
-            plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | RR: {summary['RR_Ratio']:.3f} | WR: {summary['Win_Rate']*100:.3f}% | PF: {summary['Profit_Factor']:.3f} | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
+            plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | RR: {summary['RR_Ratio']:.3f} | WR: {summary['Win_Rate']*100:.3f}% | PF: {summary['Profit_Factor']:.3f} | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
             plt.show()
 
         elif mode == "standard":
@@ -448,7 +430,7 @@ class VectorizedBacktesting:
                             )
                         )
             fig.update_layout(
-                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | {"Compound" if self.reinvest else "Linear"} | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
+                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis=dict(
                     title='Date',
                     rangeslider=dict(visible=False),
@@ -524,22 +506,16 @@ class VectorizedBacktesting:
                 row=1, col=1
             )
             
-            # Calculate buy & hold benchmark for comparison
-            if self.reinvest:
-                # Compound mode: returns compound over time
-                valid_returns = self.data['Open_Return'].fillna(0)
-                asset_value = self.initial_capital * (1 + valid_returns).cumprod()
-            else:
-                # Linear mode: profits don't compound, just accumulate
-                asset_linear_profit = (self.initial_capital * self.data['Open_Return']).cumsum()
-                asset_value = self.initial_capital + asset_linear_profit
+            # Calculate buy & hold benchmark for comparison (linear mode)
+            asset_linear_profit = (self.initial_capital * self.data['Open_Return']).cumsum()
+            asset_value = self.initial_capital + asset_linear_profit
 
             fig.add_trace(
                 go.Scatter(
                     x=self.data.index,
                     y=asset_value,
                     mode='lines',
-                    name=f'Buy & Hold ({"Compound" if self.reinvest else "Linear"})',
+                    name='Buy & Hold (Linear)',
                     line=dict(dash='dash')
                 ),
                 row=1, col=1
@@ -669,7 +645,7 @@ class VectorizedBacktesting:
 
             # Update layout
             fig.update_layout(
-                title_text=f"{self.symbol} {self.interval} Performance Analysis ({'Compound' if self.reinvest else 'Linear'} Returns)",
+                title_text=f"{self.symbol} {self.interval} Performance Analysis (Linear Returns)",
                 showlegend=True,
                 template="plotly_dark"
             )
@@ -712,11 +688,8 @@ class VectorizedBacktesting:
         if total_trades == 0:
             return {"message": "No trades executed"}
         
-        # FIXED: Calculate position sizes for cost estimation using pre-cost portfolio values
-        if self.reinvest:
-            portfolio_values = self.initial_capital * (1 + self.data['Open_Return']).cumprod()
-        else:
-            portfolio_values = pd.Series(self.initial_capital, index=self.data.index)
+        # Calculate position sizes for cost estimation using pre-cost portfolio values (linear mode)
+        portfolio_values = pd.Series(self.initial_capital, index=self.data.index)
         
         # Calculate total slippage and commission paid
         total_slippage_paid = 0
@@ -761,12 +734,10 @@ class MultiAssetBacktesting:
                  initial_capitals: list[float] = [10000],
                  slippage_pct: float = 0.001,
                  commission_fixed: float = 0.0,
-                 reinvest: bool = False,
                  leverage: float = 1.0):
         self.initial_capitals = initial_capitals
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
-        self.reinvest = reinvest
         self.leverage = leverage
 
         self.data = {}
@@ -803,7 +774,6 @@ class MultiAssetBacktesting:
                 initial_capital=self.initial_capitals[self.symbols.index(symbol)],
                 slippage_pct=self.slippage_pct,
                 commission_fixed=self.commission_fixed,
-                reinvest=self.reinvest,
                 leverage=self.leverage)
             vb.load_data(self.data[symbol])
             vb.run_strategy(strategy_func, verbose=verbose, **kwargs)
@@ -859,7 +829,6 @@ if __name__ == "__main__":
         initial_capital=10000.0,
         slippage_pct=0.001,
         commission_fixed=1.0,
-        reinvest=False,
         leverage=1.0
     )
     vb.fetch_data(symbol="SOL-USDT", days=365, interval="1h", age_days=0, data_source="binance", cache_expiry_hours=720, verbose=True)

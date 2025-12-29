@@ -238,7 +238,6 @@ class MultiAssetBayesianOptimizer:
         data_source: str = "binance",
         slippage_pct: float = 0.001,
         commission_fixed: float = 0.0,
-        reinvest: bool = False,
         leverage: float = 1.0,
         cache_expiry_hours: int = 24,
         n_trials: int = 100,
@@ -258,7 +257,6 @@ class MultiAssetBayesianOptimizer:
             data_source: Data source (e.g., "binance", "yfinance")
             slippage_pct: Slippage percentage per trade
             commission_fixed: Fixed commission per trade
-            reinvest: Whether to reinvest profits
             leverage: Leverage multiplier
             cache_expiry_hours: Cache expiry time in hours
             n_trials: Number of optimization trials
@@ -274,7 +272,6 @@ class MultiAssetBayesianOptimizer:
         self.data_source = data_source
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
-        self.reinvest = reinvest
         self.leverage = leverage
         self.cache_expiry_hours = cache_expiry_hours
         
@@ -283,7 +280,6 @@ class MultiAssetBayesianOptimizer:
             initial_capitals=initial_capitals,
             slippage_pct=slippage_pct,
             commission_fixed=commission_fixed,
-            reinvest=reinvest,
             leverage=leverage
         )
         
@@ -503,8 +499,7 @@ class QuantitativeScreener:
             instance_name="QuantitativeScreener",
             initial_capital=initial_capital,
             slippage_pct=slippage_pct,
-            commission_fixed=commission_fixed,
-            reinvest=False
+            commission_fixed=commission_fixed
         )
 
         self.symbols = symbols
