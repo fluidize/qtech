@@ -55,8 +55,10 @@ class IndicatorGene:
                         value=ast.Name(id=unique_param_name, ctx=ast.Load())
                     )
                 )
-                current_param_spec = next((p for p in self.parameter_specs if p.parameter_name == param_name), None)
-                self.unique_parameter_specs.append(ParamSpec(parameter_name=unique_param_name, search_space=current_param_spec.search_space))
+                if unique_param_name not in {sp.parameter_name for sp in self.unique_parameter_specs}:
+                    current_param_spec = next((p for p in self.parameter_specs if p.parameter_name == param_name), None)
+                    if current_param_spec:
+                        self.unique_parameter_specs.append(ParamSpec(parameter_name=unique_param_name, search_space=current_param_spec.search_space))
         return keywords
     
     def get_names(self):
