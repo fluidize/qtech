@@ -132,30 +132,19 @@ def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, n_days: 
     if excess_returns.std(ddof=1) == 0:
         return float('nan')
     
-    # Calculate per-period Sharpe ratio
     sharpe_per_period = excess_returns.mean() / excess_returns.std(ddof=1)
 
-    # Determine periods per year for annualization
-    if return_interval == '1m':
-        periods_per_year = 365 * 24 * 60  # 525,600 minutes per year
-    elif return_interval == '3m':
-        periods_per_year = 365 * 24 * 20  # 175,200 3-minute periods per year
-    elif return_interval == '5m':
-        periods_per_year = 365 * 24 * 12  # 105,120 5-minute periods per year
-    elif return_interval == '15m':
-        periods_per_year = 365 * 24 * 4   # 35,040 15-minute periods per year
-    elif return_interval == '30m':
-        periods_per_year = 365 * 24 * 2   # 17,520 30-minute periods per year
-    elif return_interval == '1h':
-        periods_per_year = 365 * 24       # 8,760 hours per year
-    elif return_interval == '4h':
-        periods_per_year = 365 * 6        # 2,190 4-hour periods per year
-    elif return_interval == '1d':
-        periods_per_year = 365             # 365 days per year
-    else:
-        periods_per_year = 252  # Default to trading days
+    periods_per_year = {
+        '1m': 365 * 24 * 60,
+        '3m': 365 * 24 * 20,
+        '5m': 365 * 24 * 12,
+        '15m': 365 * 24 * 4,
+        '30m': 365 * 24 * 2,
+        '1h': 365 * 24,
+        '4h': 365 * 6,
+        '1d': 365,
+    }.get(return_interval, 252)
 
-    # Annualize Sharpe ratio: sharpe_annual = sharpe_per_period * sqrt(periods_per_year)
     sharpe_annualized = sharpe_per_period * np.sqrt(periods_per_year)
     
     return sharpe_annualized
