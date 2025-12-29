@@ -5,10 +5,9 @@ import sys
 
 sys.path.append("trading/brains/evolution")
 
-from ast_builder import Builder
-from ast_tools import ast_to_function
-from genes import IndicatorGene, IndicatorToConstant, IndicatorToPrice, IndicatorToIndicator
-from gp_tools import get_indicators, paramspecs_to_dict, random_operator
+from genetics.ast_builder import Builder, IndicatorGene, IndicatorToConstant, IndicatorToPrice, IndicatorToIndicator
+from genetics.ast_tools import ast_to_function
+from genetics.gp_tools import get_indicators, paramspecs_to_dict, random_operator
 
 def generate_individual(num_indicators=2, num_logic=2):
     """Generate one random individual."""
@@ -45,8 +44,5 @@ def generate_population(size=100, num_indicators=2, num_logic=2):
     population = []
     for _ in range(size):
         individual = generate_individual(num_indicators, num_logic)
-        base_ast, algorithm_parameter_specs = individual._construct_algorithm_base()
-        function = ast_to_function(base_ast)
-        function.param_space = paramspecs_to_dict(algorithm_parameter_specs)
-        population.append(function)
+        population.append(individual)
     return population

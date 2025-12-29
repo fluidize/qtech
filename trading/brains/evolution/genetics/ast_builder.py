@@ -2,12 +2,8 @@ import pandas as pd
 import ast
 import inspect
 
-from rich.panel import Panel
-from rich.console import Console
-from rich.syntax import Syntax
-
-from param_space import registered_param_specs, ParamSpec
-from ast_tools import unique_counter, make_compare
+from .param_space import registered_param_specs, ParamSpec
+from .ast_tools import unique_counter, make_compare
 
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 

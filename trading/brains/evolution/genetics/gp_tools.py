@@ -1,5 +1,5 @@
 import ast
-from param_space import registered_param_specs, ParamSpec
+from .param_space import registered_param_specs, ParamSpec
 import random
 
 import sys
