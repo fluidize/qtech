@@ -256,7 +256,6 @@ class VectorizedBacktesting:
         sharpe_ratio = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
-        r, r2 = metrics.get_r_and_r2(portfolio_value)
         alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
 
         if accelerate:
@@ -269,12 +268,10 @@ class VectorizedBacktesting:
                 'Sharpe_Ratio': sharpe_ratio,
                 'Sortino_Ratio': sortino_ratio,
                 'Information_Ratio': info_ratio,
-                'R': r,
-                'R2': r2,
+                'Total_Trades': metrics.get_total_trades(position),
             }
         
         #SLOW METRICS
-        trade_pnls = metrics.get_trade_pnls(position, open_prices)
         win_rate = metrics.get_win_rate(position, open_prices)
         rr_ratio = metrics.get_rr_ratio(position, open_prices)
         breakeven_rate = metrics.get_breakeven_rate(position, open_prices)
@@ -293,9 +290,7 @@ class VectorizedBacktesting:
             'Breakeven_Rate': breakeven_rate,
             'RR_Ratio': rr_ratio,
             'Profit_Factor': profit_factor,
-            'Total_Trades': len(trade_pnls),
-            'R': r,
-            'R2': r2,
+            'Total_Trades': metrics.get_total_trades(position),
         }
 
     def plot_performance(self, mode: str = "basic"):
