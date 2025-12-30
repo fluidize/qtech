@@ -43,7 +43,6 @@ class VectorizedBacktesting:
         interval: str = "None",
         age_days: int = "None",
         data_source: str = "kucoin",
-        use_cache: bool = True,
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True
@@ -56,7 +55,7 @@ class VectorizedBacktesting:
         if any([symbol, days, interval, age_days]) == "None":
             pass
         else:
-            self.data = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, use_cache=use_cache, cache_expiry_hours=cache_expiry_hours, retry_limit=retry_limit, verbose=verbose)
+            self.data = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, cache_expiry_hours=cache_expiry_hours, retry_limit=retry_limit, verbose=verbose)
             self._set_n_days()
 
             return self.data
@@ -95,20 +94,21 @@ class VectorizedBacktesting:
         if self.slippage_pct == 0 and self.commission_fixed == 0:
             return base_strategy_returns
 
-        trade_capital = self.initial_capital #fixed trade size
+        notional_trade_capital = self.initial_capital * self.leverage #fixed trade size
 
         pos_change = positions.diff().fillna(0) != 0
 
         slippage_cost_pct = self.slippage_pct / 100
-        commission_cost_pct = self.commission_fixed / trade_capital
+        commission_cost_pct = self.commission_fixed / notional_trade_capital
+        cost_per_trade = slippage_cost_pct + commission_cost_pct
 
         prev_pos = positions.shift(1)
         curr_pos = positions
 
         total_cost_pct = np.where(
             pos_change & ((prev_pos == 2) | (curr_pos == 2)),
-            slippage_cost_pct + commission_cost_pct,
-            np.where(pos_change, 2 * (slippage_cost_pct + commission_cost_pct), 0)
+            cost_per_trade,
+            np.where(pos_change, 2 * cost_per_trade, 0)
         )
 
         return base_strategy_returns - total_cost_pct
@@ -718,7 +718,6 @@ class MultiAssetBacktesting:
         interval: str = "None",
         age_days: int = "None",
         data_source: str = "kucoin",
-        use_cache: bool = True,
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True
@@ -732,7 +731,7 @@ class MultiAssetBacktesting:
             pass
         else:
             for symbol in self.symbols:
-                self.data[symbol] = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, use_cache=use_cache, cache_expiry_hours=cache_expiry_hours, retry_limit=retry_limit, verbose=verbose)
+                self.data[symbol] = mt.fetch_data(symbol, days, interval, age_days, data_source=data_source, cache_expiry_hours=cache_expiry_hours, retry_limit=retry_limit, verbose=verbose)
             return self.data
     
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):

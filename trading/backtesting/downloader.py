@@ -40,7 +40,6 @@ class SingleDownloadWorker(QThread):
                 interval=self.interval,
                 age_days=self.age_days,
                 data_source=self.data_source,
-                use_cache=True,
                 cache_expiry_hours=24,
                 retry_limit=5,
                 verbose=True
@@ -116,7 +115,6 @@ class MultiDownloadManager(QThread):
                 interval=interval,
                 age_days=self.age_days,
                 data_source=self.data_source,
-                use_cache=True,
                 cache_expiry_hours=24,
                 retry_limit=5,
                 verbose=True
