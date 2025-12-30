@@ -23,9 +23,12 @@ def unique_counter() -> str:
 
 def unparsify(ast_node: ast.AST):
     """Convert AST node to Python code string."""
-    console = Console()
     ast.fix_missing_locations(ast_node)
-    console.print(Panel(Syntax(ast.unparse(ast_node), "python", theme="native")))
+    return ast.unparse(ast_node)
+
+def display_ast(ast_node: ast.AST):
+    console = Console()
+    console.print(Panel(Syntax(unparsify(ast_node), "python", theme="native")))
 
 def ast_to_function(ast_node: ast.AST) -> callable:
     """Convert AST node to Python function."""

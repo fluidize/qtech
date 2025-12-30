@@ -22,7 +22,7 @@ def generate_individual(num_indicators=2, num_logic=2):
     # Random logic
     logic_genes = []
     for _ in range(num_logic):
-        logic_type = random.choice([IndicatorToPrice, IndicatorToConstant])
+        logic_type = random.choice([IndicatorToPrice, IndicatorToConstant, IndicatorToIndicator])
         
         if logic_type == IndicatorToPrice:
             logic_genes.append(IndicatorToPrice(
@@ -30,10 +30,16 @@ def generate_individual(num_indicators=2, num_logic=2):
                 column_index=random.randint(0, 3),
                 operator=random_operator()
             ))
-        else:
+        elif logic_type == IndicatorToConstant:
             logic_genes.append(IndicatorToConstant(
                 left_index=random.randint(0, num_indicators - 1),
                 constant=random.randint(0, 100),
+                operator=random_operator()
+            ))
+        else:  # IndicatorToIndicator
+            logic_genes.append(IndicatorToIndicator(
+                left_index=random.randint(0, num_indicators - 1),
+                right_index=random.randint(0, num_indicators - 1),
                 operator=random_operator()
             ))
     
