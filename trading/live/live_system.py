@@ -1,7 +1,6 @@
 import asyncio
 import websockets
 import json
-import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -12,11 +11,8 @@ import logging
 from rich import print
 from rich.console import Console
 from rich.table import Table
-from rich.live import Live
 import sys
-import os
 
-import plotly
 import plotly.graph_objects as go
 import plotly.io as pio
 pio.renderers.default = "browser"
@@ -25,8 +21,7 @@ sys.path.append("trading")
 sys.path.append("trading/backtesting")
 sys.path.append("trading/live")
 
-import technical_analysis as ta
-from data_provider_factory import DataProviderFactory
+from providers import DataProviderFactory
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -266,6 +261,10 @@ class LiveTradingSystem:
         elif self.data_buffer:
             current_price = self.data_buffer[-1]['Close']
         
+        # Map signal to action name
+        signal_names = {0: 'HOLD', 1: 'SHORT', 2: 'FLAT', 3: 'LONG'}
+        action = signal_names.get(new_signal, 'UNKNOWN')
+        
         # Always create signal info for callback
         signal_info = {
             'timestamp': datetime.now(),
@@ -273,6 +272,7 @@ class LiveTradingSystem:
             'previous_signal': self.last_signal,
             'new_signal': new_signal,
             'current_price': current_price,
+            'action': action,
         }
         
         # Call user callback if provided (either always or only on signal changes)
@@ -280,7 +280,7 @@ class LiveTradingSystem:
             self.signal_callback(signal_info)
         
         # Only log and track signal changes
-        if (new_signal != self.last_signal) & (new_signal != 0):
+        if (new_signal != self.last_signal) and (new_signal != 0):
             self.signal_history.append(signal_info)
             self.last_signal = new_signal
             

@@ -35,7 +35,7 @@ def create_trader_callback(wallethandler: jup.JupiterWalletHandler, starting_usd
         new_signal = signal_info['new_signal']
         last_signal = signal_info['previous_signal']
         
-        if (new_signal != 0) & (new_signal != last_signal):
+        if (new_signal != 0) and (new_signal != last_signal):
             
             if new_signal == 2:  # Buy SOL with USDC
                 response_info, signature = wallethandler.order_and_execute(jup.Token.USDC, jup.Token.SOL, starting_usdc_size, retry=True)

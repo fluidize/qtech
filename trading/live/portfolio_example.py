@@ -58,7 +58,7 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
         # debug_order = wallethandler.get_order(jup.Token.USDC, jup.Token.SOL, estimated_trade_size_usd)
         # print(debug_order)
 
-        if (new_signal != 0) & (new_signal != last_signal):  # Not HOLD - execute trade
+        if (new_signal != 0) and (new_signal != last_signal):  # Not HOLD - execute trade
             if new_signal == 1:  # SHORT
                 order_result = wallethandler.get_order(jup.Token.SOL, jup.Token.USDC, estimated_trade_size_sol, retry=True)
             elif new_signal == 3:  # LONG
