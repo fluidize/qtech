@@ -182,42 +182,18 @@ def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days:
 
 def get_trade_pnls(position: pd.Series, open_prices: pd.Series) -> List[float]:
     """Calculate P&L for each trade from position and open prices."""
-    
-    # Vectorized implementation
-    position_changes = position.diff()
-    change_indices = position_changes[position_changes != 0].index
-    
-    if len(change_indices) == 0:
-        return []
-    
-    pnl_list = []
-    active_positions = []  # Stack of (position_type, entry_price, entry_idx)
-    
-    # Process all position changes
-    prev_pos = position.iloc[0]
-    
-    for idx in change_indices:
-        current_pos = position.loc[idx]
-        
-        # Close existing position if switching or going to flat
-        if prev_pos != 2 and prev_pos != current_pos:
-            if active_positions:
-                pos_type, entry_price, _ = active_positions.pop()
-                exit_price = open_prices.loc[idx]
-                if pos_type == 3:  # Long
-                    pnl = exit_price - entry_price
-                elif pos_type == 1:  # Short
-                    pnl = entry_price - exit_price
-                pnl_list.append(pnl)
-        
-        # Open new position if not going to flat
-        if current_pos != 2:
-            entry_price = open_prices.loc[idx]
-            active_positions.append((current_pos, entry_price, idx))
-        
-        prev_pos = current_pos
-    
-    return pnl_list
+    # Identify entries and exits
+    prev_pos = position.shift(1)
+
+    entries = (position == 3) & (prev_pos != 3)
+    exits   = (position != 3) & (prev_pos == 3)
+
+    entry_prices = open_prices[entries].values
+    exit_prices  = open_prices[exits].values
+
+    n = min(len(entry_prices), len(exit_prices)) #align in case last trade never exited
+
+    return exit_prices[:n] - entry_prices[:n]
 
 def get_win_rate(position: pd.Series, open_prices: pd.Series) -> float:
     """Calculate win rate from position and open prices."""

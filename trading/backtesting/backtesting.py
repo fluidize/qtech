@@ -178,8 +178,7 @@ class VectorizedBacktesting:
 
         return self.data
 
-    def get_performance_metrics(self, accelerate: bool = False):
-        """If accelerate is true, skip calculations that are computationally expensive."""
+    def get_performance_metrics(self):
         if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
@@ -202,27 +201,11 @@ class VectorizedBacktesting:
         drawdown = (portfolio_value - peak) / peak
         max_drawdown = drawdown.min()
 
-        #FAST METRICS
         sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days)
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
-
-        if accelerate:
-            return { #end code early if accelerate is true
-                'Total_Return': total_return,
-                'Alpha': alpha,
-                'Beta': beta,
-                'Active_Return': active_return,
-                'Max_Drawdown': max_drawdown,
-                'Sharpe_Ratio': sharpe_ratio,
-                'Sharpe_T_Stat': sharpe_t_stat,
-                'Sortino_Ratio': sortino_ratio,
-                'Information_Ratio': info_ratio,
-                'Total_Trades': metrics.get_total_trades(position),
-            }
         
-        #SLOW METRICS
         win_rate = metrics.get_win_rate(position, open_prices)
         rr_ratio = metrics.get_rr_ratio(position, open_prices)
         breakeven_rate = metrics.get_breakeven_rate(position, open_prices)
@@ -332,16 +315,16 @@ class VectorizedBacktesting:
                 if position_changes.iloc[i] != 0 and not pd.isna(position_changes.iloc[i]):
                     prev_pos = self.data['Position'].iloc[i-1]
                     current_pos = self.data['Position'].iloc[i]
-                    price_at_execution = self.data['Open'].iloc[i-1]
+                    price_at_execution = self.data['Open'].iloc[i]
                     
                     if current_pos == 3 and prev_pos != 3:
-                        long_entries.append(self.data['Datetime'].iloc[i-1])
+                        long_entries.append(self.data['Datetime'].iloc[i])
                         long_entry_prices.append(price_at_execution)
                     elif current_pos == 1 and prev_pos != 1:
-                        short_entries.append(self.data['Datetime'].iloc[i-1])
+                        short_entries.append(self.data['Datetime'].iloc[i])
                         short_entry_prices.append(price_at_execution)
                     elif current_pos == 2 and prev_pos != 2:
-                        flats.append(self.data['Datetime'].iloc[i-1])
+                        flats.append(self.data['Datetime'].iloc[i])
                         flat_prices.append(price_at_execution)
             if long_entries:
                 fig.add_trace(

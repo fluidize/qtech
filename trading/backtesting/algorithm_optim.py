@@ -194,7 +194,7 @@ class BayesianOptimizer:
                 param_dict = self._suggest_params(trial)
 
                 self.engine.run_strategy(self.strategy_func, **param_dict)
-                metrics = self.engine.get_performance_metrics(accelerate=True)
+                metrics = self.engine.get_performance_metrics()
                 safe_dict = {"__builtins__": None, "abs": abs, "max": max, "min": min, "np": np}
                 eval_metric = eval(self.metric, safe_dict, metrics)
 
