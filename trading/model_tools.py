@@ -23,7 +23,7 @@ sys.path.append("trading")
 import technical_analysis as ta
 import smc_analysis as smc
 
-def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", use_cache: bool = True, cache_expiry_hours: int = 24, retry_limit: int = 3, verbose: bool = True):
+def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", cache_expiry_hours: int = 24, retry_limit: int = 3, verbose: bool = True, proxies: dict = {}):
     print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None
 
     # Create a temp directory for market data
@@ -34,7 +34,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
     cache_file = os.path.join(temp_dir, f"market_data_{cache_key}.parquet")
     cache_file = os.path.join(temp_dir, f"{cache_key}.parquet")
 
-    if use_cache and os.path.exists(cache_file):
+    if cache_expiry_hours > 0 and os.path.exists(cache_file):
         file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
         file_age_hours = (datetime.now() - file_modified_time).total_seconds() / 3600
 
@@ -110,7 +110,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
                 "endAt": str(int(end_time.timestamp()))
             }
 
-            request = requests.get("https://api.kucoin.com/api/v1/market/candles", params=params).json()
+            request = requests.get("https://api.kucoin.com/api/v1/market/candles", params=params, proxies=proxies).json()
             try:
                 request_data = request["data"]  # list of lists
             except:
@@ -165,6 +165,8 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
 
         chunks = ceil(days * 1.44) # adjust due to binance 1k bar limit
 
+        proxy_url = proxies.get('https') or proxies.get('http') if proxies else None
+
         async def download_chunk(session, chunk_index, semaphore):
             async with semaphore:
                 retries = 0
@@ -183,7 +185,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
                 
                 while retries <= retry_limit:
                     try:
-                        async with session.get(url, params=params) as response:
+                        async with session.get(url, params=params, proxy=proxy_url) as response:
                             response.raise_for_status()
                             request_data = await response.json()
                             break
@@ -265,7 +267,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
     else:
         raise ValueError(f"Unknown data_source: {data_source}. Choose from 'binance', 'kucoin', 'yfinance'.")
 
-    if not data.empty and len(data) > 0:
+    if cache_expiry_hours > 0 and not data.empty and len(data) > 0:
         try:
             data.to_parquet(cache_file)
             print(f"[blue]Data cached to {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB)")
@@ -283,7 +285,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "kucoin", us
 
         except Exception as e:
             print(f"[yellow]Failed to cache data: {e}[/yellow]")
-    elif use_cache and (data.empty or len(data) == 0):
+    elif cache_expiry_hours > 0 and (data.empty or len(data) == 0):
         print(f"[yellow]Skipping cache - data is empty[/yellow]")
 
     return data
