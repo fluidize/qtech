@@ -41,7 +41,7 @@ def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethand
         last_signal = signal_info['previous_signal']
         
         # Get real Jupiter SOL-USDC price for execution
-        jupiter_price = jup.get_usd_price(jup.Token.SOL)
+        jupiter_price = jup.get_usd_price(jup.Token.SOL, wallethandler.api_key)
         if jupiter_price is None:
             console.print(f"[red]Warning: Could not get Jupiter price, using Binance price ${binance_price:.2f}[/red]")
             execution_price = binance_price
