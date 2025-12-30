@@ -482,9 +482,9 @@ def price_cycle(close: pd.Series, cycle_period: int = 20) -> pd.Series:
     # Parameters tuned to the given cycle period
     b, a = signal.butter(2, [0.5/cycle_period, 2.0/cycle_period], 'bandpass')
     
-    # Apply filter to close prices - use ffill instead of deprecated method parameter
+    # Apply causal filter (lfilter) - only uses past and current data
     close_filled = close.ffill().bfill().values
-    cycle = signal.filtfilt(b, a, close_filled)
+    cycle = signal.lfilter(b, a, close_filled)
     
     return pd.Series(cycle, index=close.index)
 
