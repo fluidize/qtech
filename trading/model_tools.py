@@ -1,27 +1,19 @@
 from math import ceil
-import time
-from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 from datetime import datetime, timedelta
 import requests
 import yfinance as yf
 from tqdm import tqdm
 import pandas as pd
-import numpy as np
 import os
 import json
 import asyncio
 import aiohttp
-
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 from rich import print
 
 import sys
 sys.path.append("trading")
 
-import technical_analysis as ta
-import smc_analysis as smc
 
 def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", cache_expiry_hours: int = 24, retry_limit: int = 3, verbose: bool = True, proxies: dict = {}):
     print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None
