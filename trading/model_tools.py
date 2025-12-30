@@ -8,6 +8,7 @@ import os
 import json
 import asyncio
 import aiohttp
+from pathlib import Path
 
 from rich import print
 
@@ -17,14 +18,17 @@ sys.path.append("trading")
 
 def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", cache_expiry_hours: int = 24, retry_limit: int = 3, verbose: bool = True, proxies: dict = {}):
     print(f"[yellow]FETCHING DATA {symbol} {interval}[/yellow]") if verbose else None
+    
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        temp_dir = Path(appdata) / "market_data"
+    else:
+        temp_dir = Path.home() / ".local" / "share" / "market_data"
 
-    # Create a temp directory for market data
-    temp_dir = os.path.join(os.getenv("APPDATA"), "market_data")
-    os.makedirs(temp_dir, exist_ok=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
     cache_key = f"{symbol}_{days}_{interval}_{age_days}_{data_source}"
-    cache_file = os.path.join(temp_dir, f"market_data_{cache_key}.parquet")
-    cache_file = os.path.join(temp_dir, f"{cache_key}.parquet")
+    cache_file = temp_dir / f"{cache_key}.parquet"
 
     if cache_expiry_hours > 0 and os.path.exists(cache_file):
         file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
