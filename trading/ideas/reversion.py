@@ -32,7 +32,7 @@ for symbol in ["CHEK", "ATCH"]:
         interval="1d",
         age_days=0,
         data_source="yfinance",
-        use_cache=True
+        cache_expiry_hours=24
     )
     equity_curve = vb.run_strategy(reversion_strategy, verbose=True)["Percentage_Return"]
     equity_curves[symbol] = equity_curve
