@@ -320,28 +320,29 @@ class VectorizedBacktesting:
                     visible="legendonly"
                 )
             )
-            position_changes = np.diff(self.data['Position'].values)
+            position_changes = self.data['Position'].diff()
             long_entries = []
             short_entries = []
             flats = []
             long_entry_prices = []
             short_entry_prices = []
             flat_prices = []
-            for i in range(len(position_changes)):
-                if position_changes[i] != 0:
-                    prev_pos = self.data['Position'].iloc[i]
-                    current_pos = self.data['Position'].iloc[i+1]
-                    if i < len(self.data) - 1:
-                        price_at_execution = self.data['Open'].iloc[i+1]
-                        if current_pos == 3 and prev_pos != 3:
-                            long_entries.append(self.data['Datetime'].iloc[i+1])
-                            long_entry_prices.append(price_at_execution)
-                        elif current_pos == 1 and prev_pos != 1:
-                            short_entries.append(self.data['Datetime'].iloc[i+1])
-                            short_entry_prices.append(price_at_execution)
-                        elif current_pos == 2 and prev_pos != 2:
-                            flats.append(self.data['Datetime'].iloc[i+1])
-                            flat_prices.append(price_at_execution)
+            
+            for i in range(1, len(self.data)):
+                if position_changes.iloc[i] != 0 and not pd.isna(position_changes.iloc[i]):
+                    prev_pos = self.data['Position'].iloc[i-1]
+                    current_pos = self.data['Position'].iloc[i]
+                    price_at_execution = self.data['Open'].iloc[i-1]
+                    
+                    if current_pos == 3 and prev_pos != 3:
+                        long_entries.append(self.data['Datetime'].iloc[i-1])
+                        long_entry_prices.append(price_at_execution)
+                    elif current_pos == 1 and prev_pos != 1:
+                        short_entries.append(self.data['Datetime'].iloc[i-1])
+                        short_entry_prices.append(price_at_execution)
+                    elif current_pos == 2 and prev_pos != 2:
+                        flats.append(self.data['Datetime'].iloc[i-1])
+                        flat_prices.append(price_at_execution)
             if long_entries:
                 fig.add_trace(
                     go.Scatter(
