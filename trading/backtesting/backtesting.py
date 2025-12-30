@@ -154,11 +154,11 @@ class VectorizedBacktesting:
         self.data['Signal_Position'] = position
         self.data['Position'] = position.shift(1).fillna(2).astype(int)
 
-        position_multiplier = metrics.stateful_position_to_multiplier(position)
+        position_multiplier = metrics.stateful_position_to_multiplier(self.data['Position'])
         base_strategy_returns = position_multiplier * self.leverage * self.data['Open_Return']
 
         self.data['Strategy_Returns'] = self._apply_trading_costs(
-            base_strategy_returns=base_strategy_returns, positions=position
+            base_strategy_returns=base_strategy_returns, positions=self.data['Position']
         )
 
         self.data['Linear_Profit'] = (self.initial_capital * self.data['Strategy_Returns']).cumsum()
