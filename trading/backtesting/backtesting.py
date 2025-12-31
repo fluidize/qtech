@@ -246,8 +246,11 @@ class VectorizedBacktesting:
 
         summary = self.get_performance_metrics()
         if mode == "basic":
-            plt.plot(self.data['Datetime'], self.data['Portfolio_Value'])
+            plt.plot(self.data['Datetime'], self.data['Portfolio_Value'], color='orange')
+            plt.plot(self.data['Datetime'], self.initial_capital * (1 + self.data['Open_Return']).cumprod(), color='blue')
+
             plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | RR: {summary['RR_Ratio']:.3f} | WR: {summary['Win_Rate']*100:.3f}% | PF: {summary['Profit_Factor']:.3f} | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
+            plt.legend(["Strategy Portfolio", "Buy & Hold", "Active Return"])
             plt.show()
 
         elif mode == "standard":
@@ -263,7 +266,7 @@ class VectorizedBacktesting:
                     increasing_fillcolor='#888888',
                     increasing_line_color='#888888',
                     decreasing_fillcolor='#00B4FF',
-                    decreasing_line_color='#00B4FF', #make short orders more visible
+                    decreasing_line_color='#00B4FF',
                     name='Price',
                     yaxis='y'
                 )
@@ -289,7 +292,6 @@ class VectorizedBacktesting:
                     name=f'Buy & Hold',
                     line=dict(width=2),
                     yaxis='y2',
-                    visible="legendonly"
                 )
             )
             fig.add_trace(
@@ -303,6 +305,7 @@ class VectorizedBacktesting:
                     visible="legendonly"
                 )
             )
+
             position_changes = self.data['Position'].diff()
             long_entries = []
             short_entries = []
