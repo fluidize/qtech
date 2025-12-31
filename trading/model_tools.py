@@ -8,6 +8,8 @@ import os
 import json
 import time
 from pathlib import Path
+import asyncio
+import aiohttp
 
 from rich import print
 
@@ -162,6 +164,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
             print(f"[red]No data retrieved for {symbol}[/red]")
 
     elif data_source == "binance":
+        # Parse interval format for Binance
         if "min" in interval:
             interval = interval.replace("min", "m")
         elif "hour" in interval:
@@ -173,65 +176,85 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
         elif "month" in interval:
             interval = interval.replace("month", "M")
 
+        # Format symbol for Binance (remove hyphen if present)
         binance_symbol = symbol.replace('-', '').upper()
-        chunks = ceil(days * 1.44)
-        url = "https://api.binance.com/api/v3/klines"
 
-        chunk_results = []
-        times = []
-        progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS", ascii="#>")
-        
-        for chunk_index in range(chunks):
-            retries = 0
-            end_time = datetime.now() - timedelta(minutes=1000*chunk_index) - timedelta(days=age_days)
-            start_time = end_time - timedelta(minutes=1000) - timedelta(days=age_days)
+        chunks = ceil(days * 1.44) # adjust due to binance 1k bar limit
 
-            params = {
-                "symbol": binance_symbol,
-                "interval": interval,
-                "startTime": int(start_time.timestamp() * 1000),
-                "endTime": int(end_time.timestamp() * 1000),
-                "limit": 1000
-            }
+        proxy_url = proxies.get('https') or proxies.get('http') if proxies else None
+
+        async def download_chunk(session, chunk_index, semaphore):
+            async with semaphore:
+                retries = 0
+                end_time = datetime.now() - timedelta(minutes=1000*chunk_index) - timedelta(days=age_days)
+                start_time = end_time - timedelta(minutes=1000) - timedelta(days=age_days)
+
+                params = {
+                    "symbol": binance_symbol,
+                    "interval": interval,
+                    "startTime": int(start_time.timestamp() * 1000),
+                    "endTime": int(end_time.timestamp() * 1000),
+                    "limit": 1000
+                }
+
+                url = "https://api.binance.com/api/v3/klines"
+                
+                while retries <= retry_limit:
+                    try:
+                        async with session.get(url, params=params, proxy=proxy_url) as response:
+                            response.raise_for_status()
+                            request_data = await response.json()
+                            break
+                    except Exception as e:
+                        if retries < retry_limit:
+                            retries += 1
+                            await asyncio.sleep(0.5)
+                        else:
+                            raise Exception(f"Error fetching {binance_symbol} chunk {chunk_index} after {retry_limit} retries: {e}")
+
+                records = []
+                for kline in request_data:
+                    records.append({
+                        "Datetime": int(kline[0]) / 1000,  # Convert from milliseconds to seconds
+                        "Open": float(kline[1]),
+                        "High": float(kline[2]),
+                        "Low": float(kline[3]),
+                        "Close": float(kline[4]),
+                        "Volume": float(kline[5])
+                    })
+
+                temp_data = pd.DataFrame(records)
+                return chunk_index, temp_data, start_time, end_time
+
+        async def download_all_chunks():
+            chunk_results = []
+            times = []
+            max_concurrent = min(25, chunks)
+            semaphore = asyncio.Semaphore(max_concurrent)
             
-            while retries <= retry_limit:
-                try:
-                    response = requests.get(url, params=params, proxies=proxies if proxies else None, timeout=30)
-                    response.raise_for_status()
-                    request_data = response.json()
-                    break
-                except Exception as e:
-                    if retries < retry_limit:
-                        retries += 1
-                        time.sleep(0.5)
-                    else:
-                        print(f"[red]Error fetching {binance_symbol} chunk {chunk_index} after {retry_limit} retries: {e}[/red]")
+            connector = aiohttp.TCPConnector(limit=max_concurrent)
+            timeout = aiohttp.ClientTimeout(total=30)
+            
+            progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS", ascii="#>")
+            
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                tasks = [download_chunk(session, x, semaphore) for x in range(chunks)]
+                
+                for coro in asyncio.as_completed(tasks):
+                    try:
+                        chunk_index, temp_data, start_time, end_time = await coro
+                        chunk_results.append((chunk_index, temp_data))
+                        times.append(start_time)
+                        times.append(end_time)
                         progress_bar.update(1)
-                        break
+                    except Exception as e:
+                        print(f"[red]Error downloading chunk: {e}[/red]")
+                        progress_bar.update(1)
             
-            if retries > retry_limit:
-                continue
+            progress_bar.close()
+            return chunk_results, times
 
-            records = []
-            for kline in request_data:
-                records.append({
-                    "Datetime": int(kline[0]) / 1000,
-                    "Open": float(kline[1]),
-                    "High": float(kline[2]),
-                    "Low": float(kline[3]),
-                    "Close": float(kline[4]),
-                    "Volume": float(kline[5])
-                })
-
-            temp_data = pd.DataFrame(records)
-            chunk_results.append((chunk_index, temp_data))
-            times.append(start_time)
-            times.append(end_time)
-            progress_bar.update(1)
-            
-            time.sleep(0.1)
-        
-        progress_bar.close()
+        chunk_results, times = asyncio.run(download_all_chunks())
 
         chunk_results.sort(key=lambda x: x[0])
         
