@@ -107,7 +107,7 @@ class IndicatorToIndicator(LogicGene):
     def load_indicators(self, indicator_variable_names: list[str]):
         self.left_indicator_variable_name = indicator_variable_names[self.left_index]
         self.right_indicator_variable_name = indicator_variable_names[self.right_index]
-        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_{self.right_indicator_variable_name}" if self.variable_name is None else self.variable_name
+        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_{type(self.operator).__name__}_{self.right_indicator_variable_name}" if self.variable_name is None else self.variable_name
     
     def get_name(self):
         return self.variable_name
@@ -137,7 +137,7 @@ class IndicatorToPrice(LogicGene):
     
     def load_indicators(self, indicator_variable_names: list[str]):
         self.left_indicator_variable_name = indicator_variable_names[self.left_index]
-        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_{self.columns[self.column_index]}" if self.variable_name is None else self.variable_name
+        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_{type(self.operator).__name__}_{self.columns[self.column_index]}" if self.variable_name is None else self.variable_name
     
     def get_name(self):
         return self.variable_name
@@ -171,7 +171,7 @@ class IndicatorToConstant(LogicGene):
     
     def load_indicators(self, indicator_variable_names: list[str]):
         self.left_indicator_variable_name = indicator_variable_names[self.left_index]
-        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_const_{unique_counter()}" if self.variable_name is None else self.variable_name
+        self.variable_name = f"LOGIC_{self.left_indicator_variable_name}_{type(self.operator).__name__}_const_{unique_counter()}" if self.variable_name is None else self.variable_name
         self.parameter_specs = [ParamSpec(parameter_name=f"{self.variable_name}_constant", search_space=(-100, 100))]
     
     def get_name(self):

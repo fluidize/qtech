@@ -82,9 +82,10 @@ def generate_individual(
                     right_index=right_idx,
                     operator=random_operator()
                 ))
+    long_logic_index, short_logic_index = random.sample(range(num_logic), 2)
     signal_gene = SignalGene(
-        long_logic_index=random.randint(0, num_logic - 1),
-        short_logic_index=random.randint(0, num_logic - 1)
+        long_logic_index=long_logic_index,
+        short_logic_index=short_logic_index
     )
     return Builder(indicator_genes=indicator_genes, logic_genes=logic_genes, signal_gene=signal_gene)
 
