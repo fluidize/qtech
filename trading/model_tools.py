@@ -110,7 +110,6 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
                         time.sleep(0.5)
                     else:
                         print(f"[red]Error fetching {symbol} chunk {chunk_index} after {retry_limit} retries: {e}[/red]")
-                        retries += 1
                         progress_bar.update(1)
                         continue
             
@@ -207,7 +206,6 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
                         time.sleep(0.5)
                     else:
                         print(f"[red]Error fetching {binance_symbol} chunk {chunk_index} after {retry_limit} retries: {e}[/red]")
-                        retries += 1
                         progress_bar.update(1)
                         break
             
