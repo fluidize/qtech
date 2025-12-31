@@ -93,7 +93,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
         for chunk_index in range(chunks):
             retries = 0
             end_time = datetime.now(timezone.utc) - timedelta(minutes=1000*chunk_index) - timedelta(days=age_days)
-            start_time = end_time - timedelta(minutes=1000) - timedelta(days=age_days)
+            start_time = end_time - timedelta(minutes=1000)
 
             start_ts = int(start_time.timestamp())
             end_ts = int(end_time.timestamp())
@@ -155,6 +155,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
 
             data["Datetime"] = pd.to_datetime(data['Datetime'], unit='s')
             data.sort_values('Datetime', inplace=True)
+            data = data.drop_duplicates(subset=['Datetime'], keep='first')
             data.reset_index(drop=True, inplace=True)
 
             data['HL2'] = (data['High'] + data['Low']) / 2
@@ -187,7 +188,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
             async with semaphore:
                 retries = 0
                 end_time = datetime.now() - timedelta(minutes=1000*chunk_index) - timedelta(days=age_days)
-                start_time = end_time - timedelta(minutes=1000) - timedelta(days=age_days)
+                start_time = end_time - timedelta(minutes=1000)
 
                 params = {
                     "symbol": binance_symbol,
