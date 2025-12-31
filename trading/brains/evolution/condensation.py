@@ -24,7 +24,7 @@ def quickstop_callback(study, trial):
         study.stop()
 
 log = {}
-population = generate_population(size=1000, num_indicators=2, num_logic=2)
+population = generate_population(size=100, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=0.5)
 compiled_population = []
 individual_asts = []
 

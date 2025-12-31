@@ -85,9 +85,6 @@ class LogicGene:
     """Creates a variable that stores the result of a logical function."""
     def __init__(self):
         raise NotImplementedError
-
-    def load_indicators(self, indicator_variable_names: list[str]):
-        raise NotImplementedError
     
     def get_name(self):
         raise NotImplementedError
@@ -120,7 +117,7 @@ class IndicatorToIndicator(LogicGene):
     
     def to_ast(self):
         if self.left_indicator_variable_name is None or self.right_indicator_variable_name is None:
-            raise ValueError("Indicators not loaded")
+            raise ValueError("Indicators not loaded - call load_indicators() first")
         compare_ast = make_compare(ast.Name(id=self.left_indicator_variable_name, ctx=ast.Load()), self.operator, ast.Name(id=self.right_indicator_variable_name, ctx=ast.Load()))
         return ast.Assign(
             targets=[
@@ -150,7 +147,7 @@ class IndicatorToPrice(LogicGene):
     
     def to_ast(self):
         if self.left_indicator_variable_name is None:
-            raise ValueError("Indicators not loaded")
+            raise ValueError("Indicators not loaded - call load_indicators() first")
         compare_ast = make_compare(ast.Name(id=self.left_indicator_variable_name, ctx=ast.Load()), self.operator, ast.Subscript(
             value=ast.Name(id="data", ctx=ast.Load()),
             slice=ast.Constant(value=self.columns[self.column_index]),
@@ -185,7 +182,7 @@ class IndicatorToConstant(LogicGene):
 
     def to_ast(self):
         if self.left_indicator_variable_name is None:
-            raise ValueError("Indicators not loaded")
+            raise ValueError("Indicators not loaded - call load_indicators() first")
         compare_ast = make_compare(ast.Name(id=self.left_indicator_variable_name, ctx=ast.Load()), self.operator, ast.Name(id=f"{self.variable_name}_constant", ctx=ast.Load()))
         return ast.Assign(
             targets=[
@@ -194,10 +191,92 @@ class IndicatorToConstant(LogicGene):
             value=compare_ast
         )
 
+class LogicToLogic(LogicGene):
+    def __init__(self, left_logic_index: int, right_logic_index: int, combine_type: str):
+        self.left_logic_index = left_logic_index
+        self.right_logic_index = right_logic_index
+        self.combine_type = combine_type  # and / or
+        self.variable_name = None
+        self.left_logic_variable_name = None
+        self.right_logic_variable_name = None
+        self.logic_variable_names = None
+    
+    def load_logic(self, logic_variable_names: list[str]):
+        self.logic_variable_names = logic_variable_names
+        if self.left_logic_index < len(logic_variable_names):
+            self.left_logic_variable_name = logic_variable_names[self.left_logic_index]
+        if self.right_logic_index < len(logic_variable_names):
+            self.right_logic_variable_name = logic_variable_names[self.right_logic_index]
+        if self.variable_name is None:
+            self.variable_name = f"LOGIC_COMPOSITE_{unique_counter()}"
+    
+    def get_name(self):
+        if self.variable_name is None:
+            self.variable_name = f"LOGIC_COMPOSITE_{unique_counter()}"
+        return self.variable_name
+    
+    def get_parameter_specs(self):
+        return []
+    
+    def to_ast(self):
+        if self.left_logic_variable_name is None or self.right_logic_variable_name is None:
+            raise ValueError("Logic genes not loaded - call load_logic() first")
+        
+        left_expr = ast.Name(id=self.left_logic_variable_name, ctx=ast.Load())
+        right_expr = ast.Name(id=self.right_logic_variable_name, ctx=ast.Load())
+        
+        if self.combine_type == 'and':
+            op = ast.BitAnd()
+        else:
+            op = ast.BitOr()
+        
+        return ast.Assign(
+            targets=[ast.Name(id=self.variable_name, ctx=ast.Store())],
+            value=ast.BinOp(left=left_expr, op=op, right=right_expr)
+        )
+
+class SignalGene():
+    def __init__(self, long_logic_index: int, short_logic_index: int):
+        self.long_logic_index = long_logic_index
+        self.short_logic_index = short_logic_index
+        self.variable_name = None
+        self.long_logic_variable_name = None
+        self.short_logic_variable_name = None
+    
+    def load_logic(self, logic_variable_names: list[str]):
+        self.long_logic_variable_name = logic_variable_names[self.long_logic_index]
+        self.short_logic_variable_name = logic_variable_names[self.short_logic_index]
+        self.variable_name = f"SIGNAL_{self.long_logic_variable_name}_{self.short_logic_variable_name}" if self.variable_name is None else self.variable_name
+    
+    def get_name(self):
+        return self.variable_name
+    
+    def to_ast(self):
+        if self.long_logic_variable_name is None or self.short_logic_variable_name is None:
+            raise ValueError("Logic genes not loaded - call load_logic() first")
+        buy_conditions_assign = ast.Assign(
+            targets=[ast.Subscript(
+                value=ast.Name(id="signals", ctx=ast.Load()), 
+                slice=ast.Name(id=self.long_logic_variable_name, ctx=ast.Load()), 
+                ctx=ast.Store()
+            )],
+            value=ast.Constant(value=3)
+        )
+        sell_conditions_assign = ast.Assign(
+            targets=[ast.Subscript(
+                value=ast.Name(id="signals", ctx=ast.Load()), 
+                slice=ast.Name(id=self.short_logic_variable_name, ctx=ast.Load()), 
+                ctx=ast.Store()
+            )],
+            value=ast.Constant(value=2)
+        )
+        return [buy_conditions_assign, sell_conditions_assign]
+
 class Builder:
-    def __init__(self, indicator_genes: list[IndicatorGene], logic_genes: list[LogicGene]):
+    def __init__(self, indicator_genes: list[IndicatorGene], logic_genes: list[LogicGene], signal_gene: SignalGene):
         self.indicator_genes = indicator_genes
         self.logic_genes = logic_genes
+        self.signal_gene = signal_gene
         self.function = None
     
     def _construct_algorithm_base(self):
@@ -212,11 +291,28 @@ class Builder:
 
         logic_ast_list = []
         logic_variable_names = []
+        
+        simple_logic_genes = []
+        composite_logic_genes = []
         for gene in self.logic_genes:
+            if isinstance(gene, LogicToLogic):
+                composite_logic_genes.append(gene)
+            else:
+                simple_logic_genes.append(gene)
+        
+        for gene in simple_logic_genes:
             gene.load_indicators(indicator_variable_names)
             logic_ast_list.append(gene.to_ast())
             logic_variable_names.append(gene.get_name())
             algorithm_parameter_specs.extend(gene.get_parameter_specs())
+        
+        for gene in composite_logic_genes:
+            gene.load_logic(logic_variable_names)
+            logic_ast_list.append(gene.to_ast())
+            logic_variable_names.append(gene.get_name())
+            algorithm_parameter_specs.extend(gene.get_parameter_specs())
+
+        self.signal_gene.load_logic(logic_variable_names)
 
         #signals = pd.Series(0, index=data.index)
         signals_init = ast.Assign(
@@ -234,25 +330,7 @@ class Builder:
             )
         )
 
-        #start off with simple logic assignment
-        #signals[logic_variable_names[0]] = 3
-        #signals[logic_variable_names[1]] = 2
-        buy_conditions_assign = ast.Assign(
-            targets=[ast.Subscript(
-                value=ast.Name(id="signals", ctx=ast.Load()), 
-                slice=ast.Name(id=logic_variable_names[0], ctx=ast.Load()), 
-                ctx=ast.Store()
-            )],
-            value=ast.Constant(value=3)
-        )
-        sell_conditions_assign = ast.Assign(
-            targets=[ast.Subscript(
-                value=ast.Name(id="signals", ctx=ast.Load()), 
-                slice=ast.Name(id=logic_variable_names[1], ctx=ast.Load()), 
-                ctx=ast.Store()
-            )],
-            value=ast.Constant(value=2)
-        )
+        buy_conditions_assign, sell_conditions_assign = self.signal_gene.to_ast()
 
         #return signals
         return_signals = ast.Return(value=ast.Name(id="signals", ctx=ast.Load()))
