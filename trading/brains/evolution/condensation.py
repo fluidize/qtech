@@ -29,7 +29,7 @@ compiled_population = []
 individual_asts = []
 
 for individual in population:
-    base_ast, algorithm_parameter_specs = individual._construct_algorithm_base()
+    base_ast, algorithm_parameter_specs = individual.construct_algorithm()
     function = ast_to_function(base_ast)
     function.param_space = paramspecs_to_dict(algorithm_parameter_specs)
     compiled_population.append(function)

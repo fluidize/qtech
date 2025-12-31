@@ -279,7 +279,7 @@ class Builder:
         self.signal_gene = signal_gene
         self.function = None
     
-    def _construct_algorithm_base(self):
+    def construct_algorithm(self):
         algorithm_parameter_specs = [] #all algorithm parameter search spaces to be fed into bayes opt engine
 
         indicator_ast_list = []
