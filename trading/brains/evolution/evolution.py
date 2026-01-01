@@ -138,22 +138,29 @@ def mutate_genome(individual: Genome, p_mutate: float = 0.1):
     p_log = 1/len(logic_genes)
     p_sig = 1/len(signal_genes)
     
-    indicator_genes = [
-        mutate_gene(gene, num_indicators=len(indicator_genes), num_logic=len(logic_genes)) if random.random() < p_ind else gene for gene in indicator_genes
+    new_indicator_genes = [
+        mutate_gene(gene) if random.random() < p_ind else gene for gene in indicator_genes
     ]
-    logic_genes = [
-        mutate_gene(gene, num_indicators=len(indicator_genes), num_logic=len(logic_genes)) if random.random() < p_log else gene for gene in logic_genes
-    ]
-    signal_genes = [
-        mutate_gene(gene, num_indicators=len(indicator_genes), num_logic=len(logic_genes)) if random.random() < p_sig else gene for gene in signal_genes
-    ]
-    return Genome(indicator_genes=indicator_genes, logic_genes=logic_genes, signal_genes=signal_genes)
+    new_num_indicators = len(new_indicator_genes)
 
-def mutate_gene(gene: IndicatorGene | LogicGene | SignalGene, num_indicators: int, num_logic: int):
+    num_simple_logic = sum(1 for gene in logic_genes if not isinstance(gene, LogicToLogic))
+    new_logic_genes = [
+        mutate_gene(gene, num_indicators=new_num_indicators, num_logic=num_simple_logic) if (random.random() < p_log) else gene for gene in logic_genes
+    ]
+    new_num_logic = len(new_logic_genes)
+
+    new_signal_genes = [
+        mutate_gene(gene, num_indicators=new_num_indicators, num_logic=new_num_logic) if random.random() < p_sig else gene for gene in signal_genes
+    ]
+    return Genome(indicator_genes=new_indicator_genes, logic_genes=new_logic_genes, signal_genes=new_signal_genes)
+
+def mutate_gene(gene: IndicatorGene | LogicGene | SignalGene, num_indicators: int = None, num_logic: int = None):
     if isinstance(gene, IndicatorGene):
         return generate_indicator_gene()
+    elif isinstance(gene, LogicToLogic):
+        return generate_l2l_gene(num_logic=num_logic)
     elif isinstance(gene, LogicGene):
-        return generate_logic_gene(num_indicators=num_indicators, num_logic=num_logic)
+        return generate_simple_logic_gene(num_indicators=num_indicators)
     elif isinstance(gene, SignalGene):
         return generate_signal_gene(num_logic=num_logic)
 
