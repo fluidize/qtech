@@ -654,18 +654,16 @@ def wma(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     weights = np.arange(1, timeperiod + 1)
     sum_weights = weights.sum()
     
-    # Pre-allocate the result array with NaNs
-    result = pd.Series(np.nan, index=series.index)
-    
-    # Convert to numpy array for faster processing
     series_values = series.values
+    n = len(series_values)
     
-    for i in range(timeperiod - 1, len(series_values)):
-        # Directly use numpy array slicing instead of Series.iloc
+    result_values = np.full(n, np.nan, dtype=np.float64)
+    
+    for i in range(timeperiod - 1, n):
         window_vals = series_values[i - timeperiod + 1:i + 1]
-        result.iloc[i] = np.sum(window_vals * weights) / sum_weights
+        result_values[i] = np.sum(window_vals * weights) / sum_weights
     
-    return result
+    return pd.Series(result_values, index=series.index)
 
 def ichimoku(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
     """Ichimoku Cloud"""
