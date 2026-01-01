@@ -2,8 +2,9 @@ import pandas as pd
 import ast
 import inspect
 
-from .param_space import registered_param_specs, ParamSpec
-from .ast_tools import unique_counter, make_compare
+from param_space import registered_param_specs, ParamSpec
+from ast_tools import unique_counter, make_compare, ast_to_function
+from gp_tools import paramspecs_to_dict
 
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 
@@ -192,10 +193,10 @@ class IndicatorToConstant(LogicGene):
         )
 
 class LogicToLogic(LogicGene):
-    def __init__(self, left_logic_index: int, right_logic_index: int, combine_type: str):
+    def __init__(self, left_logic_index: int, right_logic_index: int, operator: ast.cmpop):
         self.left_logic_index = left_logic_index
         self.right_logic_index = right_logic_index
-        self.combine_type = combine_type  # and / or
+        self.operator = operator
         self.variable_name = None
         self.left_logic_variable_name = None
         self.right_logic_variable_name = None
@@ -224,15 +225,9 @@ class LogicToLogic(LogicGene):
         
         left_expr = ast.Name(id=self.left_logic_variable_name, ctx=ast.Load())
         right_expr = ast.Name(id=self.right_logic_variable_name, ctx=ast.Load())
-        
-        if self.combine_type == 'and':
-            op = ast.BitAnd()
-        else:
-            op = ast.BitOr()
-        
         return ast.Assign(
             targets=[ast.Name(id=self.variable_name, ctx=ast.Store())],
-            value=ast.BinOp(left=left_expr, op=op, right=right_expr)
+            value=ast.BinOp(left=left_expr, op=self.operator, right=right_expr)
         )
 
 class SignalGene():
@@ -277,9 +272,13 @@ class Builder:
         self.indicator_genes = indicator_genes
         self.logic_genes = logic_genes
         self.signal_gene = signal_gene
-        self.function = None
+
+        self.function_ast, self.param_space = self.construct_algorithm()
+        self.compiled_param_space = paramspecs_to_dict(self.param_space)
+        self.compiled_function = ast_to_function(self.function_ast)
     
     def construct_algorithm(self):
+        
         algorithm_parameter_specs = [] #all algorithm parameter search spaces to be fed into bayes opt engine
 
         indicator_ast_list = []
@@ -300,17 +299,17 @@ class Builder:
             else:
                 simple_logic_genes.append(gene)
         
-        for gene in simple_logic_genes:
-            gene.load_indicators(indicator_variable_names)
-            logic_ast_list.append(gene.to_ast())
-            logic_variable_names.append(gene.get_name())
-            algorithm_parameter_specs.extend(gene.get_parameter_specs())
-        
-        for gene in composite_logic_genes:
-            gene.load_logic(logic_variable_names)
-            logic_ast_list.append(gene.to_ast())
-            logic_variable_names.append(gene.get_name())
-            algorithm_parameter_specs.extend(gene.get_parameter_specs())
+        for simple_logic_gene in simple_logic_genes:
+            simple_logic_gene.load_indicators(indicator_variable_names)
+            logic_ast_list.append(simple_logic_gene.to_ast())
+            logic_variable_names.append(simple_logic_gene.get_name())
+            algorithm_parameter_specs.extend(simple_logic_gene.get_parameter_specs())
+        print("copmnstruicting")
+        for composite_logic_gene in composite_logic_genes:
+            composite_logic_gene.load_logic(logic_variable_names)
+            logic_ast_list.append(composite_logic_gene.to_ast())
+            logic_variable_names.append(composite_logic_gene.get_name())
+            algorithm_parameter_specs.extend(composite_logic_gene.get_parameter_specs())
 
         self.signal_gene.load_logic(logic_variable_names)
 
@@ -346,9 +345,9 @@ class Builder:
 
         args = [ast.arg(arg="data")] + [ast.arg(arg=sp.parameter_name) for sp in algorithm_parameter_specs]
         func_args = ast.arguments(posonlyargs=[], args=args, kwonlyargs=[], kw_defaults=[], defaults=[])
-        base_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[]) #default func name is strategy
+        func_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[]) #default func name is strategy
 
-        return base_ast, algorithm_parameter_specs
+        return func_ast, algorithm_parameter_specs
 
-    def __call__(self, data: pd.DataFrame) -> pd.Series:
-        pass
+    def __call__(self, data: pd.DataFrame, **kwargs) -> pd.Series:
+        return self.compiled_function(data, **kwargs)

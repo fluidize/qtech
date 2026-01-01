@@ -1,5 +1,5 @@
 import ast
-from .param_space import registered_param_specs, ParamSpec
+from param_space import registered_param_specs, ParamSpec
 import random
 
 import sys
@@ -21,6 +21,3 @@ def random_operator():
 
 def paramspecs_to_dict(param_specs: list[ParamSpec]) -> dict:
     return {p.parameter_name : p.search_space for p in param_specs}
-
-def heuristic_fitness(strategy: callable) -> float:
-    pass

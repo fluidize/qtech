@@ -22,3 +22,4 @@ node_modules/
 .DS_Store
 
 keys.json
+trading.egg-info/

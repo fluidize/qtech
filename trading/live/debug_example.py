@@ -12,23 +12,19 @@ import os
 sys.path.append("")
 
 from live_system import LiveTradingSystem
-import trading.backtesting.cstrats as cs
+import trading.backtesting.testing.cstrats as cs
 
 async def debug_live_trading():
     """Example of running live trading system with debug plotting"""
     
     # Create live trading system with debug plotting enabled
     live_system = LiveTradingSystem(
-        symbol="BTC-USDT",
+        symbol="SOL-USDT",
         interval="1m",
         data_source="binance",
         buffer_size=500,
-        strategy_func=cs.trend_reversal_strategy_v1,
-        strategy_params={
-            'supertrend_window': 37,
-            'supertrend_multiplier': 2,
-            'ma_window': 35,
-        },
+        strategy_func=cs.trend_strength_strategy,
+        strategy_params={'adx_period': 16, 'supertrend_period': 66, 'supertrend_multiplier': 10, 'adx_sma_period': 16},
         debug_plot=True,
         debug_plot_window=500,
         signal_callback=debug_signal_callback,
