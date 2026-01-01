@@ -1,7 +1,7 @@
 from trading.backtesting.backtesting import VectorizedBacktesting
 from trading.backtesting.algorithm_optim import BayesianOptimizer
 
-from individual import generate_population
+from evolution import generate_population
 from genetics.ast_tools import display_ast, ast_to_function, unparsify
 
 from tqdm import tqdm
@@ -17,7 +17,7 @@ vb = VectorizedBacktesting(instance_name="Condensation",
     commission_fixed=0.0,
     leverage=1.0
 )
-vb.fetch_data(symbol="SOL-USDT", days=10, interval="30m", age_days=0, data_source="binance", cache_expiry_hours=48)
+vb.fetch_data(symbol="ETH-USDT", days=100, interval="30m", age_days=0, data_source="binance", cache_expiry_hours=48)
 
 def quickstop_callback(study, trial):
     bad_trials = sum(1 for t in study.trials if t.value is not None and t.value < 0)
@@ -44,7 +44,6 @@ for i, individual in enumerate(population):
     progress_bar.update(1)
 
 progress_bar.close()
-
 
 best_individual = max(log, key=lambda x: log[x][1])
 display_ast(best_individual.get_function_ast())

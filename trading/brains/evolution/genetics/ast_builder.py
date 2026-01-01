@@ -96,6 +96,7 @@ class LogicGene:
     def to_ast(self):
         raise NotImplementedError
 
+#i2i
 class IndicatorToIndicator(LogicGene):
     def __init__(self, left_index: int, right_index: int, operator: ast.cmpop):
         self.left_index = left_index
@@ -127,6 +128,7 @@ class IndicatorToIndicator(LogicGene):
             value=compare_ast
         )
 
+#i2p
 class IndicatorToPrice(LogicGene):
     columns = ["Open", "High", "Low", "Close"]
     def __init__(self, left_index: int, column_index: int, operator: ast.cmpop):
@@ -161,10 +163,10 @@ class IndicatorToPrice(LogicGene):
             value=compare_ast
         )
 
+#i2c
 class IndicatorToConstant(LogicGene):
-    def __init__(self, left_index: int, operator: ast.cmpop, constant: float):
+    def __init__(self, left_index: int, operator: ast.cmpop):
         self.left_index = left_index
-        self.constant = constant
         self.operator = operator
         self.variable_name = None
         self.left_indicator_variable_name = None
@@ -192,6 +194,7 @@ class IndicatorToConstant(LogicGene):
             value=compare_ast
         )
 
+#l2l
 class LogicToLogic(LogicGene):
     def __init__(self, left_logic_index: int, right_logic_index: int, operator: ast.cmpop):
         self.left_logic_index = left_logic_index
@@ -268,10 +271,12 @@ class SignalGene():
         return [buy_conditions_assign, sell_conditions_assign]
 
 class Genome:
-    def __init__(self, indicator_genes: list[IndicatorGene], logic_genes: list[LogicGene], signal_gene: SignalGene):
+    def __init__(self, indicator_genes: list[IndicatorGene], logic_genes: list[LogicGene], signal_genes: list[SignalGene]):
         self.indicator_genes = indicator_genes
         self.logic_genes = logic_genes
-        self.signal_gene = signal_gene
+        self.signal_genes = signal_genes
+
+        self.complexity = len(self.indicator_genes) + len(self.logic_genes) + len(self.signal_genes)
 
         self.function_ast, self.param_space = self.construct_algorithm()
         self.param_space = paramspecs_to_dict(self.param_space)
@@ -311,7 +316,8 @@ class Genome:
             logic_variable_names.append(composite_logic_gene.get_name())
             algorithm_parameter_specs.extend(composite_logic_gene.get_parameter_specs())
 
-        self.signal_gene.load_logic(logic_variable_names)
+        for signal_gene in self.signal_genes:
+            signal_gene.load_logic(logic_variable_names)
 
         #signals = pd.Series(0, index=data.index)
         signals_init = ast.Assign(
@@ -329,7 +335,7 @@ class Genome:
             )
         )
 
-        buy_conditions_assign, sell_conditions_assign = self.signal_gene.to_ast()
+        buy_conditions_assigns, sell_conditions_assigns = zip(*[signal_gene.to_ast() for signal_gene in self.signal_genes])
 
         #return signals
         return_signals = ast.Return(value=ast.Name(id="signals", ctx=ast.Load()))
@@ -338,8 +344,8 @@ class Genome:
             signals_init,
             *indicator_ast_list,
             *logic_ast_list,
-            buy_conditions_assign,
-            sell_conditions_assign,
+            *buy_conditions_assigns,
+            *sell_conditions_assigns,
             return_signals
         ]
 
@@ -348,6 +354,12 @@ class Genome:
         func_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[]) #default func name is strategy
 
         return func_ast, algorithm_parameter_specs
+
+    def get_genes(self):
+        return self.indicator_genes, self.logic_genes, self.signal_genes
+
+    def get_complexity(self):
+        return self.complexity
 
     def get_function_ast(self) -> ast.AST:
         return self.function_ast
