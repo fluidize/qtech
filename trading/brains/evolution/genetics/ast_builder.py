@@ -2,9 +2,9 @@ import pandas as pd
 import ast
 import inspect
 
-from param_space import registered_param_specs, ParamSpec
-from ast_tools import unique_counter, make_compare, ast_to_function
-from gp_tools import paramspecs_to_dict
+from .param_space import registered_param_specs, ParamSpec
+from .ast_tools import unique_counter, make_compare, ast_to_function
+from .gp_tools import paramspecs_to_dict
 
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 
@@ -267,7 +267,7 @@ class SignalGene():
         )
         return [buy_conditions_assign, sell_conditions_assign]
 
-class Builder:
+class Genome:
     def __init__(self, indicator_genes: list[IndicatorGene], logic_genes: list[LogicGene], signal_gene: SignalGene):
         self.indicator_genes = indicator_genes
         self.logic_genes = logic_genes

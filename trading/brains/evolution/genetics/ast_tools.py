@@ -8,8 +8,6 @@ from rich.syntax import Syntax
 import numpy as np
 import pandas as pd
 
-import sys
-sys.path.append("")
 import trading.technical_analysis as ta
 
 COUNTER = 0  # Used to generate unique parameter names per run

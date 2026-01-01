@@ -1,12 +1,9 @@
-#condense a large population of individuals based on 
-from individual import generate_population
-
-import sys
-sys.path.append("")
 from trading.backtesting.backtesting import VectorizedBacktesting
 from trading.backtesting.algorithm_optim import BayesianOptimizer
+
+from individual import generate_population
 from genetics.ast_tools import display_ast, ast_to_function, unparsify
-from genetics.gp_tools import paramspecs_to_dict
+
 from tqdm import tqdm
 from rich import print
 
@@ -33,11 +30,10 @@ compiled_population = []
 individual_asts = []
 
 for individual in population:
-    base_ast, algorithm_parameter_specs = individual.construct_algorithm()
-    function = ast_to_function(base_ast)
-    function.param_space = paramspecs_to_dict(algorithm_parameter_specs)
+    function = individual.compiled_function
+    function.param_space = individual.compiled_param_space
     compiled_population.append(function)
-    individual_asts.append(base_ast)
+    individual_asts.append(individual.function_ast)
 
 progress_bar = tqdm(total=len(population), desc="Evaluating population")
 

@@ -1,10 +1,6 @@
 import random
 
-import sys
-
-sys.path.append("trading/brains/evolution")
-
-from genetics.ast_builder import Builder, IndicatorGene, IndicatorToConstant, IndicatorToPrice, IndicatorToIndicator, LogicToLogic, SignalGene
+from genetics.ast_builder import Genome, IndicatorGene, IndicatorToConstant, IndicatorToPrice, IndicatorToIndicator, LogicToLogic, SignalGene
 from genetics.ast_tools import ast_to_function
 from genetics.gp_tools import get_indicators, paramspecs_to_dict, random_operator
 
@@ -89,7 +85,7 @@ def generate_individual(
         long_logic_index=long_logic_index,
         short_logic_index=short_logic_index
     )
-    return Builder(indicator_genes=indicator_genes, logic_genes=logic_genes, signal_gene=signal_gene)
+    return Genome(indicator_genes=indicator_genes, logic_genes=logic_genes, signal_gene=signal_gene)
 
 def generate_population(
     size=100, 

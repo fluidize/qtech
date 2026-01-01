@@ -1,9 +1,7 @@
 import ast
-from param_space import registered_param_specs, ParamSpec
 import random
+from .param_space import registered_param_specs, ParamSpec
 
-import sys
-sys.path.append("")
 import trading.technical_analysis as ta
 
 def get_indicators(exclude: list[str] = ["hma", "percent_rank", "ichimoku"]):
