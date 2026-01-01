@@ -1,4 +1,5 @@
 import random
+import ast
 
 from genetics.ast_builder import Genome, IndicatorGene, IndicatorToConstant, IndicatorToPrice, IndicatorToIndicator, LogicToLogic, SignalGene
 from genetics.ast_tools import ast_to_function
@@ -49,11 +50,10 @@ def generate_individual(
             right_idx = random.randint(0, len(logic_genes) - 1)
             while right_idx == left_idx and len(logic_genes) > 1:
                 right_idx = random.randint(0, len(logic_genes) - 1)
-            combine_type = random.choice(['and', 'or'])
             logic_genes.append(LogicToLogic(
                 left_logic_index=left_idx,
                 right_logic_index=right_idx,
-                combine_type=combine_type
+                operator=random.choice([ast.BitAnd(), ast.BitOr()])
             ))
         else:
             logic_type = random.choice([IndicatorToPrice, IndicatorToConstant, IndicatorToIndicator])

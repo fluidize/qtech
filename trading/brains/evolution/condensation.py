@@ -17,7 +17,7 @@ vb = VectorizedBacktesting(instance_name="Condensation",
     commission_fixed=0.0,
     leverage=1.0
 )
-vb.fetch_data(symbol="SOL-USDT", days=365, interval="30m", age_days=0, data_source="binance", cache_expiry_hours=48)
+vb.fetch_data(symbol="SOL-USDT", days=10, interval="30m", age_days=0, data_source="binance", cache_expiry_hours=48)
 
 def quickstop_callback(study, trial):
     bad_trials = sum(1 for t in study.trials if t.value is not None and t.value < 0)
@@ -25,15 +25,14 @@ def quickstop_callback(study, trial):
         study.stop()
 
 log = {}
-population = generate_population(size=10000, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=0.5)
+population = generate_population(size=100, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=0.5)
 compiled_population = []
 individual_asts = []
 
 for individual in population:
-    function = individual.compiled_function
-    function.param_space = individual.compiled_param_space
+    function = individual.get_compiled_function()
     compiled_population.append(function)
-    individual_asts.append(individual.function_ast)
+    individual_asts.append(individual.get_function_ast())
 
 progress_bar = tqdm(total=len(population), desc="Evaluating population")
 

@@ -274,11 +274,11 @@ class Genome:
         self.signal_gene = signal_gene
 
         self.function_ast, self.param_space = self.construct_algorithm()
-        self.compiled_param_space = paramspecs_to_dict(self.param_space)
+        self.param_space = paramspecs_to_dict(self.param_space)
         self.compiled_function = ast_to_function(self.function_ast)
+        self.compiled_function.param_space = self.param_space #add param space variable to compiled function
     
     def construct_algorithm(self):
-        
         algorithm_parameter_specs = [] #all algorithm parameter search spaces to be fed into bayes opt engine
 
         indicator_ast_list = []
@@ -304,7 +304,7 @@ class Genome:
             logic_ast_list.append(simple_logic_gene.to_ast())
             logic_variable_names.append(simple_logic_gene.get_name())
             algorithm_parameter_specs.extend(simple_logic_gene.get_parameter_specs())
-        print("copmnstruicting")
+
         for composite_logic_gene in composite_logic_genes:
             composite_logic_gene.load_logic(logic_variable_names)
             logic_ast_list.append(composite_logic_gene.to_ast())
@@ -348,6 +348,15 @@ class Genome:
         func_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[]) #default func name is strategy
 
         return func_ast, algorithm_parameter_specs
+
+    def get_function_ast(self) -> ast.AST:
+        return self.function_ast
+    
+    def get_compiled_function(self) -> callable:
+        return self.compiled_function
+
+    def get_param_space(self) -> dict:
+        return self.param_space
 
     def __call__(self, data: pd.DataFrame, **kwargs) -> pd.Series:
         return self.compiled_function(data, **kwargs)
