@@ -26,42 +26,35 @@ def quickstop_callback(study, trial):
 
 log = {}
 population = generate_population(size=100, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=0.5)
-compiled_population = []
-individual_asts = []
-
-for individual in population:
-    function = individual.get_compiled_function()
-    compiled_population.append(function)
-    individual_asts.append(individual.get_function_ast())
 
 progress_bar = tqdm(total=len(population), desc="Evaluating population")
 
-for i, (individual, strategy_func, base_ast) in enumerate(zip(population, compiled_population, individual_asts)):
+for i, individual in enumerate(population):
     bo = BayesianOptimizer(engine=vb)
     bo.optimize(
-        strategy_func=strategy_func, 
-        param_space=strategy_func.param_space, 
+        strategy_func=individual.get_compiled_function(), 
+        param_space=individual.get_param_space(), 
         metric="Alpha * np.clip(1 + Max_Drawdown, 0, None)",
         n_trials=15,
         direction="maximize",
         callbacks=[quickstop_callback],
         show_progress_bar=False
     )
-    log[base_ast] = bo.get_best()
+    log[individual] = bo.get_best()
     progress_bar.update(1)
 
 progress_bar.close()
 
 
 best_individual = max(log, key=lambda x: log[x][1])
-display_ast(best_individual)
+display_ast(best_individual.get_function_ast())
 print(f"Params: {log[best_individual][0]}")
 
-vb.run_strategy(ast_to_function(best_individual), **log[best_individual][0])
+vb.run_strategy(best_individual.get_compiled_function(), **log[best_individual][0])
 print(vb.get_performance_metrics())
 vb.plot_performance(mode="standard")
 
 with open("best.txt", "w") as f:
-    f.write(unparsify(best_individual))
+    f.write(unparsify(best_individual.get_function_ast()))
     f.write(f"\nParams: {log[best_individual][0]}")
     f.write(f"\nSearch Space: {log[best_individual][1]}")
