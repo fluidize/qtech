@@ -2,8 +2,7 @@ import random
 import ast
 
 from genetics.ast_builder import Genome, IndicatorGene, IndicatorToConstant, IndicatorToPrice, IndicatorToIndicator, LogicToLogic, SignalGene
-from genetics.ast_tools import ast_to_function
-from genetics.gp_tools import get_indicators, paramspecs_to_dict, random_operator
+from genetics.gp_tools import get_indicators, random_comparison_operator, random_composition_operator
 
 EXCLUDED_INDICATORS = ["hma", "percent_rank", "ichimoku"]
 #either noncausal or expensive
@@ -53,7 +52,7 @@ def generate_individual(
             logic_genes.append(LogicToLogic(
                 left_logic_index=left_idx,
                 right_logic_index=right_idx,
-                operator=random.choice([ast.BitAnd(), ast.BitOr()])
+                operator=random_composition_operator()
             ))
         else:
             logic_type = random.choice([IndicatorToPrice, IndicatorToConstant, IndicatorToIndicator])
@@ -62,13 +61,13 @@ def generate_individual(
                 logic_genes.append(IndicatorToPrice(
                     left_index=random.randint(0, num_indicators - 1),
                     column_index=random.randint(0, 3),
-                    operator=random_operator()
+                    operator=random_comparison_operator()
                 ))
             elif logic_type == IndicatorToConstant:
                 logic_genes.append(IndicatorToConstant(
                     left_index=random.randint(0, num_indicators - 1),
                     constant=random.uniform(0, 100),
-                    operator=random_operator()
+                    operator=random_comparison_operator()
                 ))
             else:
                 left_idx = random.randint(0, num_indicators - 1)
@@ -78,7 +77,7 @@ def generate_individual(
                 logic_genes.append(IndicatorToIndicator(
                     left_index=left_idx,
                     right_index=right_idx,
-                    operator=random_operator()
+                    operator=random_comparison_operator()
                 ))
     long_logic_index, short_logic_index = random.sample(range(num_logic), 2)
     signal_gene = SignalGene(

@@ -11,11 +11,8 @@ from rich.console import Console
 from rich.table import Table
 from rich import print as rprint
 
-import sys
-sys.path.append("")
-import trading.technical_analysis as ta
-from param_space import registered_param_specs, FunctionSpec
-from gp_tools import get_indicators
+from trading.brains.evolution.genetics.param_space import registered_param_specs, FunctionSpec
+from trading.brains.evolution.genetics.gp_tools import get_indicators
 
 def generate_sample_data(n: int = 1000) -> pd.DataFrame:
     """Generate synthetic OHLCV data for testing."""
@@ -177,7 +174,6 @@ def display_results(results: List[Dict]):
     table.add_column("Min Time (ms)", style="blue", width=15, justify="right")
     table.add_column("Max Time (ms)", style="blue", width=15, justify="right")
     table.add_column("Std Dev (ms)", style="blue", width=15, justify="right")
-    table.add_column("Status", style="red", width=25)
     
     for rank, result in enumerate(sorted_results, 1):
         name = result['name']
@@ -186,13 +182,11 @@ def display_results(results: List[Dict]):
         max_ms = result['max_time'] * 1000
         
         if result['error']:
-            status = f"ERROR: {result['error'][:20]}"
             avg_ms_str = "N/A"
             min_ms_str = "N/A"
             max_ms_str = "N/A"
             std_ms_str = "N/A"
         else:
-            status = "OK"
             avg_ms_str = f"{avg_ms:.4f}"
             min_ms_str = f"{min_ms:.4f}"
             max_ms_str = f"{max_ms:.4f}"
@@ -205,7 +199,6 @@ def display_results(results: List[Dict]):
             min_ms_str,
             max_ms_str,
             std_ms_str,
-            status
         )
     
     console.print(table)
@@ -217,7 +210,6 @@ def display_results(results: List[Dict]):
         rprint(f"\n[bold]Summary:[/bold]")
         rprint(f"  Total functions: {len(results)}")
         rprint(f"  Valid functions: {len(valid_results)}")
-        rprint(f"  Failed functions: {len(results) - len(valid_results)}")
         rprint(f"  Fastest: {valid_results[0]['name']} ({times[0]:.4f} ms)")
         rprint(f"  Slowest: {valid_results[-1]['name']} ({times[-1]:.4f} ms)")
         rprint(f"  Median: {np.median(times):.4f} ms")
