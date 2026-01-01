@@ -1,8 +1,6 @@
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-import time
-from scipy.stats import alpha, percentileofscore
+from scipy.stats import percentileofscore
 from scipy import signal
 from typing import Optional
 
