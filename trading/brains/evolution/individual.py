@@ -8,6 +8,8 @@ from genetics.ast_builder import Builder, IndicatorGene, IndicatorToConstant, In
 from genetics.ast_tools import ast_to_function
 from genetics.gp_tools import get_indicators, paramspecs_to_dict, random_operator
 
+EXCLUDED_INDICATORS = ["hma", "percent_rank", "ichimoku"]
+#either noncausal or expensive
 def generate_individual(
     num_indicators=None, 
     num_logic=None,
@@ -30,7 +32,7 @@ def generate_individual(
         allow_logic_composition: Whether to allow LogicToLogic genes
         logic_composition_prob: Probability of creating a LogicToLogic gene
     """
-    available = get_indicators()
+    available = get_indicators(exclude=EXCLUDED_INDICATORS)
     
     if num_indicators is None:
         num_indicators = random.randint(min_indicators, max_indicators)

@@ -23,6 +23,10 @@ def ema(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Exponential Moving Average"""
     return series.ewm(span=timeperiod, adjust=False).mean()
 
+def vwma(series: pd.Series, volume: pd.Series, timeperiod: int = 20) -> pd.Series:
+    """Volume Weighted Moving Average"""
+    return (series * volume).rolling(window=timeperiod).sum() / volume.rolling(window=timeperiod).sum()
+
 def rsi(series: pd.Series, timeperiod: int = 14) -> pd.Series:
     """Relative Strength Index"""
     delta = series.diff()
@@ -478,11 +482,8 @@ def donchian_channel(high: pd.Series, low: pd.Series, timeperiod: int = 20) -> t
 
 def price_cycle(close: pd.Series, cycle_period: int = 20) -> pd.Series:
     """Price Cycle Oscillator"""
-    # Apply bandpass filter to isolate cyclical component
-    # Parameters tuned to the given cycle period
     b, a = signal.butter(2, [0.5/cycle_period, 2.0/cycle_period], 'bandpass')
-    
-    # Apply causal filter (lfilter) - only uses past and current data
+
     close_filled = close.ffill().bfill().values
     cycle = signal.lfilter(b, a, close_filled)
     
@@ -665,19 +666,14 @@ def wma(series: pd.Series, timeperiod: int = 20) -> pd.Series:
 
 def ichimoku(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
     """Ichimoku Cloud"""
-    # Tenkan-sen (Conversion Line): (highest high + lowest low) / 2 for the past tenkan_period
     tenkan_sen = (high.rolling(window=tenkan_period).max() + low.rolling(window=tenkan_period).min()) / 2
     
-    # Kijun-sen (Base Line): (highest high + lowest low) / 2 for the past kijun_period
     kijun_sen = (high.rolling(window=kijun_period).max() + low.rolling(window=kijun_period).min()) / 2
     
-    # Senkou Span A (Leading Span A): (Tenkan-sen + Kijun-sen) / 2, shifted forward by kijun_period
     senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(kijun_period)
     
-    # Senkou Span B (Leading Span B): (highest high + lowest low) / 2 for the past senkou_period, shifted forward by kijun_period
     senkou_span_b = ((high.rolling(window=senkou_period).max() + low.rolling(window=senkou_period).min()) / 2).shift(kijun_period)
     
-    # Chikou Span (Lagging Span): Current price, shifted backward by chikou_period
     chikou_span = close.shift(-chikou_period)
     
     return tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b, chikou_span

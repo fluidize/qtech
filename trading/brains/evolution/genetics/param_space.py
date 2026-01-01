@@ -24,6 +24,13 @@ registered_param_specs = {
         parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
         return_count=1
     ),
+    "vwma": FunctionSpec(
+        function_name="vwma",
+        parameters=[
+            ParamSpec(parameter_name="timeperiod", search_space=(2, 200)),
+        ],
+        return_count=1
+    ),
     "rsi": FunctionSpec(
         function_name="rsi",
         parameters=[ParamSpec(parameter_name="timeperiod", search_space=(2, 200))],
@@ -32,18 +39,18 @@ registered_param_specs = {
     "macd": FunctionSpec(
         function_name="macd",
         parameters=[
-            ParamSpec(parameter_name="fastperiod", search_space=(2, 100)),
+            ParamSpec(parameter_name="fastperiod", search_space=(2, 200)),
             ParamSpec(parameter_name="slowperiod", search_space=(2, 200)),
-            ParamSpec(parameter_name="signalperiod", search_space=(2, 50))
+            ParamSpec(parameter_name="signalperiod", search_space=(2, 200))
         ],
         return_count=3
     ),
     "macd_dema": FunctionSpec(
         function_name="macd_dema",
         parameters=[
-            ParamSpec(parameter_name="fastperiod", search_space=(2, 100)),
+            ParamSpec(parameter_name="fastperiod", search_space=(2, 200)),
             ParamSpec(parameter_name="slowperiod", search_space=(2, 200)),
-            ParamSpec(parameter_name="signalperiod", search_space=(2, 50))
+            ParamSpec(parameter_name="signalperiod", search_space=(2, 200))
         ],
         return_count=3
     ),
@@ -59,9 +66,9 @@ registered_param_specs = {
     "stoch": FunctionSpec(
         function_name="stoch",
         parameters=[
-            ParamSpec(parameter_name="fastk_period", search_space=(2, 50)),
-            ParamSpec(parameter_name="slowk_period", search_space=(2, 20)),
-            ParamSpec(parameter_name="slowd_period", search_space=(2, 20))
+            ParamSpec(parameter_name="fastk_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="slowk_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="slowd_period", search_space=(2, 200))
         ],
         return_count=2
     ),
@@ -108,7 +115,7 @@ registered_param_specs = {
     "awesome_oscillator": FunctionSpec(
         function_name="awesome_oscillator",
         parameters=[
-            ParamSpec(parameter_name="fast_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="fast_period", search_space=(2, 200)),
             ParamSpec(parameter_name="slow_period", search_space=(2, 200))
         ],
         return_count=1
@@ -148,14 +155,14 @@ registered_param_specs = {
         function_name="mass_index",
         parameters=[
             ParamSpec(parameter_name="timeperiod", search_space=(2, 200)),
-            ParamSpec(parameter_name="ema_period", search_space=(2, 50))
+            ParamSpec(parameter_name="ema_period", search_space=(2, 200))
         ],
         return_count=1
     ),
     "volume_zone_oscillator": FunctionSpec(
         function_name="volume_zone_oscillator",
         parameters=[
-            ParamSpec(parameter_name="short_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="short_period", search_space=(2, 200)),
             ParamSpec(parameter_name="long_period", search_space=(2, 200))
         ],
         return_count=1
@@ -190,7 +197,7 @@ registered_param_specs = {
     ),
     "price_cycle": FunctionSpec(
         function_name="price_cycle",
-        parameters=[ParamSpec(parameter_name="cycle_period", search_space=(5, 100))],
+        parameters=[ParamSpec(parameter_name="cycle_period", search_space=(2, 200))],
         return_count=1
     ),
     "stddev": FunctionSpec(
@@ -221,9 +228,9 @@ registered_param_specs = {
     "kama": FunctionSpec(
         function_name="kama",
         parameters=[
-            ParamSpec(parameter_name="er_period", search_space=(2, 50)),
-            ParamSpec(parameter_name="fast_period", search_space=(2, 10)),
-            ParamSpec(parameter_name="slow_period", search_space=(10, 100))
+            ParamSpec(parameter_name="er_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="fast_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="slow_period", search_space=(2, 200))
         ],
         return_count=1
     ),
@@ -238,9 +245,9 @@ registered_param_specs = {
     "tsi": FunctionSpec(
         function_name="tsi",
         parameters=[
-            ParamSpec(parameter_name="long_period", search_space=(5, 100)),
-            ParamSpec(parameter_name="short_period", search_space=(2, 50)),
-            ParamSpec(parameter_name="signal_period", search_space=(2, 50))
+            ParamSpec(parameter_name="long_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="short_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="signal_period", search_space=(2, 200))
         ],
         return_count=2
     ),
@@ -262,26 +269,26 @@ registered_param_specs = {
     "ichimoku": FunctionSpec(
         function_name="ichimoku",
         parameters=[
-            ParamSpec(parameter_name="tenkan_period", search_space=(2, 50)),
-            ParamSpec(parameter_name="kijun_period", search_space=(2, 100)),
-            ParamSpec(parameter_name="senkou_period", search_space=(10, 200)),
-            ParamSpec(parameter_name="chikou_period", search_space=(2, 100))
+            ParamSpec(parameter_name="tenkan_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="kijun_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="senkou_period", search_space=(2, 200)),
+            ParamSpec(parameter_name="chikou_period", search_space=(2, 200))
         ],
         return_count=5
     ),
     "ppo": FunctionSpec(
         function_name="ppo",
         parameters=[
-            ParamSpec(parameter_name="fast_period", search_space=(2, 100)),
+            ParamSpec(parameter_name="fast_period", search_space=(2, 200)),
             ParamSpec(parameter_name="slow_period", search_space=(2, 200)),
-            ParamSpec(parameter_name="signal_period", search_space=(2, 50))
+            ParamSpec(parameter_name="signal_period", search_space=(2, 200))
         ],
         return_count=3
     ),
     "aobv": FunctionSpec(
         function_name="aobv",
         parameters=[
-            ParamSpec(parameter_name="fast_period", search_space=(2, 50)),
+            ParamSpec(parameter_name="fast_period", search_space=(2, 200)),
             ParamSpec(parameter_name="slow_period", search_space=(2, 200))
         ],
         return_count=2

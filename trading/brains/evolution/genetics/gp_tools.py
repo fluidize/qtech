@@ -6,7 +6,7 @@ import sys
 sys.path.append("")
 import trading.technical_analysis as ta
 
-def get_indicators(exclude: list[str] = ["hma", "percent_rank"]):
+def get_indicators(exclude: list[str] = ["hma", "percent_rank", "ichimoku"]):
     """ Get indicator functions from ta module """
     exclude_set = set(exclude)
     indicators = []
