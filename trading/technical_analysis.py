@@ -480,7 +480,12 @@ def donchian_channel(high: pd.Series, low: pd.Series, timeperiod: int = 20) -> t
 
 def price_cycle(close: pd.Series, cycle_period: int = 20) -> pd.Series:
     """Price Cycle Oscillator"""
-    b, a = signal.butter(2, [0.5/cycle_period, 2.0/cycle_period], 'bandpass')
+    # Normalize frequencies to [0, 1] range (1 = Nyquist frequency)
+    # Clamp frequencies to valid range
+    low_freq = max(0.01, min(0.49, 0.5 / cycle_period))
+    high_freq = max(low_freq + 0.01, min(0.99, 2.0 / cycle_period))
+    
+    b, a = signal.butter(2, [low_freq, high_freq], 'bandpass')
 
     close_filled = close.ffill().bfill().values
     cycle = signal.lfilter(b, a, close_filled)
