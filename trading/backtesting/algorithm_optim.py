@@ -600,14 +600,16 @@ class QuantitativeScreener:
     
     def get_best_metrics(self):
         best = self.get_best()
-        self.engine.fetch_data(
-            symbol=best["symbol"],
-            interval=best["interval"],
-            days=self.days,
-            age_days=self.age_days,
-            data_source=self.data_source,
-            cache_expiry_hours=self.cache_expiry_hours
-        )
+        if (self.engine.symbol != best["symbol"] or 
+            self.engine.interval != best["interval"]):
+            self.engine.fetch_data(
+                symbol=best["symbol"],
+                interval=best["interval"],
+                days=self.days,
+                age_days=self.age_days,
+                data_source=self.data_source,
+                cache_expiry_hours=self.cache_expiry_hours
+            )
         self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
 
         return self.engine.get_performance_metrics()
@@ -619,14 +621,16 @@ class QuantitativeScreener:
     def plot_best_performance(self, mode: str = "basic"):
         """Plot the performance of the best parameter combination."""
         best = self.get_best()
-        self.engine.fetch_data(
-            symbol=best["symbol"],
-            interval=best["interval"],
-            days=self.days,
-            age_days=self.age_days,
-            data_source=self.data_source,
-            cache_expiry_hours=self.cache_expiry_hours
-        )
+        if (self.engine.symbol != best["symbol"] or 
+            self.engine.interval != best["interval"]):
+            self.engine.fetch_data(
+                symbol=best["symbol"],
+                interval=best["interval"],
+                days=self.days,
+                age_days=self.age_days,
+                data_source=self.data_source,
+                cache_expiry_hours=self.cache_expiry_hours
+            )
         self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
         return self.engine.plot_performance(mode=mode)
     
