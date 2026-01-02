@@ -1,6 +1,7 @@
 import pandas as pd
 import ast
 import inspect
+import copy
 
 from .param_space import registered_param_specs, ParamSpec
 from .ast_tools import unique_counter, make_compare, ast_to_function
@@ -258,7 +259,7 @@ class SignalGene():
                 slice=ast.Name(id=self.long_logic_variable_name, ctx=ast.Load()), 
                 ctx=ast.Store()
             )],
-            value=ast.Constant(value=3)
+            value=ast.Constant(value=1)
         )
         sell_conditions_assign = ast.Assign(
             targets=[ast.Subscript(
@@ -266,7 +267,7 @@ class SignalGene():
                 slice=ast.Name(id=self.short_logic_variable_name, ctx=ast.Load()), 
                 ctx=ast.Store()
             )],
-            value=ast.Constant(value=2)
+            value=ast.Constant(value=0)
         )
         return [buy_conditions_assign, sell_conditions_assign]
 
@@ -354,6 +355,9 @@ class Genome:
         func_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[]) #default func name is strategy
 
         return func_ast, algorithm_parameter_specs
+
+    def clone(self):
+        return Genome(indicator_genes=copy.deepcopy(self.indicator_genes), logic_genes=copy.deepcopy(self.logic_genes), signal_genes=copy.deepcopy(self.signal_genes))
 
     def get_genes(self):
         return self.indicator_genes, self.logic_genes, self.signal_genes
