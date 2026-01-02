@@ -224,11 +224,15 @@ class VectorizedBacktesting:
 
         summary = self.get_performance_metrics()
         if mode == "basic":
-            plt.plot(self.data['Datetime'], self.data['Portfolio_Value'], color='orange')
-            plt.plot(self.data['Datetime'], self.initial_capital * (1 + self.data['Open_Return']).cumprod(), color='blue')
+            fig, ax = plt.subplots(2, 1)
+            ax[0].plot(self.data['Datetime'], self.data['Portfolio_Value'], color='orange')
+            ax[0].plot(self.data['Datetime'], self.initial_capital * (1 + self.data['Open_Return']).cumprod(), color='blue')
+            ax[0].legend(["Strategy Portfolio", "Buy & Hold"])
+
+            ax[1].plot(self.data['Datetime'], self.data['Position'], color='green')
+            ax[1].legend(["Position"])
 
             plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
-            plt.legend(["Strategy Portfolio", "Buy & Hold", "Active Return"])
             plt.show()
 
         elif mode == "standard":
@@ -300,10 +304,10 @@ class VectorizedBacktesting:
                     if (current_pos == 0) and (position_changes.iloc[i] != 0):
                         flats.append(self.data['Datetime'].iloc[i])
                         flat_prices.append(price_at_execution)
-                    elif position_changes.iloc[i] > 0: #adding long side
+                    elif position_changes.iloc[i] > 0:
                         long_entries.append(self.data['Datetime'].iloc[i])
                         long_entry_prices.append(price_at_execution)
-                    elif position_changes.iloc[i] < 0: #adding short side
+                    elif position_changes.iloc[i] < 0:
                         short_entries.append(self.data['Datetime'].iloc[i])
                         short_entry_prices.append(price_at_execution)
             if long_entries:
@@ -312,7 +316,7 @@ class VectorizedBacktesting:
                         x=long_entries,
                         y=long_entry_prices,
                         mode='markers',
-                        name='Long Entry',
+                        name='Add Long',
                         marker=dict(color="#26FF00", size=8, symbol='triangle-up'),
                         yaxis='y'
                     )
@@ -323,7 +327,7 @@ class VectorizedBacktesting:
                         x=short_entries,
                         y=short_entry_prices,
                         mode='markers',
-                        name='Short Entry',
+                        name='Add Short',
                         marker=dict(color='#ff073a', size=8, symbol='triangle-down'),
                         yaxis='y'
                     )
@@ -753,16 +757,3 @@ class MultiAssetBacktesting:
         plt.ylabel("Portfolio Value")
         plt.plot(self.weighted_portfolio_value)
         plt.show()
-
-if __name__ == "__main__":
-    vb = VectorizedBacktesting(
-        instance_name="test",
-        initial_capital=10000.0,
-        slippage_pct=0.001,
-        commission_fixed=1.0,
-        leverage=1.0
-    )
-    vb.fetch_data(symbol="SOL-USDT", days=365, interval="1h", age_days=0, data_source="binance", cache_expiry_hours=720, verbose=True)
-    vb.run_strategy(strategy_func=lambda data: (pd.Series(0, index=data.index), (data["Close"], True)), verbose=True)
-    print(vb.get_performance_metrics(accelerate=True))
-    vb.plot_performance(mode="standard")
