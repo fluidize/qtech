@@ -134,10 +134,10 @@ class VectorizedBacktesting:
         start_time = time.time()
 
         self.strategy_output = strategy_func(self.data, **kwargs)
-        if isinstance(self.strategy_output, tuple):
-            raw_signals = self.strategy_output[0]
-        else:
-            raw_signals = self.strategy_output
+        raw_signals = self.strategy_output[0] if isinstance(self.strategy_output, tuple) else self.strategy_output
+        if (sum(raw_signals > 1) > 0) or (sum(raw_signals < -1) > 0):
+            print(f"[orange1]Warning: Signals must be between [-1,1]")
+            raw_signals = np.clip(raw_signals, -1, 1) #clip signals to [-1,1]
         
         self.data['Open_Return'] = self.data['Open'].pct_change().shift(-1)
         
@@ -145,7 +145,6 @@ class VectorizedBacktesting:
         self.data['Position'] = self.data['Signal_Position'].shift(1).fillna(0).astype(float) #delay
 
         base_strategy_returns = self.data['Position'] * self.leverage * self.data['Open_Return']
-
         self.data['Strategy_Returns'] = self._apply_trading_costs(
             base_strategy_returns=base_strategy_returns, positions=self.data['Position']
         )
@@ -172,7 +171,6 @@ class VectorizedBacktesting:
             raise ValueError("No strategy results available. Run a strategy first.")
 
         position = self.data['Position']
-        open_prices = self.data['Open']
         strategy_returns = self.data['Strategy_Returns'].dropna()
         portfolio_value = self.data['Portfolio_Value'].dropna()
         
