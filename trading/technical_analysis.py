@@ -81,10 +81,24 @@ def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     return obv
 
 def cci(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 20) -> pd.Series:
-    """Commodity Channel Index"""
+    """Commodity Channel Index - fully vectorized to avoid access violations"""
     tp = (high + low + close) / 3
     sma = tp.rolling(window=timeperiod).mean()
-    mad = tp.rolling(window=timeperiod).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
+    
+    tp_values = np.asarray(tp.values, dtype=np.float64)
+    n = len(tp_values)
+
+    from numpy.lib.stride_tricks import sliding_window_view
+    windows = sliding_window_view(tp_values, window_shape=timeperiod)
+
+    window_means = np.mean(windows, axis=1)
+    abs_deviations = np.abs(windows - window_means[:, np.newaxis])
+    mad_windowed = np.mean(abs_deviations, axis=1)
+    
+    mad_values = np.full(n, np.nan, dtype=np.float64)
+    mad_values[timeperiod - 1:] = mad_windowed
+    mad = pd.Series(mad_values, index=tp.index)
+    
     return (tp - sma) / (0.015 * mad)
 
 def adx(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -651,17 +665,20 @@ def hma(series: pd.Series, timeperiod: int = 16) -> pd.Series:
 
 def wma(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Weighted Moving Average"""
-    weights = np.arange(1, timeperiod + 1)
-    sum_weights = weights.sum()
-    
-    series_values = series.values
+    series_values = np.asarray(series.values, dtype=np.float64)
     n = len(series_values)
+
+    weights = np.arange(1, timeperiod + 1, dtype=np.float64)
+    sum_weights = np.sum(weights)
+    
+    from numpy.lib.stride_tricks import sliding_window_view
+    windows = sliding_window_view(series_values, window_shape=timeperiod)
+    
+    weighted_sums = np.sum(windows * weights, axis=1)
+    wma_values = weighted_sums / sum_weights
     
     result_values = np.full(n, np.nan, dtype=np.float64)
-    
-    for i in range(timeperiod - 1, n):
-        window_vals = series_values[i - timeperiod + 1:i + 1]
-        result_values[i] = np.sum(window_vals * weights) / sum_weights
+    result_values[timeperiod - 1:] = wma_values
     
     return pd.Series(result_values, index=series.index)
 
