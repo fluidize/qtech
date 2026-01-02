@@ -3,12 +3,8 @@ import numpy as np
 import pandas as pd
 from rich import print
 
-import sys
-sys.path.append("")
-sys.path.append("trading/backtesting")
-
 import trading.model_tools as mt
-import vb_metrics as metrics
+import trading.backtesting.vb_metrics as metrics
 
 class VectorizedBacktesting:
     def __init__(
@@ -411,207 +407,93 @@ class VectorizedBacktesting:
             
             fig.update_yaxes(title_text="Price ($)")
             fig.update_yaxes(title_text="Portfolio Value ($)")
-        elif mode == "extended":
-            start = time.time()
-            fig = go.Figure().set_subplots(
-                rows=4, cols=2,
-                subplot_titles=(
-                    f"Equity Curve | TR: {summary['Total_Return']*100:.3f}% | α: {summary['Alpha']*100:.3f}% | β: {summary['Beta']:.3f}", "Drawdown Curve",
-                    "Profit and Loss Distribution (%)", "Average Profit per Trade (%)",
-                    f"Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f}",
-                    "Position Distribution", "Cumulative PnL by Trade"
-                ),
-                specs=[
-                    [{"type": "scatter"}, {"type": "scatter"}],
-                    [{"type": "histogram"}, {"type": "scatter"}],
-                    [{"type": "scatter"}, {"type": "scatter"}],
-                    [{"type": "histogram"}, {"type": "scatter"}]
-                ],
-                vertical_spacing=0.1,
-                horizontal_spacing=0.1
-            )
-
-            # 1. Equity Curve
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data.index,
-                    y=self.data['Portfolio_Value'],
-                    mode='lines',
-                    name='Strategy Portfolio Value'
-                ),
-                row=1, col=1
-            )
-            
-            # Calculate buy & hold benchmark for comparison (linear mode)
-            asset_linear_profit = (self.initial_capital * self.data['Open_Return']).cumsum()
-            asset_value = self.initial_capital + asset_linear_profit
-
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data.index,
-                    y=asset_value,
-                    mode='lines',
-                    name='Buy & Hold (Linear)',
-                    line=dict(dash='dash')
-                ),
-                row=1, col=1
-            )
-
-            # 2. Drawdown Curve
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data.index,
-                    y=self.data['Drawdown'] * 100,
-                    mode='lines',
-                    name='Drawdown',
-                    line=dict(color='red')
-                ),
-                row=1, col=2
-            )
-
-            # 3. Profit and Loss Distribution - use VB metrics for trade PnL calculation
-            pnl_list = metrics.get_trade_pnls(self.data['Position'], self.data['Open'])
-            # Convert PnL to percentage of portfolio value at time of trade
-            initial_value = self.initial_capital
-            pnl_pct_list = [(pnl / initial_value) * 100 for pnl in pnl_list]
-            
-            fig.add_trace(
-                go.Histogram(
-                    x=pnl_pct_list,
-                    name='Trade Returns (%)',
-                    nbinsx=50
-                ),
-                row=2, col=1
-            )
-
-            # 4. Average Profit per Trade - use strategy returns
-            pnl_arr = np.array(pnl_pct_list)  # Already in percentage
-            cumulative_pnl = np.cumsum(pnl_arr) if len(pnl_arr) else np.array([0])
-            trade_numbers = np.arange(1, len(pnl_arr) + 1) if len(pnl_arr) else np.array([1])
-            avg_pnl_per_trade = cumulative_pnl / trade_numbers
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=trade_numbers,
-                    y=avg_pnl_per_trade,
-                    mode='lines',
-                    name='Avg PnL per Trade (%)',
-                ),
-                row=2, col=2
-            )
-
-            if len(pnl_arr):
-                mean_pnl = np.mean(pnl_arr)
-                fig.add_trace(
-                    go.Scatter(
-                        x=[1, len(pnl_arr)],
-                        y=[mean_pnl, mean_pnl],
-                        mode='lines',
-                        name='Mean PnL',
-                        line=dict(dash='dash', color='red')
-                    ),
-                    row=2, col=2
-                )
-
-            # 5. Win Rate Over Time
-            if len(pnl_arr):
-                cumulative_wins = np.cumsum(pnl_arr > 0)
-                win_rates = cumulative_wins / trade_numbers * 100
-                fig.add_trace(
-                    go.Scatter(
-                        x=trade_numbers,
-                        y=win_rates,
-                        mode='lines',
-                        name='Win Rate (%)'
-                    ),
-                    row=3, col=1
-                )
-
-            # 6. Sharpe Ratio Over Time (per-period, not annualized)
-            rolling_returns = self.data['Strategy_Returns'].rolling(window=30)
-            rolling_sharpe = rolling_returns.mean() / rolling_returns.std()
-            
-            fig.add_trace(
-                go.Scatter(
-                    x=self.data.index,
-                    y=rolling_sharpe,
-                    mode='lines',
-                    name='Rolling Sharpe (Per-Period)'
-                ),
-                row=3, col=2
-            )
-            
-            if not rolling_sharpe.isna().all():
-                mean_sharpe = rolling_sharpe.mean()
-                fig.add_trace(
-                    go.Scatter(
-                        x=[self.data.index[0], self.data.index[-1]],
-                        y=[mean_sharpe, mean_sharpe],
-                        mode='lines',
-                        name='Mean Sharpe',
-                        line=dict(dash='dash', color='red')
-                    ),
-                    row=3, col=2
-                )
-
-            # 7. Position Distribution - show actual position states
-            position_counts = self.data['Position'].value_counts().sort_index()
-            position_labels = {0: 'Hold', 1: 'Short', 2: 'Flat', 3: 'Long'}
-            
-            fig.add_trace(
-                go.Histogram(
-                    x=[position_labels.get(pos, f'Unknown({pos})') for pos in self.data['Position']],
-                    name='Position States'
-                ),
-                row=4, col=1
-            )
-
-            # 8. Cumulative PnL by Trade
-            if pnl_pct_list:
-                fig.add_trace(
-                    go.Scatter(
-                        x=trade_numbers,
-                        y=cumulative_pnl,
-                        mode='lines+markers',
-                        name='Cumulative PnL (%)',
-                        marker=dict(size=4)
-                    ),
-                    row=4, col=2
-                )
-
-            # Update layout
-            fig.update_layout(
-                title_text=f"{self.symbol} {self.interval} Performance Analysis (Linear Returns)",
-                showlegend=True,
-                template="plotly_dark"
-            )
-
-            # Update y-axis labels
-            fig.update_yaxes(title_text="Portfolio Value", row=1, col=1)
-            fig.update_yaxes(title_text="Drawdown (%)", row=1, col=2)
-            fig.update_yaxes(title_text="Frequency", row=2, col=1)
-            fig.update_yaxes(title_text="Avg PnL per Trade (%)", row=2, col=2)
-            fig.update_yaxes(title_text="Win Rate (%)", row=3, col=1)
-            fig.update_yaxes(title_text="Sharpe Ratio", row=3, col=2)
-            fig.update_yaxes(title_text="Frequency", row=4, col=1)
-            fig.update_yaxes(title_text="Cumulative PnL (%)", row=4, col=2)
-            
-            # Update x-axis labels
-            fig.update_xaxes(title_text="Time", row=1, col=1)
-            fig.update_xaxes(title_text="Time", row=1, col=2)
-            fig.update_xaxes(title_text="PnL (%)", row=2, col=1)
-            fig.update_xaxes(title_text="Trade Number", row=2, col=2)
-            fig.update_xaxes(title_text="Trade Number", row=3, col=1)
-            fig.update_xaxes(title_text="Time", row=3, col=2)
-            fig.update_xaxes(title_text="Position State", row=4, col=1)
-            fig.update_xaxes(title_text="Trade Number", row=4, col=2)
-
-            end = time.time()
-            print(f"[green]Advanced Plotting Done ({end - start:.2f} seconds)[/green]")
-        
-        if mode == "standard" or mode == "extended":
             fig.show()
 
+        elif mode == "tradingview":
+            import pandas as pd
+            from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
+
+            from lightweight_charts.widgets import QtChart
+
+            app = QApplication([])
+            window = QMainWindow()
+            layout = QVBoxLayout()
+            widget = QWidget()
+            widget.setLayout(layout)
+
+            window.resize(1920, 1080)
+            layout.setContentsMargins(0, 0, 0, 0)
+
+            chart = QtChart(widget)
+
+            # Prepare candlestick data
+            df = self.data.rename(columns={'Datetime': 'time', 'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}).drop(columns=['HL2', 'OHLC4', 'HLC3'], errors='ignore')
+            chart.set(df)
+            portfolio_line = chart.create_line(name="Portfolio Value")
+            portfolio_line.set(pd.DataFrame({
+                'time': self.data['Datetime'],
+                'Portfolio Value': self.data['Portfolio_Value']
+            }))
+            hodl_line = chart.create_line(name="Buy & Hold")
+            hodl_line.set(pd.DataFrame({
+                'time': self.data['Datetime'],
+                'Buy & Hold': self.initial_capital * (1 + self.data['Open_Return'].fillna(0)).cumprod()
+            }))
+
+            if isinstance(self.strategy_output, tuple):
+                for output_idx in range(1, len(self.strategy_output)):
+                    indicator_data = self.strategy_output[output_idx][0]
+                    use_price_scale = self.strategy_output[output_idx][1]
+                    
+                    indicator_df = pd.DataFrame({
+                        'time': self.data['Datetime'],
+                        'value': indicator_data
+                    })
+                    
+                    if use_price_scale:
+                        # Add to main price pane
+                        indicator_line = chart.add_line_series(name=f'Indicator {output_idx}', color='yellow', width=1)
+                        indicator_line.set(indicator_df.to_dict('records'))
+                    else:
+                        # Add to separate pane (volume pane can be used or create new)
+                        # For now, add to main pane with different color
+                        indicator_line = chart.add_line_series(name=f'Indicator {output_idx}', color='cyan', width=1)
+                        indicator_line.set(indicator_df.to_dict('records'))
+
+            # Add entry/exit markers
+            position_changes = self.data['Position'].diff()
+            markers = []
+            
+            for i in range(1, len(self.data)):
+                if position_changes.iloc[i] != 0 and not pd.isna(position_changes.iloc[i]):
+                    current_pos = self.data['Position'].iloc[i]
+                    timestamp = self.data['Datetime'].iloc[i]
+
+                    if (current_pos == 0) and (position_changes.iloc[i] != 0):
+                        markers.append({'time': timestamp, 'position': 'belowBar', 'color': 'yellow', 'shape': 'circle', 'text': 'Exit'})
+                    elif position_changes.iloc[i] > 0:
+                        markers.append({'time': timestamp, 'position': 'belowBar', 'color': '#26FF00', 'shape': 'arrowUp', 'text': 'Long'})
+                    elif position_changes.iloc[i] < 0:
+                        markers.append({'time': timestamp, 'position': 'aboveBar', 'color': '#ff073a', 'shape': 'arrowDown', 'text': 'Short'})
+            
+            # Add markers to chart
+            # if markers:
+            #     chart.marker(markers)
+
+            # Set title with performance metrics
+            title_text = f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}'
+            try:
+                chart.topbar.textbox('title', title_text)
+            except:
+                # If topbar API doesn't work, set window title instead
+                window.setWindowTitle(title_text)
+
+            layout.addWidget(chart.get_webview())
+
+            window.setCentralWidget(widget)
+            window.show()
+
+            app.exec_()
     def get_cost_summary(self) -> dict:
         """Get a summary of trading costs impact."""
         if self.data is None or 'Position' not in self.data.columns:
