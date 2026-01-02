@@ -2,24 +2,10 @@ import numpy as np
 import pandas as pd
 from typing import List
 
-def stateful_position_to_multiplier(position: pd.Series) -> pd.Series:
-    """Convert stateful position to multiplier."""
-    
-    position_multiplier = position.copy().astype(float)
-    position_multiplier[position == 1] = -1
-    position_multiplier[position == 2] = 0
-    position_multiplier[position == 3] = 1
-    position_multiplier[position == 0] = np.nan
-    
-    position_multiplier = position_multiplier.ffill().fillna(0)
-    
-    return position_multiplier
-
 def get_returns(position: pd.Series, open_prices: pd.Series) -> pd.Series:
     """Calculate strategy returns from position and open prices."""
     returns = open_prices.pct_change()
-    position_multiplier = stateful_position_to_multiplier(position)
-    result = position_multiplier.shift(1) * returns
+    result = position.shift(1) * returns
     return result
 
 def get_cumulative_returns(position: pd.Series, open_prices: pd.Series) -> pd.Series:
@@ -185,8 +171,8 @@ def get_trade_pnls(position: pd.Series, open_prices: pd.Series) -> List[float]:
     # Identify entries and exits
     prev_pos = position.shift(1)
 
-    entries = (position == 3) & (prev_pos != 3)
-    exits   = (position != 3) & (prev_pos == 3)
+    entries = (position != 0) & (prev_pos == 0)
+    exits   = (position == 0) & (prev_pos != 0)
 
     entry_prices = open_prices[entries].values
     exit_prices  = open_prices[exits].values

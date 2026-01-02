@@ -90,40 +90,31 @@ class VectorizedBacktesting:
                     print(f"[yellow]Warning: {large_gaps.sum()} large time gaps detected[/yellow]")
 
     def _apply_trading_costs(self, base_strategy_returns: pd.Series, positions: pd.Series) -> pd.Series:
-        """Apply slippage and fixed commission based on actual trade notional value (already leveraged)."""
+        """
+        Apply slippage and fixed commission based on continuous position changes.
+        
+        positions: float series in [-1,1], representing exposure
+        """
         if self.slippage_pct == 0 and self.commission_fixed == 0:
             return base_strategy_returns
 
-        notional_trade_capital = self.initial_capital * self.leverage #fixed trade size
-
-        pos_change = positions.diff().fillna(0) != 0
+        delta_pos = positions.diff().fillna(positions.iloc[0]).abs()  # first bar: full entry
 
         slippage_cost_pct = self.slippage_pct / 100
-        commission_cost_pct = self.commission_fixed / notional_trade_capital
-        cost_per_trade = slippage_cost_pct + commission_cost_pct
+        commission_cost_pct = self.commission_fixed / self.initial_capital  # already scaled
 
-        prev_pos = positions.shift(1)
-        curr_pos = positions
+        cost_per_unit = slippage_cost_pct + commission_cost_pct
 
-        total_cost_pct = np.where(
-            pos_change & ((prev_pos == 2) | (curr_pos == 2)),
-            cost_per_trade,
-            np.where(pos_change, 2 * cost_per_trade, 0)
-        )
+        total_cost_pct = delta_pos * cost_per_unit
 
-        return base_strategy_returns - total_cost_pct
+        net_returns = base_strategy_returns - total_cost_pct
+
+        return net_returns
 
     def _set_n_days(self):
         oldest = self.data['Datetime'].iloc[0]
         newest = self.data['Datetime'].iloc[-1]
         self.n_days = (newest - oldest).days
-
-    def _signals_to_stateful_position(self, signals: pd.Series) -> pd.Series:
-        """Convert raw signals to a stateful position series (0=hold, 1=short, 2=flat, 3=long)."""
-        position = signals.copy()
-        position[signals == 0] = np.nan
-        position = position.ffill().fillna(2).astype(int) #forward fill hold signals, default to flat at start
-        return position
 
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
         """
@@ -147,15 +138,13 @@ class VectorizedBacktesting:
             raw_signals = self.strategy_output[0]
         else:
             raw_signals = self.strategy_output
-        position = self._signals_to_stateful_position(raw_signals)
         
         self.data['Open_Return'] = self.data['Open'].pct_change().shift(-1)
         
-        self.data['Signal_Position'] = position
-        self.data['Position'] = position.shift(1).fillna(2).astype(int)
+        self.data['Signal_Position'] = raw_signals.ffill().fillna(0).astype(float) #forward fill hold signals, default to flat at start
+        self.data['Position'] = self.data['Signal_Position'].shift(1).fillna(0).astype(float) #delay
 
-        position_multiplier = metrics.stateful_position_to_multiplier(self.data['Position'])
-        base_strategy_returns = position_multiplier * self.leverage * self.data['Open_Return']
+        base_strategy_returns = self.data['Position'] * self.leverage * self.data['Open_Return']
 
         self.data['Strategy_Returns'] = self._apply_trading_costs(
             base_strategy_returns=base_strategy_returns, positions=self.data['Position']
@@ -205,11 +194,6 @@ class VectorizedBacktesting:
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
-        
-        win_rate = metrics.get_win_rate(position, open_prices)
-        rr_ratio = metrics.get_rr_ratio(position, open_prices)
-        breakeven_rate = metrics.get_breakeven_rate(position, open_prices)
-        profit_factor = metrics.get_profit_factor(position, open_prices)
 
         return {
             'Total_Return': total_return,
@@ -221,10 +205,6 @@ class VectorizedBacktesting:
             'Sharpe_T_Stat': sharpe_t_stat,
             'Sortino_Ratio': sortino_ratio,
             'Information_Ratio': info_ratio,
-            'Win_Rate': win_rate,
-            'Breakeven_Rate': breakeven_rate,
-            'RR_Ratio': rr_ratio,
-            'Profit_Factor': profit_factor,
             'Total_Trades': metrics.get_total_trades(position),
         }
 
@@ -249,7 +229,7 @@ class VectorizedBacktesting:
             plt.plot(self.data['Datetime'], self.data['Portfolio_Value'], color='orange')
             plt.plot(self.data['Datetime'], self.initial_capital * (1 + self.data['Open_Return']).cumprod(), color='blue')
 
-            plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | RR: {summary['RR_Ratio']:.3f} | WR: {summary['Win_Rate']*100:.3f}% | PF: {summary['Profit_Factor']:.3f} | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
+            plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
             plt.legend(["Strategy Portfolio", "Buy & Hold", "Active Return"])
             plt.show()
 
@@ -316,19 +296,18 @@ class VectorizedBacktesting:
             
             for i in range(1, len(self.data)):
                 if position_changes.iloc[i] != 0 and not pd.isna(position_changes.iloc[i]):
-                    prev_pos = self.data['Position'].iloc[i-1]
                     current_pos = self.data['Position'].iloc[i]
                     price_at_execution = self.data['Open'].iloc[i]
-                    
-                    if current_pos == 3 and prev_pos != 3:
-                        long_entries.append(self.data['Datetime'].iloc[i])
-                        long_entry_prices.append(price_at_execution)
-                    elif current_pos == 1 and prev_pos != 1:
-                        short_entries.append(self.data['Datetime'].iloc[i])
-                        short_entry_prices.append(price_at_execution)
-                    elif current_pos == 2 and prev_pos != 2:
+
+                    if (current_pos == 0) and (position_changes.iloc[i] != 0):
                         flats.append(self.data['Datetime'].iloc[i])
                         flat_prices.append(price_at_execution)
+                    elif position_changes.iloc[i] > 0: #adding long side
+                        long_entries.append(self.data['Datetime'].iloc[i])
+                        long_entry_prices.append(price_at_execution)
+                    elif position_changes.iloc[i] < 0: #adding short side
+                        short_entries.append(self.data['Datetime'].iloc[i])
+                        short_entry_prices.append(price_at_execution)
             if long_entries:
                 fig.add_trace(
                     go.Scatter(
@@ -385,7 +364,7 @@ class VectorizedBacktesting:
                             )
                         )
             fig.update_layout(
-                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | RR: {summary["RR_Ratio"]:.3f} | WR: {summary["Win_Rate"]*100:.3f}% | PF: {summary["Profit_Factor"]:.3f} | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
+                title=f'{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary["Total_Return"]*100:.3f}% | Alpha: {summary["Alpha"]*100:.3f}% | Beta: {summary["Beta"]:.3f} | Max DD: {summary["Max_Drawdown"]*100:.3f}% | Sharpe: {summary["Sharpe_Ratio"]:.3f} | Sortino: {summary["Sortino_Ratio"]:.3f} | Trades: {summary["Total_Trades"]}',
                 xaxis=dict(
                     title='Date',
                     rangeslider=dict(visible=False),
@@ -437,7 +416,7 @@ class VectorizedBacktesting:
                 subplot_titles=(
                     f"Equity Curve | TR: {summary['Total_Return']*100:.3f}% | α: {summary['Alpha']*100:.3f}% | β: {summary['Beta']:.3f}", "Drawdown Curve",
                     "Profit and Loss Distribution (%)", "Average Profit per Trade (%)",
-                    f"Win Rate | BE: {summary['Breakeven_Rate']*100:.2f}%", f"Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f}",
+                    f"Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f}",
                     "Position Distribution", "Cumulative PnL by Trade"
                 ),
                 specs=[
