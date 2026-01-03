@@ -26,7 +26,16 @@ def unparsify(ast_node: ast.AST):
 
 def display_ast(ast_node: ast.AST):
     console = Console()
-    console.print(Panel(Syntax(unparsify(ast_node), "python", theme="native")))
+    syntax = Syntax(
+        unparsify(ast_node), 
+        "python", 
+        theme="monokai",
+        word_wrap=True, 
+        line_numbers=True,
+        indent_guides=True,
+        padding=(1, 2)
+    )
+    console.print(Panel(syntax, border_style="cyan"))
 
 def ast_to_function(ast_node: ast.AST) -> callable:
     """Convert AST node to Python function."""
