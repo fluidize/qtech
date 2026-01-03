@@ -16,7 +16,7 @@ class IndicatorGene:
         self.function_spec = registered_param_specs[self.function.__name__]
         self.parameter_specs = self.function_spec.parameters
         self.unique_parameter_specs = []
-        self.variable_names = [f"{self.function.__name__}_{unique_counter()}" for _ in range(self.function_spec.return_count)] #len = return_count
+        self.variable_names = [f"{self.function.__name__}{unique_counter()}" for _ in range(self.function_spec.return_count)] #len = return_count
     
     def _get_keywords(self) -> list[ast.expr]:
         """Get the data arguments to be passed to the indicator function."""
@@ -82,6 +82,14 @@ class IndicatorGene:
                 keywords=[keyword for keyword in self._get_keywords()]
             )
         )
+    
+    def __eq__(self, other):
+        if not isinstance(other, IndicatorGene):
+            return False
+        return self.function.__name__ == other.function.__name__
+    
+    def __hash__(self):
+        return hash(self.function.__name__)
 
 class LogicGene:
     """Creates a variable that stores the result of a logical function."""
@@ -117,7 +125,7 @@ class IndicatorToIndicator(LogicGene):
     
     def get_parameter_specs(self):
         return []
-    
+
     def to_ast(self):
         if self.left_indicator_variable_name is None or self.right_indicator_variable_name is None:
             raise ValueError("Indicators not loaded - call load_indicators() first")
@@ -128,6 +136,16 @@ class IndicatorToIndicator(LogicGene):
             ],
             value=compare_ast
         )
+    
+    def __eq__(self, other):
+        if not isinstance(other, IndicatorToIndicator):
+            return False
+        return (self.left_index == other.left_index and 
+                self.right_index == other.right_index and
+                type(self.operator) == type(other.operator))
+    
+    def __hash__(self):
+        return hash((self.left_index, self.right_index, type(self.operator)))
 
 #i2p
 class IndicatorToPrice(LogicGene):
@@ -148,7 +166,7 @@ class IndicatorToPrice(LogicGene):
     
     def get_parameter_specs(self):
         return []
-    
+
     def to_ast(self):
         if self.left_indicator_variable_name is None:
             raise ValueError("Indicators not loaded - call load_indicators() first")
@@ -163,6 +181,16 @@ class IndicatorToPrice(LogicGene):
             ],
             value=compare_ast
         )
+    
+    def __eq__(self, other):
+        if not isinstance(other, IndicatorToPrice):
+            return False
+        return (self.left_index == other.left_index and
+                self.column_index == other.column_index and
+                type(self.operator) == type(other.operator))
+    
+    def __hash__(self):
+        return hash((self.left_index, self.column_index, type(self.operator)))
 
 #i2c
 class IndicatorToConstant(LogicGene):
@@ -194,6 +222,15 @@ class IndicatorToConstant(LogicGene):
             ],
             value=compare_ast
         )
+    
+    def __eq__(self, other):
+        if not isinstance(other, IndicatorToConstant):
+            return False
+        return (self.left_index == other.left_index and
+                type(self.operator) == type(other.operator))
+    
+    def __hash__(self):
+        return hash((self.left_index, type(self.operator)))
 
 #l2l
 class LogicToLogic(LogicGene):
@@ -222,7 +259,7 @@ class LogicToLogic(LogicGene):
     
     def get_parameter_specs(self):
         return []
-    
+
     def to_ast(self):
         if self.left_logic_variable_name is None or self.right_logic_variable_name is None:
             raise ValueError("Logic genes not loaded - call load_logic() first")
@@ -233,6 +270,16 @@ class LogicToLogic(LogicGene):
             targets=[ast.Name(id=self.variable_name, ctx=ast.Store())],
             value=ast.BinOp(left=left_expr, op=self.operator, right=right_expr)
         )
+    
+    def __eq__(self, other):
+        if not isinstance(other, LogicToLogic):
+            return False
+        return (self.left_logic_index == other.left_logic_index and
+                self.right_logic_index == other.right_logic_index and
+                type(self.operator) == type(other.operator))
+    
+    def __hash__(self):
+        return hash((self.left_logic_index, self.right_logic_index, type(self.operator)))
 
 class SignalGene():
     def __init__(self, long_logic_index: int, short_logic_index: int):
@@ -270,6 +317,15 @@ class SignalGene():
             value=ast.Constant(value=0)
         )
         return [buy_conditions_assign, sell_conditions_assign]
+    
+    def __eq__(self, other):
+        if not isinstance(other, SignalGene):
+            return False
+        return (self.long_logic_index == other.long_logic_index and
+                self.short_logic_index == other.short_logic_index)
+    
+    def __hash__(self):
+        return hash((self.long_logic_index, self.short_logic_index))
 
 class Genome:
     def __init__(self, indicator_genes: list[IndicatorGene], logic_genes: list[LogicGene], signal_genes: list[SignalGene]):
@@ -303,7 +359,10 @@ class Genome:
             if isinstance(gene, LogicToLogic):
                 composite_logic_genes.append(gene)
             else:
-                simple_logic_genes.append(gene)
+                if gene not in simple_logic_genes: #i2p and i2i do not have unique identifiers and can be duplicated
+                    simple_logic_genes.append(gene)
+                else:
+                    self.logic_genes.remove(gene) #remove duplicate to prevent silent stacking
         
         for simple_logic_gene in simple_logic_genes:
             simple_logic_gene.load_indicators(indicator_variable_names)
