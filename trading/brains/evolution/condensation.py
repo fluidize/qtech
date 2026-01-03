@@ -2,7 +2,7 @@ from trading.backtesting.backtesting import VectorizedBacktesting
 from trading.backtesting.algorithm_optim import BayesianOptimizer
 
 from evolution import generate_population
-from genetics.ast_tools import display_ast, ast_to_function, unparsify
+from genetics.gp_tools import display_ast, ast_to_function, unparsify
 
 from tqdm import tqdm
 from rich import print
@@ -17,7 +17,7 @@ vb = VectorizedBacktesting(instance_name="Condensation",
     commission_fixed=0.0,
     leverage=1.0
 )
-vb.fetch_data(symbol="JUP-USDT", days=365, interval="15m", age_days=0, data_source="binance", cache_expiry_hours=48)
+vb.fetch_data(symbol="SOL-USDT", days=365, interval="30m", age_days=0, data_source="binance", cache_expiry_hours=48)
 
 def quickstop_callback(study, trial):
     bad_trials = sum(1 for t in study.trials if t.value is not None and t.value < 0)
@@ -25,7 +25,7 @@ def quickstop_callback(study, trial):
         study.stop()
 
 log = {}
-population = generate_population(size=1000, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=0.5)
+population = generate_population(size=5000, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=0.5)
 
 progress_bar = tqdm(total=len(population), desc="Evaluating population")
 
@@ -34,7 +34,7 @@ for i, individual in enumerate(population):
     bo.optimize(
         strategy_func=individual.get_compiled_function(), 
         param_space=individual.get_param_space(), 
-        metric="Sharpe_Ratio * np.clip(1 + Max_Drawdown, 0, None)",
+        metric="Sharpe_Ratio",
         n_trials=15,
         direction="maximize",
         callbacks=[quickstop_callback],

@@ -4,8 +4,7 @@ import inspect
 import copy
 
 from .param_space import registered_param_specs, ParamSpec
-from .ast_tools import unique_counter, make_compare, ast_to_function
-from .gp_tools import paramspecs_to_dict
+from .gp_tools import unique_counter, make_compare, ast_to_function, paramspecs_to_dict
 
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 
