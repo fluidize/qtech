@@ -1,6 +1,5 @@
 import ast
 import random
-import inspect
 
 from rich.panel import Panel
 from rich.console import Console
