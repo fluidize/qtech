@@ -9,7 +9,6 @@ from .gp_tools import unique_counter, make_compare, ast_to_function, paramspecs_
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 
 class IndicatorGene:
-    """Creates a variable that stores an indicator function."""
     def __init__(self, function: callable):
         self.function = function
         self.function_spec = registered_param_specs[self.function.__name__]
@@ -18,7 +17,6 @@ class IndicatorGene:
         self.variable_names = [f"{self.function.__name__}{unique_counter()}" for _ in range(self.function_spec.return_count)] #len = return_count
     
     def _get_keywords(self) -> list[ast.expr]:
-        """Get the data arguments to be passed to the indicator function."""
         sig = inspect.signature(self.function)
         keywords = []
 
@@ -61,6 +59,10 @@ class IndicatorGene:
     def get_names(self):
         return self.variable_names
     
+    def get_names_flattened(self):
+        for name in self.get_names():
+            yield from name
+    
     def get_parameter_specs(self):
         return self.unique_parameter_specs
 
@@ -91,7 +93,6 @@ class IndicatorGene:
         return hash(self.function.__name__)
 
 class LogicGene:
-    """Creates a variable that stores the result of a logical function."""
     def __init__(self):
         raise NotImplementedError
     
@@ -124,6 +125,20 @@ class IndicatorToIndicator(LogicGene):
     
     def get_parameter_specs(self):
         return []
+
+    def get_referenced_indicator_names(self):
+        if self.left_indicator_variable_name is None or self.right_indicator_variable_name is None:
+            return []
+        return [self.left_indicator_variable_name, self.right_indicator_variable_name]
+    
+    def get_referenced_indicators(self, sequence_dict: dict):
+        return [sequence_dict[name] for name in self.get_referenced_indicator_names() if name in sequence_dict]
+
+    def set_index(self, left_index: int, right_index: int):
+        self.left_index = left_index
+        self.right_index = right_index
+        self.left_indicator_variable_name = None
+        self.right_indicator_variable_name = None
 
     def to_ast(self):
         if self.left_indicator_variable_name is None or self.right_indicator_variable_name is None:
@@ -165,6 +180,18 @@ class IndicatorToPrice(LogicGene):
     
     def get_parameter_specs(self):
         return []
+
+    def get_referenced_indicator_name(self):
+        if self.left_indicator_variable_name is None:
+            return None
+        return self.left_indicator_variable_name
+    
+    def get_referenced_indicator(self, sequence_dict: dict):
+        return sequence_dict[self.get_referenced_indicator_name()]
+
+    def set_index(self, left_index: int):
+        self.left_index = left_index
+        self.left_indicator_variable_name = None
 
     def to_ast(self):
         if self.left_indicator_variable_name is None:
@@ -211,6 +238,19 @@ class IndicatorToConstant(LogicGene):
     def get_parameter_specs(self):
         return self.parameter_specs
 
+    def get_referenced_indicator_name(self):
+        if self.left_indicator_variable_name is None:
+            return None
+        return self.left_indicator_variable_name
+    
+    def get_referenced_indicator(self, sequence_dict: dict):
+        return sequence_dict[self.get_referenced_indicator_name()]
+
+    def set_index(self, left_index: int, right_index: int = None):
+        self.left_index = left_index
+        self.left_indicator_variable_name = None
+        # Note: parameter_specs will be regenerated in load_indicators() if needed
+
     def to_ast(self):
         if self.left_indicator_variable_name is None:
             raise ValueError("Indicators not loaded - call load_indicators() first")
@@ -244,20 +284,27 @@ class LogicToLogic(LogicGene):
     
     def load_logic(self, logic_variable_names: list[str]):
         self.logic_variable_names = logic_variable_names
-        if self.left_logic_index < len(logic_variable_names):
-            self.left_logic_variable_name = logic_variable_names[self.left_logic_index]
-        if self.right_logic_index < len(logic_variable_names):
-            self.right_logic_variable_name = logic_variable_names[self.right_logic_index]
-        if self.variable_name is None:
-            self.variable_name = f"LOGIC_COMPOSITE_{unique_counter()}"
+        self.left_logic_variable_name = self.logic_variable_names[self.left_logic_index]
+        self.right_logic_variable_name = self.logic_variable_names[self.right_logic_index]
+        self.variable_name = f"LOGIC_COMPOSITE_{unique_counter()}" if self.variable_name is None else self.variable_name
     
     def get_name(self):
-        if self.variable_name is None:
-            self.variable_name = f"LOGIC_COMPOSITE_{unique_counter()}"
         return self.variable_name
     
     def get_parameter_specs(self):
         return []
+
+    def get_referenced_logic_names(self):
+        if self.left_logic_variable_name is None or self.right_logic_variable_name is None:
+            return []
+        return [self.left_logic_variable_name, self.right_logic_variable_name]
+    
+    def get_referenced_logic(self, sequence_dict: dict):
+        return [sequence_dict[name] for name in self.get_referenced_logic_names() if name in sequence_dict]
+
+    def set_index(self, left_logic_index: int, right_logic_index: int):
+        self.left_logic_index = left_logic_index
+        self.right_logic_index = right_logic_index
 
     def to_ast(self):
         if self.left_logic_variable_name is None or self.right_logic_variable_name is None:
@@ -289,12 +336,27 @@ class SignalGene():
         self.short_logic_variable_name = None
     
     def load_logic(self, logic_variable_names: list[str]):
+        self.logic_variable_names = logic_variable_names
         self.long_logic_variable_name = logic_variable_names[self.long_logic_index]
         self.short_logic_variable_name = logic_variable_names[self.short_logic_index]
         self.variable_name = f"SIGNAL_{self.long_logic_variable_name}_{self.short_logic_variable_name}" if self.variable_name is None else self.variable_name
     
     def get_name(self):
         return self.variable_name
+
+    def get_referenced_logic_names(self):
+        if self.long_logic_variable_name is None or self.short_logic_variable_name is None:
+            return []
+        return [self.long_logic_variable_name, self.short_logic_variable_name]
+    
+    def get_referenced_logic(self, sequence_dict: dict):
+        return [sequence_dict[name] for name in self.get_referenced_logic_names() if name in sequence_dict]
+
+    def set_index(self, long_logic_index: int, short_logic_index: int):
+        self.long_logic_index = long_logic_index
+        self.short_logic_index = short_logic_index
+        self.long_logic_variable_name = None
+        self.short_logic_variable_name = None
     
     def to_ast(self):
         if self.long_logic_variable_name is None or self.short_logic_variable_name is None:
@@ -413,6 +475,40 @@ class Genome:
         func_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[]) #default func name is strategy
 
         return func_ast, algorithm_parameter_specs
+
+    def remove_unused_genes(self):
+        used_logic_names = [] #work backwards from signalgenes
+        for gene in self.signal_genes:
+            used_logic_names.append(gene.long_logic_variable_name)
+            used_logic_names.append(gene.short_logic_variable_name)
+        for name in used_logic_names: #trace composite logic genes
+            if isinstance(self.sequence_dict[name], LogicToLogic):
+                used_logic_names.append(self.sequence_dict[name].left_logic_variable_name)
+                used_logic_names.append(self.sequence_dict[name].right_logic_variable_name)
+        
+        used_indicator_names = []
+        for name in used_logic_names:
+            if isinstance(self.sequence_dict[name], IndicatorToIndicator):
+                used_indicator_names.append(self.sequence_dict[name].left_indicator_variable_name)
+                used_indicator_names.append(self.sequence_dict[name].right_indicator_variable_name)
+            elif isinstance(self.sequence_dict[name], IndicatorToPrice) or isinstance(self.sequence_dict[name], IndicatorToConstant):
+                used_indicator_names.append(self.sequence_dict[name].left_indicator_variable_name)
+
+        self.logic_genes = [g for g in self.logic_genes if g.get_name() in used_logic_names]
+        self.indicator_genes = [g for g in self.indicator_genes if any(name in used_indicator_names for name in g.get_names())]
+
+        for gene in self.logic_genes:
+            if isinstance(gene, LogicToLogic):
+                gene.set_index(self.logic_genes.index(gene.get_referenced_logic(self.sequence_dict)[0]), self.logic_genes.index(gene.get_referenced_logic(self.sequence_dict)[1]))
+            elif isinstance(gene, IndicatorToIndicator):
+                referenced_indicators = gene.get_referenced_indicators(self.sequence_dict)
+                gene.set_index(left_index=self.indicator_genes.index(referenced_indicators[0]), right_index=self.indicator_genes.index(referenced_indicators[1]))
+            elif isinstance(gene, IndicatorToPrice) or isinstance(gene, IndicatorToConstant):
+                gene.set_index(left_index=self.indicator_genes.index(gene.get_referenced_indicator(self.sequence_dict)))
+        
+        for gene in self.signal_genes:
+            gene.set_index(self.logic_genes.index(gene.get_referenced_logic(self.sequence_dict)[0]), self.logic_genes.index(gene.get_referenced_logic(self.sequence_dict)[1]))
+        self.build_genome()
 
     def clone(self):
         return Genome(indicator_genes=copy.deepcopy(self.indicator_genes), logic_genes=copy.deepcopy(self.logic_genes), signal_genes=copy.deepcopy(self.signal_genes))
