@@ -394,13 +394,14 @@ class Genome:
         self.logic_genes = logic_genes
         self.signal_genes = signal_genes
 
-        self.complexity = len(self.indicator_genes) + len(self.logic_genes) + len(self.signal_genes)
+        self.build_genome()
 
+    def build_genome(self):
         self.function_ast, self.param_space = self.construct_algorithm()
         self.param_space = paramspecs_to_dict(self.param_space)
         self.compiled_function = ast_to_function(self.function_ast)
-        self.compiled_function.param_space = self.param_space #add param space variable to compiled function
-    
+        self.compiled_function.param_space = self.param_space
+
     def construct_algorithm(self):
         algorithm_parameter_specs = [] #all algorithm parameter search spaces to be fed into bayes opt engine
 
@@ -420,10 +421,7 @@ class Genome:
             if isinstance(gene, LogicToLogic):
                 composite_logic_genes.append(gene)
             else:
-                if gene not in simple_logic_genes: #i2p and i2i do not have unique identifiers and can be duplicated
-                    simple_logic_genes.append(gene)
-                else:
-                    self.logic_genes.remove(gene) #remove duplicate to prevent silent stacking
+                simple_logic_genes.append(gene)
         
         for simple_logic_gene in simple_logic_genes:
             simple_logic_gene.load_indicators(indicator_variable_names)
@@ -456,7 +454,7 @@ class Genome:
             )
         )
 
-        buy_conditions_assigns, sell_conditions_assigns = zip(*[signal_gene.to_ast() for signal_gene in self.signal_genes])
+        buy_conditions_assign, sell_conditions_assign = zip(*[signal_gene.to_ast() for signal_gene in self.signal_genes])
 
         #return signals
         return_signals = ast.Return(value=ast.Name(id="signals", ctx=ast.Load()))
@@ -465,8 +463,8 @@ class Genome:
             signals_init,
             *indicator_ast_list,
             *logic_ast_list,
-            *buy_conditions_assigns,
-            *sell_conditions_assigns,
+            *buy_conditions_assign,
+            *sell_conditions_assign,
             return_signals
         ]
 
@@ -475,49 +473,6 @@ class Genome:
         func_ast = ast.FunctionDef(name="strategy", args=func_args, body=body, decorator_list=[], type_ignores=[]) #default func name is strategy
 
         return func_ast, algorithm_parameter_specs
-
-    def remove_unused_genes(self):
-        used_logic_names = [] #work backwards from signalgenes
-        for gene in self.signal_genes:
-            used_logic_names.append(gene.long_logic_variable_name)
-            used_logic_names.append(gene.short_logic_variable_name)
-        for name in used_logic_names: #trace composite logic genes
-            if isinstance(self.sequence_dict[name], LogicToLogic):
-                used_logic_names.append(self.sequence_dict[name].left_logic_variable_name)
-                used_logic_names.append(self.sequence_dict[name].right_logic_variable_name)
-        
-        used_indicator_names = []
-        for name in used_logic_names:
-            if isinstance(self.sequence_dict[name], IndicatorToIndicator):
-                used_indicator_names.append(self.sequence_dict[name].left_indicator_variable_name)
-                used_indicator_names.append(self.sequence_dict[name].right_indicator_variable_name)
-            elif isinstance(self.sequence_dict[name], IndicatorToPrice) or isinstance(self.sequence_dict[name], IndicatorToConstant):
-                used_indicator_names.append(self.sequence_dict[name].left_indicator_variable_name)
-
-        self.logic_genes = [g for g in self.logic_genes if g.get_name() in used_logic_names]
-        self.indicator_genes = [g for g in self.indicator_genes if any(name in used_indicator_names for name in g.get_names())]
-
-        for gene in self.logic_genes:
-            if isinstance(gene, LogicToLogic):
-                gene.set_index(self.logic_genes.index(gene.get_referenced_logic(self.sequence_dict)[0]), self.logic_genes.index(gene.get_referenced_logic(self.sequence_dict)[1]))
-            elif isinstance(gene, IndicatorToIndicator):
-                referenced_indicators = gene.get_referenced_indicators(self.sequence_dict)
-                gene.set_index(left_index=self.indicator_genes.index(referenced_indicators[0]), right_index=self.indicator_genes.index(referenced_indicators[1]))
-            elif isinstance(gene, IndicatorToPrice) or isinstance(gene, IndicatorToConstant):
-                gene.set_index(left_index=self.indicator_genes.index(gene.get_referenced_indicator(self.sequence_dict)))
-        
-        for gene in self.signal_genes:
-            gene.set_index(self.logic_genes.index(gene.get_referenced_logic(self.sequence_dict)[0]), self.logic_genes.index(gene.get_referenced_logic(self.sequence_dict)[1]))
-        self.build_genome()
-
-    def clone(self):
-        return Genome(indicator_genes=copy.deepcopy(self.indicator_genes), logic_genes=copy.deepcopy(self.logic_genes), signal_genes=copy.deepcopy(self.signal_genes))
-
-    def get_genes(self):
-        return self.indicator_genes, self.logic_genes, self.signal_genes
-
-    def get_complexity(self):
-        return self.complexity
 
     def get_function_ast(self) -> ast.AST:
         return self.function_ast
