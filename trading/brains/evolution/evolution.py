@@ -52,7 +52,7 @@ def generate_signal_gene(num_logic: int):
     long_logic_index, short_logic_index = random.sample(range(num_logic), 2)
     return SignalGene(long_logic_index=long_logic_index, short_logic_index=short_logic_index)
 
-def generate_individual(
+def generate_genome(
     num_indicators=None, 
     num_logic=None,
     min_indicators=2,
@@ -62,18 +62,6 @@ def generate_individual(
     allow_logic_composition=True,
     logic_composition_prob=0.5
 ):
-    """Generate one random individual with configurable complexity.
-    
-    Args:
-        num_indicators: Fixed number of indicators (if None, random between min/max)
-        num_logic: Fixed number of logic genes (if None, random between min/max)
-        min_indicators: Minimum number of indicators
-        max_indicators: Maximum number of indicators
-        min_logic: Minimum number of logic genes
-        max_logic: Maximum number of logic genes
-        allow_logic_composition: Whether to allow LogicToLogic genes
-        logic_composition_prob: Probability of creating a LogicToLogic gene
-    """
     if num_indicators is None:
         num_indicators = random.randint(min_indicators, max_indicators)
     if num_logic is None:
@@ -96,10 +84,9 @@ def generate_population(
     allow_logic_composition=True,
     logic_composition_prob=0.5
 ):
-    """Generate population of random individuals with variable complexity."""
     population = []
     for _ in range(size):
-        individual = generate_individual(
+        genome = generate_genome(
             num_indicators=num_indicators,
             num_logic=num_logic,
             min_indicators=min_indicators,
@@ -109,5 +96,5 @@ def generate_population(
             allow_logic_composition=allow_logic_composition,
             logic_composition_prob=logic_composition_prob
         )
-        population.append(individual)
+        population.append(genome)
     return population
