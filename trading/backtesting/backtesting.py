@@ -410,7 +410,6 @@ class VectorizedBacktesting:
             fig.show()
 
         elif mode == "tradingview":
-            import pandas as pd
             from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 
             from lightweight_charts.widgets import QtChart
