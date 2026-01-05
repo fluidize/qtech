@@ -1,8 +1,457 @@
 import pandas as pd
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 from scipy.stats import percentileofscore
 from scipy import signal
 from typing import Optional
+from numba import njit
+
+# cores
+
+@njit(cache=True)
+def _sma_core(values: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core SMA calculation using Numba"""
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod - 1, n):
+        result[i] = np.mean(values[i - timeperiod + 1:i + 1])
+    return result
+
+@njit(cache=True)
+def _ema_core(values: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core EMA calculation using Numba"""
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    alpha = 2.0 / (timeperiod + 1.0)
+    result[0] = values[0]
+    for i in range(1, n):
+        result[i] = alpha * values[i] + (1 - alpha) * result[i - 1]
+    return result
+
+@njit(cache=True)
+def _rsi_core(values: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core RSI calculation using Numba"""
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    if n < timeperiod + 1:
+        return result
+    
+    deltas = np.diff(values)
+    
+    gains = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
+    
+    avg_gain = np.mean(gains[:timeperiod])
+    avg_loss = np.mean(losses[:timeperiod])
+    
+    if avg_loss == 0:
+        result[timeperiod] = 100.0
+    else:
+        rs = avg_gain / avg_loss
+        result[timeperiod] = 100.0 - (100.0 / (1.0 + rs))
+    
+    alpha = 1.0 / timeperiod
+    for i in range(timeperiod + 1, n):
+        gain = gains[i - 1] if i - 1 < len(gains) else 0.0
+        loss = losses[i - 1] if i - 1 < len(losses) else 0.0
+        avg_gain = alpha * gain + (1 - alpha) * avg_gain
+        avg_loss = alpha * loss + (1 - alpha) * avg_loss
+        if avg_loss == 0:
+            result[i] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            result[i] = 100.0 - (100.0 / (1.0 + rs))
+    
+    return result
+
+@njit(cache=True)
+def _atr_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core ATR calculation using Numba"""
+    n = len(high)
+    tr = np.full(n, np.nan, dtype=np.float64)
+    tr[0] = high[0] - low[0]
+    for i in range(1, n):
+        tr1 = high[i] - low[i]
+        tr2 = abs(high[i] - close[i - 1])
+        tr3 = abs(low[i] - close[i - 1])
+        tr[i] = max(tr1, max(tr2, tr3))
+    return _sma_core(tr, timeperiod)
+
+@njit(cache=True)
+def _wma_core(values: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core WMA calculation using Numba"""
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    sum_weights = timeperiod * (timeperiod + 1) / 2.0
+    for i in range(timeperiod - 1, n):
+        weighted_sum = 0.0
+        for j in range(timeperiod):
+            weight = j + 1
+            weighted_sum += values[i - j] * weight
+        result[i] = weighted_sum / sum_weights
+    return result
+
+@njit(cache=True)
+def _cci_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core CCI calculation using Numba"""
+    n = len(high)
+    tp = (high + low + close) / 3.0
+    result = np.full(n, np.nan, dtype=np.float64)
+    
+    for i in range(timeperiod - 1, n):
+        window = tp[i - timeperiod + 1:i + 1]
+        sma_val = np.mean(window)
+        mad = np.mean(np.abs(window - sma_val))
+        if mad > 0:
+            result[i] = (tp[i] - sma_val) / (0.015 * mad)
+    
+    return result
+
+@njit(cache=True)
+def _aroon_core(high: np.ndarray, low: np.ndarray, timeperiod: int) -> tuple:
+    """Core Aroon calculation using Numba"""
+    n = len(high)
+    aroon_up = np.full(n, np.nan, dtype=np.float64)
+    aroon_down = np.full(n, np.nan, dtype=np.float64)
+    
+    for i in range(timeperiod - 1, n):
+        high_window = high[i - timeperiod + 1:i + 1]
+        low_window = low[i - timeperiod + 1:i + 1]
+        
+        periods_since_high = timeperiod - 1 - np.argmax(high_window)
+        periods_since_low = timeperiod - 1 - np.argmin(low_window)
+        
+        aroon_up[i] = 100.0 * (timeperiod - periods_since_high) / timeperiod
+        aroon_down[i] = 100.0 * (timeperiod - periods_since_low) / timeperiod
+    
+    return aroon_up, aroon_down
+
+@njit(cache=True)
+def _stoch_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, fastk_period: int) -> np.ndarray:
+    """Core Stochastic %K calculation using Numba"""
+    n = len(high)
+    k = np.full(n, np.nan, dtype=np.float64)
+    
+    for i in range(fastk_period - 1, n):
+        high_window = high[i - fastk_period + 1:i + 1]
+        low_window = low[i - fastk_period + 1:i + 1]
+        highest = np.max(high_window)
+        lowest = np.min(low_window)
+        if highest != lowest:
+            k[i] = 100.0 * ((close[i] - lowest) / (highest - lowest))
+    
+    return k
+
+@njit(cache=True)
+def _bbands_core(values: np.ndarray, timeperiod: int, devup: float, devdn: float) -> tuple:
+    """Core Bollinger Bands calculation using Numba"""
+    n = len(values)
+    upper = np.full(n, np.nan, dtype=np.float64)
+    middle = np.full(n, np.nan, dtype=np.float64)
+    lower = np.full(n, np.nan, dtype=np.float64)
+    
+    for i in range(timeperiod - 1, n):
+        window = values[i - timeperiod + 1:i + 1]
+        mean_val = np.mean(window)
+        std_val = np.std(window)
+        middle[i] = mean_val
+        upper[i] = mean_val + (std_val * devup)
+        lower[i] = mean_val - (std_val * devdn)
+    
+    return upper, middle, lower
+
+@njit(cache=True)
+def _adx_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, timeperiod: int) -> tuple:
+    """Core ADX calculation using Numba"""
+    n = len(high)
+    tr = np.full(n, np.nan, dtype=np.float64)
+    plus_dm = np.zeros(n, dtype=np.float64)
+    minus_dm = np.zeros(n, dtype=np.float64)
+    
+    tr[0] = high[0] - low[0]
+    for i in range(1, n):
+        tr1 = high[i] - low[i]
+        tr2 = abs(high[i] - close[i - 1])
+        tr3 = abs(low[i] - close[i - 1])
+        tr[i] = max(tr1, max(tr2, tr3))
+        
+        high_diff = high[i] - high[i - 1]
+        low_diff = low[i - 1] - low[i]
+        
+        if high_diff > 0 and high_diff > low_diff:
+            plus_dm[i] = high_diff
+        if low_diff > 0 and low_diff > high_diff:
+            minus_dm[i] = low_diff
+    
+    tr_smooth = _ema_core(tr, timeperiod)
+    plus_dm_smooth = _ema_core(plus_dm, timeperiod)
+    minus_dm_smooth = _ema_core(minus_dm, timeperiod)
+    
+    plus_di = np.full(n, np.nan, dtype=np.float64)
+    minus_di = np.full(n, np.nan, dtype=np.float64)
+    dx = np.full(n, np.nan, dtype=np.float64)
+    adx = np.full(n, np.nan, dtype=np.float64)
+    
+    for i in range(timeperiod, n):
+        if tr_smooth[i] > 0:
+            plus_di[i] = 100.0 * (plus_dm_smooth[i] / tr_smooth[i])
+            minus_di[i] = 100.0 * (minus_dm_smooth[i] / tr_smooth[i])
+            
+            di_sum = plus_di[i] + minus_di[i]
+            if di_sum > 0:
+                di_diff = abs(plus_di[i] - minus_di[i])
+                dx[i] = 100.0 * (di_diff / di_sum)
+    
+    adx = _ema_core(dx, timeperiod)
+    
+    return adx, plus_di, minus_di
+
+@njit(cache=True)
+def _obv_core(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
+    """Core OBV calculation using Numba"""
+    n = len(close)
+    obv = np.zeros(n, dtype=np.float64)
+    obv[0] = volume[0]
+    for i in range(1, n):
+        if close[i] > close[i - 1]:
+            obv[i] = obv[i - 1] + volume[i]
+        elif close[i] < close[i - 1]:
+            obv[i] = obv[i - 1] - volume[i]
+        else:
+            obv[i] = obv[i - 1]
+    return obv
+
+@njit(cache=True)
+def _supertrend_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int, multiplier: float) -> tuple:
+    """Core SuperTrend calculation using Numba"""
+    n = len(close)
+    atr_vals = _atr_core(high, low, close, period)
+    
+    basic_upper = np.zeros(n, dtype=np.float64)
+    basic_lower = np.zeros(n, dtype=np.float64)
+    final_upper = np.zeros(n, dtype=np.float64)
+    final_lower = np.zeros(n, dtype=np.float64)
+    supertrend = np.zeros(n, dtype=np.float64)
+    
+    hl_avg = (high + low) / 2.0
+    for i in range(n):
+        if not np.isnan(atr_vals[i]):
+            basic_upper[i] = hl_avg[i] + (multiplier * atr_vals[i])
+            basic_lower[i] = hl_avg[i] - (multiplier * atr_vals[i])
+        else:
+            basic_upper[i] = hl_avg[i]
+            basic_lower[i] = hl_avg[i]
+    
+    final_upper[0] = basic_upper[0]
+    final_lower[0] = basic_lower[0]
+    supertrend[0] = 1.0
+    
+    for i in range(1, n):
+        if close[i - 1] > final_upper[i - 1]:
+            final_upper[i] = basic_upper[i]
+        else:
+            final_upper[i] = min(basic_upper[i], final_upper[i - 1])
+        
+        if close[i - 1] < final_lower[i - 1]:
+            final_lower[i] = basic_lower[i]
+        else:
+            final_lower[i] = max(basic_lower[i], final_lower[i - 1])
+        
+        if close[i] > final_upper[i]:
+            supertrend[i] = 1.0
+        elif close[i] < final_lower[i]:
+            supertrend[i] = -1.0
+        else:
+            supertrend[i] = supertrend[i - 1]
+    
+    supertrend_line = np.where(supertrend == 1.0, final_lower, final_upper)
+    return supertrend, supertrend_line
+
+@njit(cache=True)
+def _kama_core(values: np.ndarray, er_period: int, fast_period: int, slow_period: int) -> np.ndarray:
+    """Core KAMA calculation using Numba"""
+    n = len(values)
+    kama = np.zeros(n, dtype=np.float64)
+    kama[0] = values[0]
+    
+    fast_sc = 2.0 / (fast_period + 1.0)
+    slow_sc = 2.0 / (slow_period + 1.0)
+    
+    for i in range(1, n):
+        if i >= er_period:
+            change = abs(values[i] - values[i - er_period])
+            volatility = 0.0
+            for j in range(i - er_period + 1, i + 1):
+                volatility += abs(values[j] - values[j - 1])
+            
+            if volatility > 0:
+                er = change / volatility
+            else:
+                er = 0.0
+            sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+        else:
+            sc = slow_sc
+        
+        kama[i] = kama[i - 1] + sc * (values[i] - kama[i - 1])
+    
+    return kama
+
+@njit(cache=True)
+def _psar_core(high: np.ndarray, low: np.ndarray, acceleration_start: float, acceleration_step: float, max_acceleration: float) -> np.ndarray:
+    """Core PSAR calculation using Numba"""
+    n = len(high)
+    psar = np.zeros(n, dtype=np.float64)
+    trend = np.ones(n, dtype=np.int32)
+    ep = np.zeros(n, dtype=np.float64)
+    
+    psar[0] = low[0]
+    ep[0] = high[0]
+    af = acceleration_start
+    
+    for i in range(1, n):
+        if trend[i - 1] == 1:
+            diff = ep[i - 1] - psar[i - 1]
+            psar[i] = psar[i - 1] + af * diff
+        else:
+            diff = psar[i - 1] - ep[i - 1]
+            psar[i] = psar[i - 1] - af * diff
+        
+        if trend[i - 1] == 1:
+            if low[i] < psar[i]:
+                trend[i] = -1
+                psar[i] = ep[i - 1]
+                ep[i] = low[i]
+                af = acceleration_start
+            else:
+                trend[i] = 1
+                if high[i] > ep[i - 1]:
+                    ep[i] = high[i]
+                    af = min(af + acceleration_step, max_acceleration)
+                else:
+                    ep[i] = ep[i - 1]
+        else:
+            if high[i] > psar[i]:
+                trend[i] = 1
+                psar[i] = ep[i - 1]
+                ep[i] = high[i]
+                af = acceleration_start
+            else:
+                trend[i] = -1
+                if low[i] < ep[i - 1]:
+                    ep[i] = low[i]
+                    af = min(af + acceleration_step, max_acceleration)
+                else:
+                    ep[i] = ep[i - 1]
+    
+    return psar
+
+@njit(cache=True)
+def _zscore_core(values: np.ndarray, timeperiod: int) -> np.ndarray:
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod - 1, n):
+        window = values[i - timeperiod + 1:i + 1]
+        mean_val = np.mean(window)
+        std_val = np.std(window)
+        if std_val > 0:
+            result[i] = (values[i] - mean_val) / std_val
+    return result
+
+@njit(cache=True)
+def _kalman_filter_core(values: np.ndarray, process_noise: float, measurement_noise: float) -> np.ndarray:
+    n = len(values)
+    x_estimate = np.zeros(n, dtype=np.float64)
+    P = 1.0
+    Q = process_noise
+    R = measurement_noise
+    
+    x_estimate[0] = values[0]
+    for i in range(1, n):
+        x_prediction = x_estimate[i - 1]
+        P_prediction = P + Q
+        K = P_prediction / (P_prediction + R)
+        x_estimate[i] = x_prediction + K * (values[i] - x_prediction)
+        P = (1 - K) * P_prediction
+    
+    return x_estimate
+
+@njit(cache=True)
+def _mfi_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray, timeperiod: int) -> np.ndarray:
+    n = len(high)
+    typical_price = (high + low + close) / 3.0
+    money_flow = typical_price * volume
+    
+    positive_flow = np.zeros(n, dtype=np.float64)
+    negative_flow = np.zeros(n, dtype=np.float64)
+    
+    for i in range(1, n):
+        if typical_price[i] > typical_price[i - 1]:
+            positive_flow[i] = money_flow[i]
+        elif typical_price[i] < typical_price[i - 1]:
+            negative_flow[i] = money_flow[i]
+    
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod - 1, n):
+        pos_sum = np.sum(positive_flow[i - timeperiod + 1:i + 1])
+        neg_sum = np.sum(negative_flow[i - timeperiod + 1:i + 1])
+        if neg_sum > 0:
+            result[i] = 100.0 - (100.0 / (1.0 + pos_sum / neg_sum))
+        else:
+            result[i] = 100.0
+    
+    return result
+
+@njit(cache=True)
+def _cmf_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray, timeperiod: int) -> np.ndarray:
+    n = len(high)
+    mfv = np.zeros(n, dtype=np.float64)
+    
+    for i in range(n):
+        hl_range = high[i] - low[i]
+        if hl_range > 0:
+            mfv[i] = volume[i] * ((close[i] - low[i]) - (high[i] - close[i])) / hl_range
+    
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod - 1, n):
+        mfv_sum = np.sum(mfv[i - timeperiod + 1:i + 1])
+        vol_sum = np.sum(volume[i - timeperiod + 1:i + 1])
+        if vol_sum > 0:
+            result[i] = mfv_sum / vol_sum
+    
+    return result
+
+@njit(cache=True)
+def _vwap_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray) -> np.ndarray:
+    n = len(high)
+    typical_price = (high + low + close) / 3.0
+    vwap = np.zeros(n, dtype=np.float64)
+    
+    cum_price_volume = 0.0
+    cum_volume = 0.0
+    
+    for i in range(n):
+        cum_price_volume += typical_price[i] * volume[i]
+        cum_volume += volume[i]
+        if cum_volume > 0:
+            vwap[i] = cum_price_volume / cum_volume
+    
+    return vwap
+
+@njit(cache=True)
+def _pvt_core(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
+    n = len(close)
+    pvt = np.zeros(n, dtype=np.float64)
+    
+    for i in range(1, n):
+        if close[i - 1] > 0:
+            pct_change = (close[i] - close[i - 1]) / close[i - 1]
+            pvt[i] = pvt[i - 1] + (pct_change * volume[i])
+        else:
+            pvt[i] = pvt[i - 1]
+    
+    return pvt
+
+# wrappers
 
 def heikin_ashi_transform(data: pd.DataFrame) -> pd.DataFrame:
     """Heikin Ashi Transform"""
@@ -15,23 +464,33 @@ def heikin_ashi_transform(data: pd.DataFrame) -> pd.DataFrame:
 
 def sma(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Simple Moving Average"""
-    return series.rolling(window=timeperiod).mean()
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _sma_core(values, timeperiod)
+    return pd.Series(result, index=series.index)
 
 def ema(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Exponential Moving Average"""
-    return series.ewm(span=timeperiod, adjust=False).mean()
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _ema_core(values, timeperiod)
+    return pd.Series(result, index=series.index)
 
 def vwma(series: pd.Series, volume: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Volume Weighted Moving Average"""
-    return (series * volume).rolling(window=timeperiod).sum() / volume.rolling(window=timeperiod).sum()
+    series_vals = np.asarray(series.values, dtype=np.float64)
+    volume_vals = np.asarray(volume.values, dtype=np.float64)
+    n = len(series_vals)
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod - 1, n):
+        window_series = series_vals[i - timeperiod + 1:i + 1]
+        window_vol = volume_vals[i - timeperiod + 1:i + 1]
+        result[i] = np.sum(window_series * window_vol) / np.sum(window_vol)
+    return pd.Series(result, index=series.index)
 
 def rsi(series: pd.Series, timeperiod: int = 14) -> pd.Series:
     """Relative Strength Index"""
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/timeperiod, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/timeperiod, adjust=False).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _rsi_core(values, timeperiod)
+    return pd.Series(result, index=series.index)
 
 def macd(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> tuple[pd.Series, pd.Series]:
     """Moving Average Convergence Divergence"""
@@ -53,104 +512,74 @@ def macd_dema(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, sig
 
 def bbands(series: pd.Series, timeperiod: int = 20, devup: int = 2, devdn: int = 2) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Bollinger Bands"""
-    middle = sma(series, timeperiod)
-    std = series.rolling(window=timeperiod).std()
-    upper = middle + (std * devup)
-    lower = middle - (std * devdn)
-    return upper, middle, lower
+    values = np.asarray(series.values, dtype=np.float64)
+    upper_vals, middle_vals, lower_vals = _bbands_core(values, timeperiod, float(devup), float(devdn))
+    return pd.Series(upper_vals, index=series.index), pd.Series(middle_vals, index=series.index), pd.Series(lower_vals, index=series.index)
 
 def stoch(high: pd.Series, low: pd.Series, close: pd.Series, fastk_period: int = 14, slowk_period: int = 3, slowd_period: int = 3) -> tuple[pd.Series, pd.Series]:
     """Stochastic Oscillator"""
-    lowest_low = low.rolling(window=fastk_period).min()
-    highest_high = high.rolling(window=fastk_period).max()
-    k = 100 * ((close - lowest_low) / (highest_high - lowest_low))
-    d = k.rolling(window=slowk_period).mean()
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    k_vals = _stoch_core(high_vals, low_vals, close_vals, fastk_period)
+    k = pd.Series(k_vals, index=close.index)
+    d = sma(k, slowk_period)
     return k, d
 
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> pd.Series:
     """Average True Range"""
-    tr1 = high - low
-    tr2 = abs(high - close.shift())
-    tr3 = abs(low - close.shift())
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    return tr.rolling(window=timeperiod).mean()
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    result = _atr_core(high_vals, low_vals, close_vals, timeperiod)
+    return pd.Series(result, index=high.index)
 
 def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     """On Balance Volume"""
-    obv = (np.sign(close.diff()) * volume).fillna(0).cumsum()
-    return obv
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    volume_vals = np.asarray(volume.values, dtype=np.float64)
+    result = _obv_core(close_vals, volume_vals)
+    return pd.Series(result, index=close.index)
 
 def cci(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 20) -> pd.Series:
-    """Commodity Channel Index - fully vectorized to avoid access violations"""
-    tp = (high + low + close) / 3
-    sma = tp.rolling(window=timeperiod).mean()
-    
-    tp_values = np.asarray(tp.values, dtype=np.float64)
-    n = len(tp_values)
-
-    from numpy.lib.stride_tricks import sliding_window_view
-    windows = sliding_window_view(tp_values, window_shape=timeperiod)
-
-    window_means = np.mean(windows, axis=1)
-    abs_deviations = np.abs(windows - window_means[:, np.newaxis])
-    mad_windowed = np.mean(abs_deviations, axis=1)
-    
-    mad_values = np.full(n, np.nan, dtype=np.float64)
-    mad_values[timeperiod - 1:] = mad_windowed
-    mad = pd.Series(mad_values, index=tp.index)
-    
-    return (tp - sma) / (0.015 * mad)
+    """Commodity Channel Index"""
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    result = _cci_core(high_vals, low_vals, close_vals, timeperiod)
+    return pd.Series(result, index=high.index)
 
 def adx(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Average Directional Index"""
-    # Calculate True Range
-    tr1 = high - low
-    tr2 = abs(high - close.shift())
-    tr3 = abs(low - close.shift())
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    
-    # Calculate Directional Movement
-    high_diff = high.diff()
-    low_diff = low.diff()
-    
-    # Plus DM: current high - previous high (if positive and greater than low difference)
-    plus_dm = pd.Series(0.0, index=high.index, dtype=float)
-    plus_dm[(high_diff > 0) & (high_diff > -low_diff)] = high_diff[(high_diff > 0) & (high_diff > -low_diff)]
-    
-    # Minus DM: previous low - current low (if positive and greater than high difference)
-    minus_dm = pd.Series(0.0, index=low.index, dtype=float)
-    minus_dm[(-low_diff > 0) & (-low_diff > high_diff)] = -low_diff[(-low_diff > 0) & (-low_diff > high_diff)]
-    
-    # Smooth the values using exponential moving average
-    tr_smooth = tr.ewm(alpha=1/timeperiod).mean()
-    plus_dm_smooth = plus_dm.ewm(alpha=1/timeperiod).mean()
-    minus_dm_smooth = minus_dm.ewm(alpha=1/timeperiod).mean()
-    
-    # Calculate Directional Indicators
-    plus_di = 100 * (plus_dm_smooth / tr_smooth)
-    minus_di = 100 * (minus_dm_smooth / tr_smooth)
-    
-    # Calculate Directional Index (DX)
-    di_sum = plus_di + minus_di
-    di_diff = abs(plus_di - minus_di)
-    
-    # Avoid division by zero
-    dx = pd.Series(0.0, index=high.index, dtype=float)
-    dx[di_sum > 0] = 100 * (di_diff[di_sum > 0] / di_sum[di_sum > 0])
-    
-    # Calculate ADX (smoothed DX)
-    adx = dx.ewm(alpha=1/timeperiod).mean()
-    
-    return adx, plus_di, minus_di
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    adx_vals, plus_di_vals, minus_di_vals = _adx_core(high_vals, low_vals, close_vals, timeperiod)
+    return pd.Series(adx_vals, index=high.index), pd.Series(plus_di_vals, index=high.index), pd.Series(minus_di_vals, index=high.index)
+
+@njit(cache=True)
+def _log_return_core(values: np.ndarray) -> np.ndarray:
+    """Core log return calculation"""
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(1, n):
+        if values[i - 1] > 0:
+            result[i] = np.log(values[i] / values[i - 1])
+    return result
 
 def log_return(series: pd.Series) -> pd.Series:
     """Log Returns"""
-    return np.log(series / series.shift(1))
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _log_return_core(values)
+    return pd.Series(result, index=series.index)
 
 def dpo(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Detrended Price Oscillator
     A non-directional indicator that removes trend from price to identify cycles"""
-    return series - series.shift(int(timeperiod/2) + 1).rolling(window=timeperiod).mean()
+    shift = int(timeperiod/2) + 1
+    shifted = series.shift(shift)
+    sma_shifted = sma(shifted, timeperiod)
+    return series - sma_shifted
 
 def dema(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Double Exponential Moving Average"""
@@ -189,18 +618,17 @@ def fisher_transform(series: pd.Series, timeperiod: int = 10) -> pd.Series:
     return fisher
 
 def aroon(high: pd.Series, low: pd.Series, timeperiod: int = 14) -> tuple[pd.Series, pd.Series]:
-    """Aroon Indicator"""
-    periods = np.arange(timeperiod)
-    
-    # Calculate Aroon Up
-    rolling_high = high.rolling(window=timeperiod)
-    aroon_up = 100 * rolling_high.apply(lambda x: (timeperiod - 1 - np.argmax(x)) / (timeperiod - 1), raw=True)
-    
-    # Calculate Aroon Down
-    rolling_low = low.rolling(window=timeperiod)
-    aroon_down = 100 * rolling_low.apply(lambda x: (timeperiod - 1 - np.argmin(x)) / (timeperiod - 1), raw=True)
-    
-    return aroon_up, aroon_down
+    """Canonical Aroon (matches TA-Lib / TradingView)"""
+    if timeperiod < 2:
+        raise ValueError("timeperiod must be >= 2")
+    n = len(high)
+    if n < timeperiod:
+        nan = pd.Series(np.nan, index=high.index)
+        return nan, nan
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    aroon_up_vals, aroon_down_vals = _aroon_core(high_vals, low_vals, timeperiod)
+    return pd.Series(aroon_up_vals, index=high.index), pd.Series(aroon_down_vals, index=low.index)
 
 def awesome_oscillator(high: pd.Series, low: pd.Series, fast_period: int = 5, slow_period: int = 34) -> pd.Series:
     """Awesome Oscillator (AO)"""
@@ -220,9 +648,10 @@ def keltner_channels(high: pd.Series, low: pd.Series, close: pd.Series, timeperi
 
 def pvt(close: pd.Series, volume: pd.Series) -> pd.Series:
     """Price Volume Trend"""
-    pct_change = close.pct_change()
-    pvt = (pct_change * volume).cumsum()
-    return pvt
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    volume_vals = np.asarray(volume.values, dtype=np.float64)
+    result = _pvt_core(close_vals, volume_vals)
+    return pd.Series(result, index=close.index)
 
 def vwap_bands(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, timeperiod: int = 20, stdev_multiplier: int = 2) -> tuple[pd.Series, pd.Series, pd.Series]:
     """VWAP with Standard Deviation Bands"""
@@ -382,10 +811,9 @@ def hurst_exponent(series: pd.Series, max_lag: int = 20) -> pd.Series:
 
 def zscore(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Rolling Z-Score"""
-    mean = series.rolling(window=timeperiod).mean()
-    std = series.rolling(window=timeperiod).std()
-    z_score = (series - mean) / std
-    return z_score
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _zscore_core(values, timeperiod)
+    return pd.Series(result, index=series.index)
 
 def volatility(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Volatility"""
@@ -506,128 +934,106 @@ def price_cycle(close: pd.Series, cycle_period: int = 20) -> pd.Series:
     
     return pd.Series(cycle, index=close.index)
 
+@njit(cache=True)
+def _stddev_core(values: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core standard deviation calculation"""
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod - 1, n):
+        window = values[i - timeperiod + 1:i + 1]
+        result[i] = np.std(window)
+    return result
+
 def stddev(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Standard Deviation"""
-    return series.rolling(window=timeperiod).std(ddof=0)
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _stddev_core(values, timeperiod)
+    return pd.Series(result, index=series.index)
+
+@njit(cache=True)
+def _roc_core(values: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core rate of change calculation"""
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod, n):
+        if values[i - timeperiod] > 0:
+            result[i] = ((values[i] - values[i - timeperiod]) / values[i - timeperiod]) * 100.0
+    return result
 
 def roc(series: pd.Series, timeperiod: int = 10) -> pd.Series:
     """Rate of Change"""
-    return series.pct_change(periods=timeperiod) * 100
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _roc_core(values, timeperiod)
+    return pd.Series(result, index=series.index)
+
+@njit(cache=True)
+def _mom_core(values: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core momentum calculation"""
+    n = len(values)
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod, n):
+        result[i] = values[i] - values[i - timeperiod]
+    return result
 
 def mom(series: pd.Series, timeperiod: int = 10) -> pd.Series:
     """Momentum"""
-    return series.diff(timeperiod)
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _mom_core(values, timeperiod)
+    return pd.Series(result, index=series.index)
+
+@njit(cache=True)
+def _willr_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, timeperiod: int) -> np.ndarray:
+    """Core Williams %R calculation"""
+    n = len(high)
+    result = np.full(n, np.nan, dtype=np.float64)
+    for i in range(timeperiod - 1, n):
+        high_window = high[i - timeperiod + 1:i + 1]
+        low_window = low[i - timeperiod + 1:i + 1]
+        highest = np.max(high_window)
+        lowest = np.min(low_window)
+        if highest != lowest:
+            result[i] = -100.0 * (highest - close[i]) / (highest - lowest)
+    return result
 
 def willr(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> pd.Series:
     """Williams %R"""
-    highest_high = high.rolling(window=timeperiod).max()
-    lowest_low = low.rolling(window=timeperiod).min()
-    return -100 * (highest_high - close) / (highest_high - lowest_low)
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    result = _willr_core(high_vals, low_vals, close_vals, timeperiod)
+    return pd.Series(result, index=close.index)
 
 def mfi(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, timeperiod: int = 14) -> pd.Series:
     """Money Flow Index"""
-    typical_price = (high + low + close) / 3
-    money_flow = typical_price * volume
-    
-    positive_flow = pd.Series(0.0, index=money_flow.index, dtype='float64')
-    negative_flow = pd.Series(0.0, index=money_flow.index, dtype='float64')
-    
-    positive_flow[typical_price > typical_price.shift(1)] = money_flow
-    negative_flow[typical_price < typical_price.shift(1)] = money_flow
-    
-    positive_mf = positive_flow.rolling(window=timeperiod).sum()
-    negative_mf = negative_flow.rolling(window=timeperiod).sum()
-    
-    mfi = 100 - (100 / (1 + positive_mf / negative_mf))
-    return mfi
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    volume_vals = np.asarray(volume.values, dtype=np.float64)
+    result = _mfi_core(high_vals, low_vals, close_vals, volume_vals, timeperiod)
+    return pd.Series(result, index=close.index)
 
 def kama(series: pd.Series, er_period: int = 10, fast_period: int = 2, slow_period: int = 30) -> pd.Series:
     """Kaufman Adaptive Moving Average"""
-    values = series.values
-    change = abs(values - np.roll(values, er_period))
-    volatility = np.abs(np.diff(values, prepend=values[0])).cumsum()
-    
-    # Efficiency Ratio
-    er = np.divide(change, volatility, out=np.zeros_like(change), where=volatility!=0)
-    
-    # Smoothing Constant
-    fast_sc = 2 / (fast_period + 1)
-    slow_sc = 2 / (slow_period + 1)
-    
-    # Scaling of Efficiency Ratio
-    sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
-    
-    # Initialize KAMA array
-    kama = np.zeros_like(values)
-    
-    # First KAMA value is the price
-    kama[0] = values[0]
-    
-    # Calculate KAMA values
-    for i in range(1, len(values)):
-        kama[i] = kama[i-1] + sc[i] * (values[i] - kama[i-1])
-    
-    return pd.Series(kama, index=series.index)
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _kama_core(values, er_period, fast_period, slow_period)
+    return pd.Series(result, index=series.index)
 
 def vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
     """Volume Weighted Average Price"""
-    typical_price = (high + low + close) / 3
-    vwap = (typical_price * volume).cumsum() / volume.cumsum()
-    return vwap
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    volume_vals = np.asarray(volume.values, dtype=np.float64)
+    result = _vwap_core(high_vals, low_vals, close_vals, volume_vals)
+    return pd.Series(result, index=close.index)
 
 def supertrend(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14, multiplier: int = 3) -> tuple[pd.Series, pd.Series]:
     """SuperTrend indicator"""
-    high_values = high.values
-    low_values = low.values
-    close_values = close.values
-    
-    # Calculate ATR
-    tr1 = high_values - low_values
-    tr2 = np.abs(high_values - np.roll(close_values, 1))
-    tr3 = np.abs(low_values - np.roll(close_values, 1))
-    tr = np.maximum(np.maximum(tr1, tr2), tr3)
-    atr = pd.Series(tr).rolling(window=period).mean().values
-    
-    # Calculate basic upper and lower bands
-    basic_upper = ((high_values + low_values) / 2) + (multiplier * atr)
-    basic_lower = ((high_values + low_values) / 2) - (multiplier * atr)
-    
-    # Initialize arrays
-    final_upper = np.zeros_like(close_values)
-    final_lower = np.zeros_like(close_values)
-    supertrend = np.zeros_like(close_values)
-    
-    # First value
-    final_upper[0] = basic_upper[0]
-    final_lower[0] = basic_lower[0]
-    supertrend[0] = 1  # 1 for uptrend, -1 for downtrend
-    
-    # Calculate SuperTrend
-    for i in range(1, len(close_values)):
-        # Update upper band
-        if close_values[i-1] > final_upper[i-1]:
-            final_upper[i] = basic_upper[i]
-        else:
-            final_upper[i] = min(basic_upper[i], final_upper[i-1])
-            
-        # Update lower band
-        if close_values[i-1] < final_lower[i-1]:
-            final_lower[i] = basic_lower[i]
-        else:
-            final_lower[i] = max(basic_lower[i], final_lower[i-1])
-            
-        # Determine trend
-        if close_values[i] > final_upper[i]:
-            supertrend[i] = 1
-        elif close_values[i] < final_lower[i]:
-            supertrend[i] = -1
-        else:
-            supertrend[i] = supertrend[i-1]
-    
-    # Use upper band when trend is -1, lower band when trend is 1
-    supertrend_line = np.where(supertrend == 1, final_lower, final_upper)
-    
-    return pd.Series(supertrend, index=close.index), pd.Series(supertrend_line, index=close.index)
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    supertrend_vals, supertrend_line_vals = _supertrend_core(high_vals, low_vals, close_vals, period, float(multiplier))
+    return pd.Series(supertrend_vals, index=close.index), pd.Series(supertrend_line_vals, index=close.index)
 
 def tsi(close: pd.Series, long_period: int = 25, short_period: int = 13, signal_period: int = 13) -> tuple[pd.Series, pd.Series]:
     """True Strength Index"""
@@ -650,9 +1056,12 @@ def tsi(close: pd.Series, long_period: int = 25, short_period: int = 13, signal_
 
 def cmf(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Chaikin Money Flow"""
-    mfv = volume * ((close - low) - (high - close)) / (high - low)
-    cmf = mfv.rolling(window=timeperiod).sum() / volume.rolling(window=timeperiod).sum()
-    return cmf
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    volume_vals = np.asarray(volume.values, dtype=np.float64)
+    result = _cmf_core(high_vals, low_vals, close_vals, volume_vals, timeperiod)
+    return pd.Series(result, index=close.index)
 
 def hma(series: pd.Series, timeperiod: int = 16) -> pd.Series:
     """Hull Moving Average"""
@@ -665,22 +1074,9 @@ def hma(series: pd.Series, timeperiod: int = 16) -> pd.Series:
 
 def wma(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Weighted Moving Average"""
-    series_values = np.asarray(series.values, dtype=np.float64)
-    n = len(series_values)
-
-    weights = np.arange(1, timeperiod + 1, dtype=np.float64)
-    sum_weights = np.sum(weights)
-    
-    from numpy.lib.stride_tricks import sliding_window_view
-    windows = sliding_window_view(series_values, window_shape=timeperiod)
-    
-    weighted_sums = np.sum(windows * weights, axis=1)
-    wma_values = weighted_sums / sum_weights
-    
-    result_values = np.full(n, np.nan, dtype=np.float64)
-    result_values[timeperiod - 1:] = wma_values
-    
-    return pd.Series(result_values, index=series.index)
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _wma_core(values, timeperiod)
+    return pd.Series(result, index=series.index)
 
 def ichimoku(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
     """Ichimoku Cloud"""
@@ -723,72 +1119,15 @@ def aobv(close: pd.Series, volume: pd.Series, fast_period: int = 5, slow_period:
 
 def psar(high: np.ndarray, low: np.ndarray, acceleration_start: float = 0.02, acceleration_step: float = 0.02, max_acceleration: float = 0.2) -> np.ndarray:
     """Parabolic SAR"""
-    n = len(high)
-    psar = np.zeros(n, dtype=np.float64)  # Initialize PSAR as a NumPy array
-    trend = np.empty(n, dtype=np.int32)  # Use np.empty instead of np.ones
-    trend.fill(1)  # Fill with 1 for uptrend, -1 for downtrend
-    ep = np.zeros(n, dtype=np.float64)  # Extreme point
-
-    # Initialize first values
-    psar[0] = low[0]
-    ep[0] = high[0]
-    af = acceleration_start
-
-    for i in range(1, n):
-        # Calculate SAR for current period
-        if trend[i-1] == 1:
-            diff = ep[i-1] - psar[i-1]
-            accel_component = af * diff
-            psar[i] = psar[i-1] + accel_component
-        else:
-            diff = psar[i-1] - ep[i-1]
-            accel_component = af * diff
-            psar[i] = psar[i-1] - accel_component
-
-        trend_reversal = trend[i-1] == 1 and low[i] < psar[i]
-        if trend[i-1] == 1:
-            if low[i] < psar[i]:
-                trend[i] = -1
-                psar[i] = ep[i-1]
-                ep[i] = low[i]
-            else:
-                trend[i] = 1
-                if high[i] > ep[i-1]:
-                    ep[i] = high[i]
-                    af = min(af + acceleration_step, max_acceleration)
-                else:
-                    ep[i] = ep[i-1]
-        else:
-            if high[i] > psar[i]:
-                trend[i] = 1
-                psar[i] = ep[i-1]
-                ep[i] = high[i]
-            else:
-                trend[i] = -1
-                if low[i] < ep[i-1]:
-                    ep[i] = low[i]
-                    af = min(af + acceleration_step, max_acceleration)
-                else:
-                    ep[i] = ep[i-1]
-
-    return psar
+    high_vals = np.asarray(high, dtype=np.float64)
+    low_vals = np.asarray(low, dtype=np.float64)
+    return _psar_core(high_vals, low_vals, acceleration_start, acceleration_step, max_acceleration)
 
 def kalman_filter(series: pd.Series, process_noise: float = 0.01, measurement_noise: float = 0.1) -> pd.Series:
     """Kalman Filter"""
-    x_estimate = np.zeros_like(series)
-    P = 1
-    Q = process_noise
-    R = measurement_noise
-
-    for i in range(1, len(series)):
-        x_prediction = x_estimate[i-1]
-        P_prediction = P + Q #increase uncertainty
-
-        K = P_prediction / (P_prediction + R) #kalman gain
-        x_estimate[i] = x_prediction + K * (series[i] - x_prediction) #correct estimate with new measurement
-        P = (1 - K) * P_prediction #update uncertainty
-
-    return pd.Series(x_estimate, index=series.index)
+    values = np.asarray(series.values, dtype=np.float64)
+    result = _kalman_filter_core(values, process_noise, measurement_noise)
+    return pd.Series(result, index=series.index)
 
 def identify_candlestick_patterns(open_prices: np.ndarray, high_prices: np.ndarray, low_prices: np.ndarray, close_prices: np.ndarray, patterns: Optional[list[str]] = None) -> pd.DataFrame:
     """
