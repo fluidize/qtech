@@ -156,7 +156,7 @@ class VectorizedBacktesting:
         if verbose:
             print(f"[green]Strategy execution time: {end_time - start_time:.2f} seconds[/green]")
             if self.slippage_pct > 0 or self.commission_fixed > 0:
-                print(f"[blue]Costs: {self.slippage_pct*100:.3f}% slippage + {self.commission_fixed:.2f} fixed[/blue]")
+                print(f"[blue]Costs: {self.slippage_pct:.3f}% slippage + {self.commission_fixed:.2f} fixed[/blue]")
             if self.leverage != 1.0:
                 print(f"[yellow]Leverage: {self.leverage}x[/yellow]")
 
