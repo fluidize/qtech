@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
-from scipy.stats import percentileofscore
 from scipy import signal
 from typing import Optional
 from numba import njit
@@ -818,15 +817,6 @@ def zscore(series: pd.Series, timeperiod: int = 20) -> pd.Series:
 def volatility(series: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Volatility"""
     return series.rolling(window=timeperiod).std()
-
-def percent_rank(series: pd.Series, timeperiod: int = 14) -> pd.Series:
-    """Percent Rank"""
-    def percentile_rank(window):
-        if len(window) == 0:
-            return np.nan
-        return percentileofscore(window, window.iloc[-1]) 
-    
-    return series.rolling(window=timeperiod).apply(percentile_rank, raw=False)
 
 def get_date_range_periods(df: pd.DataFrame, unit: str = 'days') -> float:
     """
