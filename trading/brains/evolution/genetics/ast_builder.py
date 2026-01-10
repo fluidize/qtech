@@ -286,6 +286,7 @@ class LogicToLogic(LogicGene):
         self.logic_variable_names = logic_variable_names
         self.left_logic_variable_name = self.logic_variable_names[self.left_logic_index]
         self.right_logic_variable_name = self.logic_variable_names[self.right_logic_index]
+
         self.variable_name = f"LOGIC_COMPOSITE_{unique_counter()}" if self.variable_name is None else self.variable_name
     
     def get_name(self):
@@ -394,44 +395,22 @@ class Genome:
         self.logic_genes = logic_genes
         self.signal_genes = signal_genes
 
-        self.build_genome()
+        indicator_ast_list, logic_ast_list, algorithm_parameter_specs = self._prepare_genes()
 
-    def build_genome(self):
-        self.function_ast, self.param_space = self._construct_algorithm()
+        self.function_ast, self.param_space = self._construct_algorithm(indicator_ast_list=indicator_ast_list, logic_ast_list=logic_ast_list, algorithm_parameter_specs=algorithm_parameter_specs)
         self.param_space = paramspecs_to_dict(self.param_space)
         self.compiled_function = ast_to_function(self.function_ast)
         self.compiled_function.param_space = self.param_space
-        self.sequence_dict = self._build_sequence_dict()
-    
-    def _build_sequence_dict(self):
-        sequence_dict = {}
-        indicator_variable_names = []
-        for gene in self.indicator_genes:
-            for name in gene.get_names():
-                indicator_variable_names.append(name)
-                sequence_dict[name] = gene
-        
-        simple_logic = [g for g in self.logic_genes if not isinstance(g, LogicToLogic)]
-        composite_logic = [g for g in self.logic_genes if isinstance(g, LogicToLogic)]
-        
-        logic_variable_names = []
-        for gene in simple_logic:
-            gene.load_indicators(indicator_variable_names)
-            logic_variable_names.append(gene.get_name())
-            sequence_dict[gene.get_name()] = gene
-        
-        for gene in composite_logic:
-            gene.load_logic(logic_variable_names)
-            logic_variable_names.append(gene.get_name())
-            sequence_dict[gene.get_name()] = gene
-        
-        for gene in self.signal_genes:
-            gene.load_logic(logic_variable_names)
-            sequence_dict[gene.get_name()] = gene
-        
-        return sequence_dict
 
-    def _construct_algorithm(self):
+        self.sequence_dict = {}
+        for gene in self.indicator_genes + self.logic_genes + self.signal_genes:
+            if isinstance(gene, IndicatorGene):
+                for name in gene.get_names():
+                    self.sequence_dict[name] = gene
+            else:
+                self.sequence_dict[gene.get_name()] = gene
+
+    def _prepare_genes(self):
         algorithm_parameter_specs = [] #all algorithm parameter search spaces to be fed into bayes opt engine
 
         indicator_ast_list = []
@@ -444,29 +423,22 @@ class Genome:
         logic_ast_list = []
         logic_variable_names = []
         
-        simple_logic_genes = []
-        composite_logic_genes = []
-        for gene in self.logic_genes:
-            if isinstance(gene, LogicToLogic):
-                composite_logic_genes.append(gene)
+        for logic_gene in self.logic_genes:
+            if isinstance(logic_gene, LogicToLogic):
+                logic_gene.load_logic(logic_variable_names)
             else:
-                simple_logic_genes.append(gene)
-        
-        for simple_logic_gene in simple_logic_genes:
-            simple_logic_gene.load_indicators(indicator_variable_names)
-            logic_ast_list.append(simple_logic_gene.to_ast())
-            logic_variable_names.append(simple_logic_gene.get_name())
-            algorithm_parameter_specs.extend(simple_logic_gene.get_parameter_specs())
-
-        for composite_logic_gene in composite_logic_genes:
-            composite_logic_gene.load_logic(logic_variable_names)
-            logic_ast_list.append(composite_logic_gene.to_ast())
-            logic_variable_names.append(composite_logic_gene.get_name())
-            algorithm_parameter_specs.extend(composite_logic_gene.get_parameter_specs())
+                logic_gene.load_indicators(indicator_variable_names)
+            logic_variable_names.append(logic_gene.get_name())
+            logic_ast_list.append(logic_gene.to_ast())
+            algorithm_parameter_specs.extend(logic_gene.get_parameter_specs())
 
         for signal_gene in self.signal_genes:
             signal_gene.load_logic(logic_variable_names)
 
+        return indicator_ast_list, logic_ast_list, algorithm_parameter_specs
+
+    
+    def _construct_algorithm(self, indicator_ast_list, logic_ast_list, algorithm_parameter_specs):
         #signals = pd.Series(0, index=data.index)
         signals_init = ast.Assign(
             targets=[ast.Name(id="signals", ctx=ast.Store())],
@@ -521,7 +493,6 @@ class Genome:
                         used_logic_genes.append(ref_gene)
             i += 1
         
-        # Find all used indicator genes directly
         used_indicator_genes = []
         for gene in used_logic_genes:
             if isinstance(gene, IndicatorToIndicator):
@@ -534,11 +505,9 @@ class Genome:
                 if ref_gene and ref_gene not in used_indicator_genes:
                     used_indicator_genes.append(ref_gene)
 
-        # Filter genes
         self.logic_genes = [g for g in self.logic_genes if g in used_logic_genes]
         self.indicator_genes = [g for g in self.indicator_genes if g in used_indicator_genes]
         
-        # Rebuild variable name lists from filtered genes to get correct indices
         indicator_variable_names = []
         for gene in self.indicator_genes:
             indicator_variable_names.extend(gene.get_names())
@@ -564,7 +533,42 @@ class Genome:
         for gene in self.signal_genes:
             gene.set_index(logic_variable_names.index(gene.long_logic_variable_name), logic_variable_names.index(gene.short_logic_variable_name))
         
-        self.build_genome()
+        #prepare genes differently
+        algorithm_parameter_specs = []
+
+        indicator_ast_list = []
+        indicator_variable_names = []
+        for gene in self.indicator_genes:
+            indicator_ast_list.append(gene.to_ast())
+            indicator_variable_names.extend(gene.get_names())
+            algorithm_parameter_specs.extend(gene.get_parameter_specs())
+
+        logic_ast_list = []
+        
+        for logic_gene in self.logic_genes:
+            if isinstance(logic_gene, LogicToLogic):
+                logic_gene.load_logic(logic_variable_names)
+            else:
+                logic_gene.load_indicators(indicator_variable_names)
+            logic_variable_names.append(logic_gene.get_name())
+            logic_ast_list.append(logic_gene.to_ast())
+            algorithm_parameter_specs.extend(logic_gene.get_parameter_specs())
+
+        for signal_gene in self.signal_genes:
+            signal_gene.load_logic(logic_variable_names)
+
+        self.function_ast, self.param_space = self._construct_algorithm(indicator_ast_list=indicator_ast_list, logic_ast_list=logic_ast_list, algorithm_parameter_specs=algorithm_parameter_specs)
+        self.param_space = paramspecs_to_dict(self.param_space)
+        self.compiled_function = ast_to_function(self.function_ast)
+        self.compiled_function.param_space = self.param_space
+
+        self.sequence_dict = {}
+        for gene in self.indicator_genes + self.logic_genes + self.signal_genes:
+            if isinstance(gene, IndicatorGene):
+                for name in gene.get_names():
+                    self.sequence_dict[name] = gene
+            else:
+                self.sequence_dict[gene.get_name()] = gene
 
     def get_function_ast(self) -> ast.AST:
         return self.function_ast

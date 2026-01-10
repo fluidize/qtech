@@ -22,7 +22,7 @@ vb.fetch_data(symbol="SOL-USDT", days=365, interval="30m", age_days=0, data_sour
 
 start_time = time()
 log = {}
-population = generate_population(size=10000, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=1)
+population = generate_population(size=10000, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=0)
 for genome in population:
     genome.remove_unused_genes()
 end_time = time()
