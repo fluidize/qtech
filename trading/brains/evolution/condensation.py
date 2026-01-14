@@ -14,7 +14,7 @@ faulthandler.enable()
 
 vb = VectorizedBacktesting(instance_name="Condensation",
     initial_capital=10000,
-    slippage_pct=0.0,
+    slippage_pct=0.01,
     commission_fixed=0.0,
     leverage=1.0
 )
@@ -48,7 +48,10 @@ for genome in population:
     progress_bar.update(1)
 progress_bar.close()
 
-best_genome = max(log, key=lambda x: log[x][1])
+sorted_log = sorted(log.items(), key=lambda x: x[1][1], reverse=True)
+top_5 = sorted_log[:5]  
+
+best_genome = top_5[0][0]
 display_ast(best_genome.get_function_ast())
 print(f"Params: {log[best_genome][0]}")
 
@@ -57,6 +60,9 @@ print(vb.get_performance_metrics())
 vb.plot_performance(mode="standard")
 
 with open("best.txt", "w") as f:
-    f.write(unparsify(best_genome.get_function_ast()))
-    f.write(f"\nParams: {log[best_genome][0]}")
-    f.write(f"\nSearch Space: {log[best_genome][1]}")
+    for i, (genome, (params, metric)) in enumerate(top_5, 1):
+        f.write(f"=== Algorithm {i} (Metric: {metric}) ===\n")
+        f.write(unparsify(genome.get_function_ast()))
+        f.write(f"\nparams={params}")
+        f.write(f"\nsearch_space={genome.get_param_space()}")
+        f.write(f"\n\n")
