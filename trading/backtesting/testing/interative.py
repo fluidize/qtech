@@ -10,8 +10,13 @@ import trading.technical_analysis as ta
 
 def strategy(data):
     upside_probabilities = pd.Series(0.0, index=data.index, dtype=float)
+
+    mean = ta.sma(data['Close'], timeperiod=100)
+    volatility = ta.volatility(data['Close'], timeperiod=100)
+    zscore = (data['Close'] - mean) / volatility
+
     for i in range(1, len(data)):
-        available_data = data.iloc[100:i]
+        available_data = data.iloc[i-365:i]
         if len(available_data) < 2:
             continue
         counts, bin_edges = np.histogram(available_data['Close'], bins=100)
@@ -25,7 +30,7 @@ def strategy(data):
 
         upside_probabilities.iloc[i] = upside_probability
     signals = upside_probabilities
-    return signals, (upside_probabilities, False)
+    return signals, (upside_probabilities, False), (zscore, False)
 
 vb = VectorizedBacktesting(
     instance_name="default",
@@ -34,6 +39,6 @@ vb = VectorizedBacktesting(
     commission_fixed=0.00,
     leverage=1.0
 )
-vb.fetch_data(symbol="PEPE-USDT", days=1800, interval="1d", age_days=0, data_source="binance", cache_expiry_hours=48)
+vb.fetch_data(symbol="SPY", days=1800, interval="1d", age_days=0, data_source="yfinance", cache_expiry_hours=48)
 vb.run_strategy(strategy, verbose=True)
 vb.plot_performance(mode="standard")
