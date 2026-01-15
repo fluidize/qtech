@@ -38,7 +38,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
         if file_age_hours < cache_expiry_hours:
             try:
                 cached_data = pd.read_parquet(cache_file)
-                print(f"[blue]USING CACHE {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB)") if verbose else None
+                print(f"[blue]USING CACHE {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB, {cached_data.shape[0]} bars)") if verbose else None
 
                 with open(f"{cache_file}.json", "w") as f:
                     json.dump({
@@ -64,9 +64,6 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
         start_date = end_date - timedelta(days=days)
         
         data = yf.download(symbol, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'), interval=interval, progress=False, auto_adjust=True, threads=False)
-        
-        difference = end_date - start_date
-        print(f"\n{symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds")
 
         data.sort_index(inplace=True)
         if isinstance(data.columns, pd.MultiIndex):
@@ -148,11 +145,6 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
             data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
 
         if not data.empty:
-            earliest = min(times)
-            latest = max(times)
-            difference = latest - earliest
-            print(f"{symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
-
             data["Datetime"] = pd.to_datetime(data['Datetime'], unit='s')
             data.sort_values('Datetime', inplace=True)
             data = data.drop_duplicates(subset=['Datetime'], keep='first')
@@ -225,11 +217,10 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
                     })
 
                 temp_data = pd.DataFrame(records)
-                return chunk_index, temp_data, start_time, end_time
+                return chunk_index, temp_data
 
         async def download_all_chunks():
             chunk_results = []
-            times = []
             max_concurrent = min(25, chunks)
             semaphore = asyncio.Semaphore(max_concurrent)
             
@@ -243,19 +234,17 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
                 
                 for coro in asyncio.as_completed(tasks):
                     try:
-                        chunk_index, temp_data, start_time, end_time = await coro
+                        chunk_index, temp_data = await coro
                         chunk_results.append((chunk_index, temp_data))
-                        times.append(start_time)
-                        times.append(end_time)
                         progress_bar.update(1)
                     except Exception as e:
                         print(f"[red]Error downloading chunk: {e}[/red]")
                         progress_bar.update(1)
             
             progress_bar.close()
-            return chunk_results, times
+            return chunk_results
 
-        chunk_results, times = asyncio.run(download_all_chunks())
+        chunk_results = asyncio.run(download_all_chunks())
 
         chunk_results.sort(key=lambda x: x[0])
         
@@ -266,11 +255,6 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
             data = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
 
         if not data.empty:
-            earliest = min(times)
-            latest = max(times)
-            difference = latest - earliest
-            print(f"{binance_symbol} | {difference.days} days {difference.seconds//3600} hours {difference.seconds//60%60} minutes {difference.seconds%60} seconds | {data.shape[0]} bars")
-
             data["Datetime"] = pd.to_datetime(data['Datetime'], unit='s')
             data.sort_values('Datetime', inplace=True)
             data.reset_index(drop=True, inplace=True)
@@ -287,7 +271,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
     if cache_expiry_hours > 0 and not data.empty and len(data) > 0:
         try:
             data.to_parquet(cache_file)
-            print(f"[blue]Data cached to {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB)")
+            print(f"[blue]Data cached to {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB {len(data)} bars)")
 
             with open(f"{cache_file}.json", "w") as f:
                 json.dump({
