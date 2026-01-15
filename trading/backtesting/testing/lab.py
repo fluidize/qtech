@@ -2,8 +2,6 @@ from rich import print
 import pandas as pd
 import numpy as np
 
-import sys
-sys.path.append("")
 from trading.backtesting.backtesting import VectorizedBacktesting
 from trading.backtesting.algorithm_optim import QuantitativeScreener
 import trading.backtesting.testing.cstrats as cs

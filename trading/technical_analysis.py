@@ -169,18 +169,13 @@ def _adx_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, timeperiod: 
     
     tr[0] = high[0] - low[0]
     for i in range(1, n):
-        tr1 = high[i] - low[i]
-        tr2 = abs(high[i] - close[i - 1])
-        tr3 = abs(low[i] - close[i - 1])
-        tr[i] = max(tr1, max(tr2, tr3))
+        tr[i] = max(high[i] - low[i], max(abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1])))
         
         high_diff = high[i] - high[i - 1]
         low_diff = low[i - 1] - low[i]
         
-        if high_diff > 0 and high_diff > low_diff:
-            plus_dm[i] = high_diff
-        if low_diff > 0 and low_diff > high_diff:
-            minus_dm[i] = low_diff
+        plus_dm[i] = high_diff if (high_diff > 0 and high_diff > low_diff) else 0.0
+        minus_dm[i] = low_diff if (low_diff > 0 and low_diff > high_diff) else 0.0
     
     tr_smooth = _ema_core(tr, timeperiod)
     plus_dm_smooth = _ema_core(plus_dm, timeperiod)
@@ -189,19 +184,36 @@ def _adx_core(high: np.ndarray, low: np.ndarray, close: np.ndarray, timeperiod: 
     plus_di = np.full(n, np.nan, dtype=np.float64)
     minus_di = np.full(n, np.nan, dtype=np.float64)
     dx = np.full(n, np.nan, dtype=np.float64)
-    adx = np.full(n, np.nan, dtype=np.float64)
     
     for i in range(timeperiod, n):
-        if tr_smooth[i] > 0:
-            plus_di[i] = 100.0 * (plus_dm_smooth[i] / tr_smooth[i])
-            minus_di[i] = 100.0 * (minus_dm_smooth[i] / tr_smooth[i])
+        tr_val = tr_smooth[i]
+        if tr_val > 0:
+            plus_di[i] = 100.0 * plus_dm_smooth[i] / tr_val
+            minus_di[i] = 100.0 * minus_dm_smooth[i] / tr_val
             
             di_sum = plus_di[i] + minus_di[i]
             if di_sum > 0:
-                di_diff = abs(plus_di[i] - minus_di[i])
-                dx[i] = 100.0 * (di_diff / di_sum)
+                dx[i] = 100.0 * abs(plus_di[i] - minus_di[i]) / di_sum
     
-    adx = _ema_core(dx, timeperiod)
+    adx = np.full(n, np.nan, dtype=np.float64)
+    adx_start = 2 * timeperiod - 1
+    
+    if adx_start >= n:
+        return adx, plus_di, minus_di
+    
+    first_valid = timeperiod
+    while first_valid < n and np.isnan(dx[first_valid]):
+        first_valid += 1
+    
+    if first_valid >= n:
+        return adx, plus_di, minus_di
+    
+    alpha = 2.0 / (timeperiod + 1.0)
+    adx[adx_start] = dx[first_valid]
+    
+    for i in range(adx_start + 1, n):
+        dx_val = dx[i]
+        adx[i] = alpha * dx_val + (1 - alpha) * adx[i - 1] if not np.isnan(dx_val) else adx[i - 1]
     
     return adx, plus_di, minus_di
 
