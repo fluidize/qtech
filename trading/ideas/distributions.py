@@ -4,7 +4,7 @@ import numpy as np
 import trading.technical_analysis as ta
 import trading.model_tools as mt
 
-data = mt.fetch_data(symbol="DOGE-USDT", days=1800, interval="1d", age_days=0, data_source="binance")
+data = mt.fetch_data(symbol="DOGE-USDT", days=1800, interval="1d", age_days=0, data_source="binance", cache_expiry_hours=48)
 
 X, _, _ = ta.adx(data['High'], data['Low'], data['Close'], timeperiod=14)
 X.dropna(inplace=True)
@@ -18,5 +18,5 @@ print(f"Historical Downside Probability: {sum(counts[bin_centers<current_price])
 
 plt.bar(bin_centers, counts, width=np.diff(bin_edges))
 plt.axvline(x=current_price, color='red', linestyle='--')
-plt.show()
+plt.show(block=False)
 
