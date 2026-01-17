@@ -4,8 +4,7 @@ import ast
 from genetics.ast_builder import Genome, IndicatorGene, IndicatorToConstant, IndicatorToPrice, IndicatorToIndicator, LogicToLogic, SignalGene
 from genetics.gp_tools import get_indicators, random_comparison_operator, random_composition_operator
 
-EXCLUDED_INDICATORS = ["hma", "percent_rank", "ichimoku"]
-#either noncausal or expensive
+EXCLUDED_INDICATORS = ["mass_index", "hma", "percent_rank", "ichimoku"]
 
 def generate_indicator_gene():
     return IndicatorGene(function=random.choice(get_indicators(exclude=EXCLUDED_INDICATORS)))
