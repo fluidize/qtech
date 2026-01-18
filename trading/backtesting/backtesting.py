@@ -12,7 +12,7 @@ class VectorizedBacktesting:
         instance_name: str = "default",
         initial_capital: float = 10000.0,
         slippage_pct: float = 0.001,
-        commission_fixed: float = 1.0,
+        commission_fixed: float = 0.0,
         leverage: float = 1.0,
     ):
         self.instance_name = instance_name
