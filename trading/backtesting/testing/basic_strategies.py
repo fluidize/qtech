@@ -109,8 +109,8 @@ def hold_strategy(data: pd.DataFrame, signal: int = 3) -> pd.Series:
 
 def signal_spam(data: pd.DataFrame) -> pd.Series:
     signals = pd.Series(2, index=data.index)
-    signals[data['Close'] > data['Open']] = 3
-    signals[data['Close'] < data['Open']] = 1
+    signals[data['Close'] > data['Open']] = 1
+    signals[data['Close'] < data['Open']] = -1
     return signals
 
 def perfect_strategy(data: pd.DataFrame) -> pd.Series:
@@ -121,27 +121,27 @@ def perfect_strategy(data: pd.DataFrame) -> pd.Series:
     
     for i in range(2, len(data)-2):
         if data['Open'].iloc[i+2] > data['Open'].iloc[i+1]:
-            signals.iloc[i] = 3
-        elif data['Open'].iloc[i+2] < data['Open'].iloc[i+1]:
             signals.iloc[i] = 1
+        elif data['Open'].iloc[i+2] < data['Open'].iloc[i+1]:
+            signals.iloc[i] = -1
         else:
-            signals.iloc[i] = 2
+            signals.iloc[i] = 0
     
     return signals
 
 def zscore_reversion_strategy(data: pd.DataFrame, zscore_threshold: float = 1) -> pd.Series:
     signals = pd.Series(2, index=data.index)
     zscore = ta.zscore(data['Close'])
-    signals[zscore < -1] = 3
-    signals[zscore > 1] = 1
+    signals[zscore < -1] = 1
+    signals[zscore > 1] = -1
     return signals
 
 def zscore_momentum_strategy(data: pd.DataFrame, zscore_threshold: float = 0.1) -> pd.Series:
     signals = pd.Series(0, index=data.index)
 
     zscore = ta.zscore(data['Close'])
-    signals[zscore > zscore_threshold] = 3
-    signals[zscore < -zscore_threshold] = 2
+    signals[zscore > zscore_threshold] = 1
+    signals[zscore < -zscore_threshold] = -1
     return signals
 
 def ma_crossover_strategy(data: pd.DataFrame, fast_period: int = 50, slow_period: int = 200) -> pd.Series:
@@ -149,8 +149,8 @@ def ma_crossover_strategy(data: pd.DataFrame, fast_period: int = 50, slow_period
 
     ma_fast = ta.sma(data['Close'], timeperiod=fast_period) 
     ma_slow = ta.sma(data['Close'], timeperiod=slow_period)
-    signals[ma_fast > ma_slow] = 3
-    signals[ma_fast < ma_slow] = 2
+    signals[ma_fast > ma_slow] = 1
+    signals[ma_fast < ma_slow] = -1
 
     return signals
 
@@ -164,8 +164,8 @@ def heikin_ashi_strategy(data: pd.DataFrame, fast_ma_window: int = 5, slow_ma_wi
     fast_ma = ta.sma(ha_data['Close'], timeperiod=fast_ma_window)
     slow_ma = ta.sma(ha_data['Close'], timeperiod=slow_ma_window)
 
-    signals[fast_ma > slow_ma] = 3
-    signals[fast_ma < slow_ma] = 2
+    signals[fast_ma > slow_ma] = 1
+    signals[fast_ma < slow_ma] = -1
 
     return signals
 
@@ -180,7 +180,7 @@ def supertrend_strategy(data: pd.DataFrame, supertrend_window: int = 10, supertr
         multiplier=supertrend_multiplier
     )
 
-    signals[supertrend == -1] = 3
-    signals[supertrend == 1] = 2
+    signals[supertrend == -1] = 1
+    signals[supertrend == 1] = -1
 
     return signals
