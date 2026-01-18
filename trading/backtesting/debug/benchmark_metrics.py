@@ -1,7 +1,3 @@
-"""
-Benchmark script to evaluate execution times of all performance metrics functions.
-Tests scaling behavior across different data sizes to analyze Big O complexity.
-"""
 import time
 import pandas as pd
 import numpy as np
@@ -11,12 +7,9 @@ from rich.table import Table
 from rich import print as rprint
 import matplotlib.pyplot as plt
 
-import sys
-sys.path.append("")
-sys.path.append("trading/backtesting")
-import vb_metrics as metrics
-from backtesting import VectorizedBacktesting
-from basic_strategies import signal_spam
+import trading.backtesting.vb_metrics as metrics
+from trading.backtesting.backtesting import VectorizedBacktesting
+from trading.backtesting.basic_strategies import signal_spam
 
 def generate_backtest_data(n_days: int, interval: str = "1h") -> dict:
     """Generate backtest data for a given number of days."""
