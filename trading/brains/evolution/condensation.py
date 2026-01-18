@@ -1,5 +1,6 @@
 from trading.backtesting.backtesting import VectorizedBacktesting
 from trading.backtesting.algorithm_optim import BayesianOptimizer
+import trading.model_tools as mt
 
 from evolution import generate_population
 from genetics.gp_tools import display_ast, unparsify, ast_to_function
@@ -8,6 +9,8 @@ import ast
 from tqdm import tqdm
 from rich import print
 from time import time
+
+import heapq
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import faulthandler
@@ -41,7 +44,7 @@ def evaluate_genome(args):
         strategy_func=strategy_func, 
         param_space=param_space, 
         metric="Alpha * (Total_Trades ** (1/2)) * np.clip((1 + Max_Drawdown), 0, None)",
-        n_trials=15,
+        n_trials=20,
         direction="maximize",
         callbacks=[quickstop_callback],
         show_progress_bar=False
@@ -51,8 +54,7 @@ def evaluate_genome(args):
 
 if __name__ == "__main__":
     start_time = time()
-    log = {}
-    population = generate_population(size=1000, min_indicators=2, max_indicators=6, min_logic=2, max_logic=6, allow_logic_composition=True, logic_composition_prob=0.5)
+    population = generate_population(size=10000, min_indicators=2, max_indicators=8, min_logic=2, max_logic=8, allow_logic_composition=True, logic_composition_prob=0.5)
     for genome in population:
         genome.remove_unused_genes()
     end_time = time()
@@ -61,28 +63,30 @@ if __name__ == "__main__":
     vb_config = {
         "instance_name": "Condensation",
         "initial_capital": 10000,
-        "slippage_pct": 0.01,
+        "slippage_pct": 0.05,
         "commission_fixed": 0.0,
         "leverage": 1.0
     }
 
     data_config = {
-        "symbol": "SOL-USDT",
-        "days": 900,
-        "interval": "4h",
+        "symbol": "JUP-USDT",
+        "days": 1095,
+        "interval": "1h",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": 48,
         "verbose": False
     }
+    mt.fetch_data(**data_config) #cache so the system doesnt multithread downloading same data
 
-    progress_bar = tqdm(total=len(population), desc="Evaluating population")
     genome_data = []
     for i, genome in enumerate(population):
         ast_str = unparsify(genome.get_function_ast())
         param_space = genome.get_param_space()
         genome_data.append((i, ast_str, param_space))
 
+    log = {}
+    progress_bar = tqdm(total=len(population), desc="Evaluating population")
     with ProcessPoolExecutor() as executor:
         futures = {executor.submit(evaluate_genome, (i, ast_str, param_space, vb_config, data_config)): i 
                    for i, ast_str, param_space in genome_data}
