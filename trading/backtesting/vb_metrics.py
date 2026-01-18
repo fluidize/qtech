@@ -166,8 +166,8 @@ def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days:
     
     return sortino_annualized
 
-def get_trade_pnls(position: pd.Series, open_prices: pd.Series) -> List[float]:
-    f"""Calculate P&L % for each trade from position and open prices. Only works for signals {0,1}"""
+def get_trade_pnls(position: pd.Series, open_prices: pd.Series, initial_capital: float) -> List[float]:
+    f"""Calculate P&L (in dollars) for each trade from position and open prices. Only works for signals {0,1}"""
     # Identify entries and exits
     prev_pos = position.shift(1)
 
@@ -177,11 +177,9 @@ def get_trade_pnls(position: pd.Series, open_prices: pd.Series) -> List[float]:
     entry_prices = open_prices[entries].values
     exit_prices  = open_prices[exits].values
 
-    print(entry_prices, exit_prices)
-
     n = min(len(entry_prices), len(exit_prices)) #align in case last trade never exited
 
-    return (exit_prices[:n] - entry_prices[:n]) / entry_prices[:n]
+    return ((exit_prices[:n] - entry_prices[:n])) * (initial_capital / entry_prices[:n])
 
 def get_win_rate(position: pd.Series, open_prices: pd.Series) -> float:
     """Calculate win rate from position and open prices."""
