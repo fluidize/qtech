@@ -102,13 +102,13 @@ def take_profit_filter(data: pd.DataFrame, signals: pd.Series, tp_pct: float) ->
     
     return filtered_signals
 
-def hold_strategy(data: pd.DataFrame, signal: int = 3) -> pd.Series:
+def hold_strategy(data: pd.DataFrame, signal: int = 0) -> pd.Series:
     signals = pd.Series(signal, index=data.index)
     signals = stop_loss_filter(data, signals, 0.01)
     return signals
 
 def signal_spam(data: pd.DataFrame) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
+    signals = pd.Series(0, index=data.index)
     signals[data['Close'] > data['Open']] = 1
     signals[data['Close'] < data['Open']] = -1
     return signals
@@ -117,7 +117,7 @@ def perfect_strategy(data: pd.DataFrame) -> pd.Series:
     """
     Perfect strategy that uses all information.
     """
-    signals = pd.Series(2, index=data.index)
+    signals = pd.Series(0, index=data.index)
     
     for i in range(2, len(data)-2):
         if data['Open'].iloc[i+2] > data['Open'].iloc[i+1]:
@@ -130,7 +130,7 @@ def perfect_strategy(data: pd.DataFrame) -> pd.Series:
     return signals
 
 def zscore_reversion_strategy(data: pd.DataFrame, zscore_threshold: float = 1) -> pd.Series:
-    signals = pd.Series(2, index=data.index)
+    signals = pd.Series(0, index=data.index)
     zscore = ta.zscore(data['Close'])
     signals[zscore < -1] = 1
     signals[zscore > 1] = -1
