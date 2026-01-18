@@ -1,6 +1,6 @@
 import numpy as np
 from trading.backtesting.backtesting import VectorizedBacktesting
-import vb_metrics as metrics
+import trading.backtesting.vb_metrics as metrics
 
 class MonteCarloAnalysis:
     def __init__(self, strategy, strategy_params, engine: VectorizedBacktesting):
@@ -14,7 +14,7 @@ class MonteCarloAnalysis:
         self.engine.run_strategy(self.strategy, **self.strategy_params)
         self.pnls = metrics.get_trade_pnls(self.engine.data['Position'], self.engine.data['Open'], self.engine.initial_capital)
 
-    def run_simulation(self, num_simulations: int, num_trades: int):
+    def run_simulations(self, num_simulations: int, num_trades: int):
         if self.pnls is None:
             raise ValueError("Distribution not built. Call build_distribution() first.")
         simulated_pnls = np.random.choice(self.pnls, size=(num_simulations, num_trades), replace=True)
@@ -24,11 +24,11 @@ class MonteCarloAnalysis:
         if self.pnls is None:
             raise ValueError("Distribution not built. Call build_distribution() first.")
         import matplotlib.pyplot as plt
-        simulated_pnls = self.run_simulation(num_simulations, num_trades)
-        simulated_portfolios = np.cumsum(simulated_pnls, axis=0)
+        simulated_pnls = self.run_simulations(num_simulations, num_trades)
+        simulated_portfolios = np.cumsum(simulated_pnls, axis=1)
         plt.figure(figsize=(10, 6))
 
-        plt.plot(simulated_portfolios)
+        plt.plot(simulated_portfolios.T)
         plt.axhline(y=np.median(simulated_portfolios[:,-1]), color='red', linestyle='--')
 
         plt.title(f"Spaghetti Plot of {num_simulations} Simulations of {num_trades} Trades")
