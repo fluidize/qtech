@@ -3,7 +3,7 @@ sys.path.append("")
 
 import trading.backtesting.algorithm_optim as ao
 import trading.backtesting.testing.cstrats as cs
-import trading.backtesting.basic_strategies as bs
+import trading.backtesting.testing.basic_strategies as bs
 import pandas as pd
 
 mabo = ao.MultiAssetBayesianOptimizer(

@@ -1,6 +1,3 @@
-import sys
-sys.path.append("")
-
 from trading.backtesting.backtesting import VectorizedBacktesting
 import trading.technical_analysis as ta
 
