@@ -188,6 +188,7 @@ class VectorizedBacktesting:
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
+        r, r2 = metrics.get_r_and_r2(portfolio_value)
 
         return {
             'Total_Return': total_return,
@@ -200,6 +201,8 @@ class VectorizedBacktesting:
             'Sortino_Ratio': sortino_ratio,
             'Information_Ratio': info_ratio,
             'Total_Trades': metrics.get_total_trades(position),
+            'R': r,
+            'R2': r2,
         }
 
     def plot_performance(self, mode: str = "basic"):
