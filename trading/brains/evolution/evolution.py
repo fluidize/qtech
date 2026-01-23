@@ -6,8 +6,16 @@ from genetics.gp_tools import get_indicators, random_comparison_operator, random
 
 EXCLUDED_INDICATORS = ["mass_index", "hma", "percent_rank", "ichimoku"]
 
+_INDICATORS_CACHE = None
+
+def _get_indicators_cached():
+    global _INDICATORS_CACHE
+    if _INDICATORS_CACHE is None:
+        _INDICATORS_CACHE = get_indicators(exclude=EXCLUDED_INDICATORS)
+    return _INDICATORS_CACHE
+
 def generate_indicator_gene():
-    return IndicatorGene(function=random.choice(get_indicators(exclude=EXCLUDED_INDICATORS)))
+    return IndicatorGene(function=random.choice(_get_indicators_cached()))
 
 def generate_logic_gene_sequence(num_logic: int, num_indicators: int, allow_logic_composition: bool, logic_composition_prob: float):
     logic_genes = []
