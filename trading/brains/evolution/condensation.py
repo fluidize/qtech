@@ -10,6 +10,7 @@ from tqdm import tqdm
 from rich import print
 from time import time
 import matplotlib.pyplot as plt
+import os
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -42,7 +43,7 @@ def evaluate_genome(args):
     bo.optimize(
         strategy_func=strategy_func, 
         param_space=param_space, 
-        metric="Sharpe_Ratio * min(1, Total_Trades/500)",
+        metric="Sortino_Ratio * (Sortino_Ratio *Sharpe_Ratio)**2 * max(0, 1 + Max_Drawdown)",
         n_trials=n_trials,
         direction="maximize",
         callbacks=[quickstop_callback],
@@ -52,17 +53,12 @@ def evaluate_genome(args):
 
 
 if __name__ == "__main__":
-    start_time = time()
-    population = generate_population(size=10000, min_indicators=4, max_indicators=16, min_logic=4, max_logic=16, allow_logic_composition=True, logic_composition_prob=0.8)
-    for genome in population:
-        genome.remove_unused_genes()
-    end_time = time()
-    print(f"Genomes prepared in {end_time - start_time} seconds.")
+    POPULATION_SIZE = 10000
 
     vb_config = {
         "instance_name": "Condensation",
         "initial_capital": 1,
-        "slippage_pct": 0.04,
+        "slippage_pct": 0.05,
         "commission_fixed": 0.0,
         "leverage": 1.0
     }
@@ -70,29 +66,34 @@ if __name__ == "__main__":
     data_config = {
         "symbol": "SOL-USDT",
         "days": 800,
-        "interval": "15m",
+        "interval": "30m",
         "age_days": 0,
         "data_source": "binance",
-        "cache_expiry_hours": 48,
+        "cache_expiry_hours": 999,
         "verbose": False
     }
     mt.fetch_data(**data_config)
 
     passes = [
-        {"n_trials": 3, "keep_top_n": 1000},
-        {"n_trials": 10, "keep_top_n": 100},
-        {"n_trials": 20, "keep_top_n": 10},
-        {"n_trials": 50, "keep_top_n": 5}
+        {"n_trials": 1, "keep_top_n": 2000},
+        {"n_trials": 5, "keep_top_n": 500},
+        {"n_trials": 15, "keep_top_n": 100},
+        # {"n_trials": 50, "keep_top_n": 10}
     ]
 
-    for pass_num, pass_config in enumerate(passes, 1):
-        n_trials = pass_config["n_trials"]
-        keep_top_n = pass_config["keep_top_n"]
+    start_time = time()
+    population = generate_population(size=POPULATION_SIZE, min_indicators=2, max_indicators=8, min_logic=2, max_logic=8, allow_logic_composition=True, logic_composition_prob=0.8)
+    for genome in population:
+        genome.remove_unused_genes()
+    end_time = time()
+    print(f"Genomes prepared in {end_time - start_time} seconds.")
 
-        print(f"\n[bold cyan]Pass {pass_num}/{len(passes)}: {n_trials} trials, keeping top {keep_top_n}[/bold cyan]")
+    with ProcessPoolExecutor(max_workers=os.cpu_count()-1) as executor:
+        for pass_num, pass_config in enumerate(passes, 1):
+            n_trials = pass_config["n_trials"]
+            keep_top_n = pass_config["keep_top_n"]
 
-        progress_bar = tqdm(total=len(population), desc=f"Pass {pass_num}")
-        with ProcessPoolExecutor() as executor:
+            progress_bar = tqdm(total=len(population), desc=f"Pass {pass_num}")
             futures = {executor.submit(evaluate_genome, (i, unparsify(g.get_function_ast()), g.get_param_space(), vb_config, data_config, n_trials)): i
                        for i, g in enumerate(population)}
 
@@ -100,11 +101,10 @@ if __name__ == "__main__":
                 genome_index, (params, metric) = future.result()
                 population[genome_index].set_best(params, metric)
                 progress_bar.update(1)
-        progress_bar.close()
+            progress_bar.close()
 
-        if pass_num < len(passes):
-            population = sorted(population, key=lambda g: (m if (m := g.get_best_metric()) is not None else float("-inf")), reverse=True)[:keep_top_n]
-            print(f"[green]Kept top {len(population)} genomes for next pass[/green]")
+            if pass_num < len(passes):
+                population = sorted(population, key=lambda g: (m if (m := g.get_best_metric()) is not None else float("-inf")), reverse=True)[:keep_top_n]
 
     top_5 = sorted(population, key=lambda g: (m if (m := g.get_best_metric()) is not None else float("-inf")), reverse=True)[:5]
     best_genome = top_5[0]
