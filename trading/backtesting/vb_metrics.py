@@ -336,3 +336,21 @@ def get_trade_returns(position: pd.Series, open_prices: pd.Series) -> List[float
         prev_pos = current_pos
     
     return return_list
+
+def get_r_and_r2(portfolio_value: pd.Series) -> tuple[float, float]:
+    """Calculate R and R^2 from portfolio value. Returns R and R^2."""
+    y = portfolio_value
+    x = np.arange(len(y), dtype=np.float64)
+
+    # demean
+    x -= x.mean()
+    y = y - y.mean()
+
+    # correlation
+    denom = np.sqrt((x @ x) * (y @ y))
+    if denom == 0:
+        return 0.0, 0.0
+
+    r = (x @ y) / denom
+    r2 = r * r
+    return r, r2

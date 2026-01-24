@@ -1,12 +1,7 @@
 import numpy as np
 import pandas as pd
 
-import sys
-sys.path.append("")
-
-import trading.backtesting.basic_strategies as bs
 import trading.technical_analysis as ta
-import trading.smc_analysis as smc
 
 #cryptocurrency specific strategies
 

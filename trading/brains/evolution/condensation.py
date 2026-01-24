@@ -1,5 +1,4 @@
 from trading.backtesting.backtesting import VectorizedBacktesting
-from trading.backtesting.algorithm_optim import BayesianOptimizer
 import trading.backtesting.mc_analysis as mc
 import trading.model_tools as mt
 
@@ -10,6 +9,10 @@ import ast
 from tqdm import tqdm
 from rich import print
 from time import time
+<<<<<<< HEAD
+=======
+import matplotlib.pyplot as plt
+>>>>>>> 616335ed2a38ede0f174c42c07f10e2d9239da9b
 import os
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -29,6 +32,7 @@ def evaluate_genome(args):
     from trading.backtesting.backtesting import VectorizedBacktesting
     from trading.backtesting.algorithm_optim import BayesianOptimizer
     from trading.brains.evolution.genetics.gp_tools import ast_to_function
+    from trading.backtesting.mc_analysis import MonteCarloAnalysis
     
     ast_node = ast.parse(ast_str, mode='exec')
     function_ast = ast_node.body[0]
@@ -42,27 +46,31 @@ def evaluate_genome(args):
     bo.optimize(
         strategy_func=strategy_func, 
         param_space=param_space, 
-        metric="Sharpe_Ratio * min(1, Total_Trades/100)",
+        metric="Sortino_Ratio * (Sortino_Ratio *Sharpe_Ratio)**2 * max(0, 1 + Max_Drawdown)",
         n_trials=n_trials,
         direction="maximize",
-        callbacks=[],
+        callbacks=[quickstop_callback],
         show_progress_bar=False
     )
     return genome_index, bo.get_best()
 
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     start_time = time()
     population = generate_population(size=1000, min_indicators=2, max_indicators=8, min_logic=2, max_logic=8, allow_logic_composition=True, logic_composition_prob=0.5)
     for genome in population:
         genome.remove_unused_genes()
     end_time = time()
     print(f"Genomes prepared in {end_time - start_time} seconds.")
+=======
+    POPULATION_SIZE = 10000
+>>>>>>> 616335ed2a38ede0f174c42c07f10e2d9239da9b
 
     vb_config = {
         "instance_name": "Condensation",
         "initial_capital": 1,
-        "slippage_pct": 0.04,
+        "slippage_pct": 0.05,
         "commission_fixed": 0.0,
         "leverage": 1.0
     }
@@ -73,21 +81,26 @@ if __name__ == "__main__":
         "interval": "30m",
         "age_days": 0,
         "data_source": "binance",
-        "cache_expiry_hours": 48,
+        "cache_expiry_hours": 999,
         "verbose": False
     }
     mt.fetch_data(**data_config)
 
     passes = [
-        {"n_trials": 5, "keep_top_n": 1000},
-        {"n_trials": 10, "keep_top_n": 100},
-        {"n_trials": 20, "keep_top_n": 10},
-        {"n_trials": 50, "keep_top_n": 5}
+        {"n_trials": 1, "keep_top_n": 2000},
+        {"n_trials": 5, "keep_top_n": 500},
+        {"n_trials": 15, "keep_top_n": 100},
+        # {"n_trials": 50, "keep_top_n": 10}
     ]
 
-    current_population = population
-    log = {}
+    start_time = time()
+    population = generate_population(size=POPULATION_SIZE, min_indicators=2, max_indicators=8, min_logic=2, max_logic=8, allow_logic_composition=True, logic_composition_prob=0.8)
+    for genome in population:
+        genome.remove_unused_genes()
+    end_time = time()
+    print(f"Genomes prepared in {end_time - start_time} seconds.")
 
+<<<<<<< HEAD
     for pass_num, pass_config in enumerate(passes, 1):
         n_trials = pass_config["n_trials"]
         keep_top_n = pass_config["keep_top_n"]
@@ -100,38 +113,43 @@ if __name__ == "__main__":
         with ProcessPoolExecutor(max_workers=os.cpu_count()-1) as executor:
             futures = {executor.submit(evaluate_genome, (i, unparsify(genome.get_function_ast()), genome.get_param_space(), vb_config, data_config, n_trials)): i 
                        for i, genome in enumerate(current_population)}
+=======
+    with ProcessPoolExecutor(max_workers=os.cpu_count()-1) as executor:
+        for pass_num, pass_config in enumerate(passes, 1):
+            n_trials = pass_config["n_trials"]
+            keep_top_n = pass_config["keep_top_n"]
+
+            progress_bar = tqdm(total=len(population), desc=f"Pass {pass_num}")
+            futures = {executor.submit(evaluate_genome, (i, unparsify(g.get_function_ast()), g.get_param_space(), vb_config, data_config, n_trials)): i
+                       for i, g in enumerate(population)}
+>>>>>>> 616335ed2a38ede0f174c42c07f10e2d9239da9b
 
             for future in as_completed(futures):
-                genome_index, result = future.result()
-                pass_log[current_population[genome_index]] = result
+                genome_index, (params, metric) = future.result()
+                population[genome_index].set_best(params, metric)
                 progress_bar.update(1)
-        progress_bar.close()
+            progress_bar.close()
 
-        log.update(pass_log)
-        
-        if pass_num < len(passes):
-            sorted_pass_log = sorted(pass_log.items(), key=lambda x: x[1][1], reverse=True)
-            current_population = [genome for genome, _ in sorted_pass_log[:keep_top_n]]
-            print(f"[green]Kept top {len(current_population)} genomes for next pass[/green]")
+            if pass_num < len(passes):
+                population = sorted(population, key=lambda g: (m if (m := g.get_best_metric()) is not None else float("-inf")), reverse=True)[:keep_top_n]
 
-    sorted_log = sorted(log.items(), key=lambda x: x[1][1], reverse=True)
-    top_5 = sorted_log[:5]
-
-    best_genome = top_5[0][0]
+    top_5 = sorted(population, key=lambda g: (m if (m := g.get_best_metric()) is not None else float("-inf")), reverse=True)[:5]
+    best_genome = top_5[0]
     display_ast(best_genome.get_function_ast())
 
     vb = VectorizedBacktesting(**vb_config)
     vb.fetch_data(**data_config)
 
-    mc_analysis = mc.MonteCarloAnalysis(best_genome.get_compiled_function(), log[best_genome][0], vb)
+    mc_analysis = mc.MonteCarloAnalysis(best_genome.get_compiled_function(), best_genome.get_best_params(), vb)
     mc_analysis.build_distribution()
     mc_analysis.spaghetti_plot(1000, 1000)
 
-    vb.run_strategy(best_genome.get_compiled_function(), **log[best_genome][0])
+    vb.run_strategy(best_genome.get_compiled_function(), **best_genome.get_best_params())
     vb.plot_performance(mode="standard")
 
     with open("best.txt", "w") as f:
-        for i, (genome, (params, metric)) in enumerate(top_5, 1):
+        for i, genome in enumerate(top_5, 1):
+            params, metric = genome.get_best_params(), genome.get_best_metric()
             f.write(f"=== Algorithm {i} (Metric: {metric}) ===\n")
             f.write(unparsify(genome.get_function_ast()))
             f.write(f"\nparams={params}")

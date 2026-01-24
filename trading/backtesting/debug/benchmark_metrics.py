@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 import trading.backtesting.vb_metrics as metrics
 from trading.backtesting.backtesting import VectorizedBacktesting
-from trading.backtesting.basic_strategies import signal_spam
+from trading.backtesting.testing.basic_strategies import signal_spam
 
 def generate_backtest_data(n_days: int, interval: str = "1h") -> dict:
     """Generate backtest data for a given number of days."""
@@ -108,6 +108,10 @@ def benchmark_function_at_size(func_name: str, func, sample_data: dict, n_runs: 
                 start = time.perf_counter()
                 result = func(sample_data['position'], sample_data['open_prices'])
                 elapsed = time.perf_counter() - start
+            elif func_name == 'get_r_and_r2':
+                start = time.perf_counter()
+                result = func(sample_data['portfolio_value'])
+                elapsed = time.perf_counter() - start
             else:
                 return float('inf')
             
@@ -156,6 +160,7 @@ def benchmark_all_metrics(data_sizes: List[int] = [30, 60, 90, 180, 365], interv
         ('get_rr_ratio', metrics.get_rr_ratio),
         ('get_breakeven_rate', metrics.get_breakeven_rate),
         ('get_profit_factor', metrics.get_profit_factor),
+        ('get_r_and_r2', metrics.get_r_and_r2),
     ]
     
     results = {}

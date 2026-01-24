@@ -1,7 +1,7 @@
 import pandas as pd
 import ast
 import inspect
-import copy
+import numpy as np
 
 from .param_space import registered_param_specs, ParamSpec
 from .gp_tools import unique_counter, make_compare, ast_to_function, paramspecs_to_dict
@@ -409,6 +409,19 @@ class Genome:
                     self.sequence_dict[name] = gene
             else:
                 self.sequence_dict[gene.get_name()] = gene
+
+        self._best_params = None
+        self._best_metric = None
+
+    def get_best_params(self) -> dict | None:
+        return self._best_params
+
+    def get_best_metric(self) -> float | None:
+        return self._best_metric
+
+    def set_best(self, params: dict, metric: float) -> None:
+        self._best_params = params
+        self._best_metric = metric
 
     def _prepare_genes(self):
         algorithm_parameter_specs = [] #all algorithm parameter search spaces to be fed into bayes opt engine
