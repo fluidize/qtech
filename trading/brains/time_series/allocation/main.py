@@ -137,7 +137,8 @@ class PriceDataset(Dataset):
         if shifted_cols:
             self.X = pd.concat([self.X, pd.DataFrame(shifted_cols)], axis=1)
 
-        y = pd.Series(savgol_filter(self.data['Close'].rolling(window=5).mean(), window_length=20, polyorder=4, deriv=1), index=self.data.index)
+        #y = pd.Series(savgol_filter(self.data['Close'], window_length=20, polyorder=4, deriv=1), index=self.data.index)
+        y = pd.Series(self.data['Close'].pct_change())
         y[y > 0] = 1
         y[y < 0] = 0
 
@@ -230,11 +231,11 @@ if __name__ == "__main__":
     import faulthandler
     faulthandler.enable()
 
-    epochs = 10000
+    epochs = 2500
     shifts = 10
     
-    dataset = PriceDataset(mt.fetch_data(symbol="BTC-USDT", days=10, interval="30m", age_days=0, data_source="binance"), shift=shifts)
-    dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
+    dataset = PriceDataset(mt.fetch_data(symbol="BTC-USDT", days=10, interval="30m", age_days=40, data_source="binance"), shift=shifts)
+    dataloader = DataLoader(dataset, batch_size=480, shuffle=True)
 
     model = AllocationModel(input_dim=dataset.X.shape[1])
     optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -256,7 +257,7 @@ if __name__ == "__main__":
     progress_bar.close()
 
     plt.plot(losses)
-    plt.show()
+    plt.show(block=False)
 
     def model_wrapper(data):
         dataset = PriceDataset(data, shift=shifts)
@@ -276,6 +277,6 @@ if __name__ == "__main__":
         commission_fixed=0.0,
         leverage=1.0
     )
-    vb.fetch_data(symbol="BTC-USDT", days=10, interval="30m", age_days=0, data_source="binance")
+    vb.fetch_data(symbol="BTC-USDT", days=40, interval="30m", age_days=0, data_source="binance")
     vb.run_strategy(model_wrapper, verbose=True)
     vb.plot_performance(mode="basic")
