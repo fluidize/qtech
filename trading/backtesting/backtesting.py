@@ -232,7 +232,7 @@ class VectorizedBacktesting:
             ax[1].legend(["Position"])
 
             plt.title(f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return']*100:.3f}% | Alpha: {summary['Alpha']*100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown']*100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}")
-            plt.show()
+            plt.show(block=False)
 
         elif mode == "standard":
             #y1 for price, y2 for portfolio, y3 for active returns, y4 for indicators
