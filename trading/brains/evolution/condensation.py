@@ -10,6 +10,7 @@ import ast
 from tqdm import tqdm
 from rich import print
 from time import time
+import os
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -52,7 +53,7 @@ def evaluate_genome(args):
 
 if __name__ == "__main__":
     start_time = time()
-    population = generate_population(size=10000, min_indicators=2, max_indicators=8, min_logic=2, max_logic=8, allow_logic_composition=True, logic_composition_prob=0.5)
+    population = generate_population(size=1000, min_indicators=2, max_indicators=8, min_logic=2, max_logic=8, allow_logic_composition=True, logic_composition_prob=0.5)
     for genome in population:
         genome.remove_unused_genes()
     end_time = time()
@@ -96,7 +97,7 @@ if __name__ == "__main__":
         pass_log = {}
         progress_bar = tqdm(total=len(current_population), desc=f"Pass {pass_num}")
         
-        with ProcessPoolExecutor() as executor:
+        with ProcessPoolExecutor(max_workers=os.cpu_count()-1) as executor:
             futures = {executor.submit(evaluate_genome, (i, unparsify(genome.get_function_ast()), genome.get_param_space(), vb_config, data_config, n_trials)): i 
                        for i, genome in enumerate(current_population)}
 
