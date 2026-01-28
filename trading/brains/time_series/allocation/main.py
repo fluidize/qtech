@@ -1,16 +1,20 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from pandas._libs.tslibs.ccalendar import DAYS
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
-
+from sklearn.model_selection import train_test_split
 from scipy.signal import savgol_filter
+import matplotlib.pyplot as plt
+
+import faulthandler
+faulthandler.enable()
 
 import trading.model_tools as mt
 import trading.technical_analysis as ta
+from trading.backtesting.backtesting import VectorizedBacktesting
 
 class PriceDataset(Dataset):
     def __init__(self, data: pd.DataFrame, shift: int = 0):
@@ -22,7 +26,7 @@ class PriceDataset(Dataset):
         open_price = self.data['Open']
         volume = self.data['Volume']
         
-        adx, plus_di, minus_di = ta.adx(high, low, close, timeperiod=14)
+        # Oscillators
         macd_line, macd_signal, macd_hist = ta.macd(close)
         macd_dema_line, macd_dema_signal, macd_dema_hist = ta.macd_dema(close)
         aroon_up, aroon_down = ta.aroon(high, low, timeperiod=14)
@@ -31,102 +35,55 @@ class PriceDataset(Dataset):
         ppo_line, ppo_signal, ppo_hist = ta.ppo(close)
         bb_upper, bb_middle, bb_lower = ta.bbands(close, timeperiod=20)
         kc_upper, kc_middle, kc_lower = ta.keltner_channels(high, low, close, timeperiod=20)
-        vwap_upper, vwap_middle, vwap_lower = ta.vwap_bands(high, low, close, volume, timeperiod=20)
-        aobv_fast, aobv_slow = ta.aobv(close, volume)
-        elder_ray_bull, elder_ray_bear = ta.elder_ray(high, low, close, timeperiod=13)
+        
+        # Momentum
+        # (computed inline)
+        
+        # Volatility
+        # (computed inline)
         
         self.X = pd.DataFrame({
-            'returns_5': close.pct_change(5),
-            'macd_dema_hist': macd_dema_hist,
-            'awesome_oscillator': ta.awesome_oscillator(high, low, fast_period=5, slow_period=34),
-            'elder_ray_bear': elder_ray_bear,
-            'elder_ray_bear': elder_ray_bear,
-            'elder_ray_bear': elder_ray_bear,
-            'elder_ray_bear': elder_ray_bear,
-            'hurst_exponent': ta.hurst_exponent(close, max_lag=20),
-            'hurst_exponent': ta.hurst_exponent(close, max_lag=20),
-            'elder_ray_bear': elder_ray_bear,
-            'vzo': ta.volume_zone_oscillator(close, volume),
-            'vzo': ta.volume_zone_oscillator(close, volume),
-            'hurst_exponent': ta.hurst_exponent(close, max_lag=20),
-            'hurst_exponent': ta.hurst_exponent(close, max_lag=20),
-            'choppiness_index': ta.choppiness_index(high, low, close, timeperiod=14),
-            'mass_index': ta.mass_index(high, low, timeperiod=25),
-            'vzo': ta.volume_zone_oscillator(close, volume),
-            'mass_index': ta.mass_index(high, low, timeperiod=25),
-            'vzo': ta.volume_zone_oscillator(close, volume),
-            'hurst_exponent': ta.hurst_exponent(close, max_lag=20),
-            'minus_di': minus_di,
-            'aobv_slow': aobv_slow,
-            'mass_index': ta.mass_index(high, low, timeperiod=25),
-            'aobv_slow': aobv_slow,
-            'mass_index': ta.mass_index(high, low, timeperiod=25),
-            'stoch_d': stoch_d,
-            'vzo': ta.volume_zone_oscillator(close, volume),
-            'stoch_d': stoch_d,
-            'dpo_20': ta.dpo(close, timeperiod=20),
-            'elder_ray_bull': elder_ray_bull,
-            'aobv_slow': aobv_slow,
-            'dpo_20': ta.dpo(close, timeperiod=20),
-            'fisher_transform': ta.fisher_transform(close, timeperiod=10),
-            'obv': ta.obv(close, volume),
-            'aobv_slow': aobv_slow,
-            'stoch_d': stoch_d,
-            'mass_index': ta.mass_index(high, low, timeperiod=25),
-            'pvt': ta.pvt(close, volume),
-            'obv': ta.obv(close, volume),
-            'dpo_20': ta.dpo(close, timeperiod=20),
-            'cmf_20': ta.cmf(high, low, close, volume, timeperiod=20),
-            'stoch_d': stoch_d,
-            'plus_di': plus_di,
-            'price_cycle': ta.price_cycle(close, cycle_period=20),
-            'pvt': ta.pvt(close, volume),
-            'obv': ta.obv(close, volume),
-            'dpo_20': ta.dpo(close, timeperiod=20),
-            'mfi_14': ta.mfi(high, low, close, volume, timeperiod=14),
-            'aobv_slow': aobv_slow,
-            'kc_width': (kc_upper - kc_lower) / kc_middle,
-            'pvt': ta.pvt(close, volume),
-            'roc_10': ta.roc(close, timeperiod=10),
-            'bb_width': (bb_upper - bb_lower) / bb_middle,
-            'mom_10': ta.mom(close, timeperiod=10),
-            'aroon_down': aroon_down,
-            'ppo_hist': ppo_hist,
-            'vwap_lower': vwap_lower,
-            'ppo_signal': ppo_signal,
-            'macd_line': macd_line,
-            'macd_signal': macd_signal,
-            'tsi_line': tsi_line,
-            'log_return': ta.log_return(close),
-            'mom_20': ta.mom(close, timeperiod=20),
-            'macd_dema_signal': macd_dema_signal,
+            # Oscillators
             'stoch_k': stoch_k,
-            'zscore_20': ta.zscore(close, timeperiod=20),
-            'aroon_oscillator': aroon_up - aroon_down,
+            'stoch_d': stoch_d,
             'rsi_14': ta.rsi(close, timeperiod=14),
-            'macd_dema_line': macd_dema_line,
             'rsi_21': ta.rsi(close, timeperiod=21),
-            'vwap': ta.vwap(high, low, close, volume),
             'willr_14': ta.willr(high, low, close, timeperiod=14),
+            'awesome_oscillator': ta.awesome_oscillator(high, low, fast_period=5, slow_period=34),
+            'aroon_oscillator': aroon_up - aroon_down,
+            'fisher_transform': ta.fisher_transform(close, timeperiod=10),
+            'vzo': ta.volume_zone_oscillator(close, volume),
+            'mfi_14': ta.mfi(high, low, close, volume, timeperiod=14),
+            'cmf_20': ta.cmf(high, low, close, volume, timeperiod=20),
+            'rvi': ta.rvi(open_price, high, low, close, timeperiod=10),
+            'tsi_line': tsi_line,
+            'tsi_signal': tsi_signal,
             'ppo_line': ppo_line,
-            'vwap_lower': vwap_lower,
             'ppo_signal': ppo_signal,
+            'ppo_hist': ppo_hist,
             'macd_line': macd_line,
             'macd_signal': macd_signal,
-            'price_cycle': ta.price_cycle(close, cycle_period=20),
-            'zscore_50': ta.zscore(close, timeperiod=50),
-            'rvi': ta.rvi(open_price, high, low, close, timeperiod=10),
             'macd_hist': macd_hist,
-            'aroon_up': aroon_up,
-            'tsi_signal': tsi_signal,
-            'volatility_20': ta.volatility(close, timeperiod=20),
-            'roc_10': ta.roc(close, timeperiod=10),
-            'atr_14': ta.atr(high, low, close, timeperiod=14),
-            'mom_10': ta.mom(close, timeperiod=10),
-            'roc_20': ta.roc(close, timeperiod=20),
-            'atr_20': ta.atr(high, low, close, timeperiod=20),
-            'tsi_line': tsi_line,
+            'macd_dema_line': macd_dema_line,
+            'macd_dema_signal': macd_dema_signal,
+            'macd_dema_hist': macd_dema_hist,
+            
+            # Momentum
+            'returns_5': close.pct_change(5),
             'log_return': ta.log_return(close),
+            'roc_10': ta.roc(close, timeperiod=10),
+            'roc_20': ta.roc(close, timeperiod=20),
+            'mom_10': ta.mom(close, timeperiod=10),
+            'mom_20': ta.mom(close, timeperiod=20),
+            'dpo_20': ta.dpo(close, timeperiod=20),
+            
+            # Volatility
+            'volatility_20': ta.volatility(close, timeperiod=20),
+            'atr_14': ta.atr(high, low, close, timeperiod=14),
+            'atr_20': ta.atr(high, low, close, timeperiod=20),
+            'bb_width': (bb_upper - bb_lower) / bb_middle,
+            'kc_width': (kc_upper - kc_lower) / kc_middle,
+            'choppiness_index': ta.choppiness_index(high, low, close, timeperiod=14),
         })
 
         shifted_cols = {}
@@ -137,10 +94,10 @@ class PriceDataset(Dataset):
         if shifted_cols:
             self.X = pd.concat([self.X, pd.DataFrame(shifted_cols)], axis=1)
 
-        #y = pd.Series(savgol_filter(self.data['Close'], window_length=20, polyorder=4, deriv=1), index=self.data.index)
-        y = pd.Series(self.data['Close'].pct_change())
-        y[y > 0] = 1
-        y[y < 0] = 0
+        y = pd.Series(savgol_filter(self.data['Close'], window_length=25, polyorder=3, deriv=1), index=self.data.index)
+        #y = pd.Series(self.data['Close'].pct_change())
+        # y[y > 0] = 1
+        # y[y < 0] = 0
 
         mask = ~(self.X.isna().any(axis=1) | y.isna())
         self.valid_indices = self.data.index[mask]
@@ -163,30 +120,39 @@ class AllocationModel(nn.Module):
         self.feature_block = nn.Sequential(
             nn.Linear(input_dim, 128),
             nn.LayerNorm(128),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(128, 64),
-            nn.LayerNorm(64),
-            nn.GELU(),
+            nn.Linear(128, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
             nn.Dropout(dropout)
         )
         self.main_network = nn.Sequential(
-            nn.Linear(64, 128),
-            nn.LayerNorm(128),
-            nn.GELU(),
-            nn.Dropout(dropout),
             nn.Linear(128, 64),
             nn.LayerNorm(64),
-            nn.GELU(),
+            nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(64, 1)
+            # nn.Linear(128, 64),
+            # nn.LayerNorm(64),
+            # nn.ReLU(),
+            # nn.Dropout(dropout),
+            nn.Linear(64, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.feature_block(x)
         x = self.main_network(x)
-        x = nn.Sigmoid()(x)
+        #x = nn.Sigmoid()(x)
         return x.squeeze()
+
+class Loss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, output, target):
+        # loss = -(target * torch.log(output) + (1 - target) * torch.log(1 - output)).mean()
+        loss = torch.pow(output - target, 2).mean()
+        return loss
 
 def train_model(model, dataloader, loss_fn, optimizer, device):
     model.train()
@@ -199,17 +165,6 @@ def train_model(model, dataloader, loss_fn, optimizer, device):
         loss.backward()
         optimizer.step()
         total_loss += loss.item() * len(X_batch)
-    return total_loss / len(dataloader.dataset)
-
-def evaluate_model(model, dataloader, loss_fn, device):
-    model.eval()
-    total_loss = 0
-    with torch.no_grad():
-        for X_batch, y_batch in dataloader:
-            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-            output = model(X_batch)
-            loss = loss_fn(output, y_batch)
-            total_loss += loss.item() * len(X_batch)
     return total_loss / len(dataloader.dataset)
 
 def evaluate_accuracy(model, dataloader, device):
@@ -225,58 +180,58 @@ def evaluate_accuracy(model, dataloader, device):
             total += y_batch.size(0)
     return correct / total
 
-if __name__ == "__main__":
-    from trading.backtesting.backtesting import VectorizedBacktesting
-    import matplotlib.pyplot as plt
-    import faulthandler
-    faulthandler.enable()
-
-    epochs = 2500
-    shifts = 10
+def model_wrapper(data):
+    dataset = PriceDataset(data, shift=SHIFTS)
+    model.eval()
+    with torch.no_grad():
+        X_tensor = torch.tensor(dataset.X, dtype=torch.float32).to(device)
+        predictions = model(X_tensor).cpu().numpy()
     
-    dataset = PriceDataset(mt.fetch_data(symbol="BTC-USDT", days=10, interval="30m", age_days=40, data_source="binance"), shift=shifts)
-    dataloader = DataLoader(dataset, batch_size=480, shuffle=True)
+    signals = pd.Series(0.0, index=data.index)
+    signals.loc[dataset.valid_indices] = predictions
+    return signals
 
-    model = AllocationModel(input_dim=dataset.X.shape[1])
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    loss_fn = nn.BCELoss()
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"Using device: {device}")
-    model = model.to(device)
+### Training ###
 
-    progress_bar = tqdm(total=epochs, desc="Training")
-    losses = []
-    for epoch in range(epochs):
-        loss = train_model(model, dataloader, loss_fn, optimizer, device)
-        val_loss = evaluate_model(model, dataloader, loss_fn, device)
-        accuracy = evaluate_accuracy(model, dataloader, device)
+EPOCHS = 100
+SHIFTS = 100
 
-        progress_bar.set_description(f"Epoch {epoch+1}, Loss: {loss}, Accuracy: {accuracy}")
-        losses.append(loss)
-        progress_bar.update(1)
-    progress_bar.close()
+data = mt.fetch_data(symbol="BTC-USDT", days=180, interval="1h", age_days=180, data_source="binance")
+train_data, test_data = train_test_split(data, test_size=0.2, shuffle=False) #do not shuffle
 
-    plt.plot(losses)
-    plt.show(block=False)
+train_dataset = PriceDataset(train_data, shift=SHIFTS)
+dataloader = DataLoader(train_dataset, batch_size=train_dataset.X.shape[0], shuffle=True)
 
-    def model_wrapper(data):
-        dataset = PriceDataset(data, shift=shifts)
-        model.eval()
-        with torch.no_grad():
-            X_tensor = torch.tensor(dataset.X, dtype=torch.float32).to(device)
-            predictions = model(X_tensor).cpu().numpy()
-        
-        signals = pd.Series(0.0, index=data.index)
-        signals.loc[dataset.valid_indices] = predictions
-        return signals
+model = AllocationModel(input_dim=train_dataset.X.shape[1])
+optimizer = optim.Adam(model.parameters())
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-8)
+loss_fn = Loss()
+# loss_fn = nn.BCELoss()
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"Using device: {device}")
+model = model.to(device)
 
-    vb = VectorizedBacktesting(
-        instance_name="AllocationModel",
-        initial_capital=10000,
-        slippage_pct=0.00,
-        commission_fixed=0.0,
-        leverage=1.0
-    )
-    vb.fetch_data(symbol="BTC-USDT", days=40, interval="30m", age_days=0, data_source="binance")
-    vb.run_strategy(model_wrapper, verbose=True)
-    vb.plot_performance(mode="basic")
+progress_bar = tqdm(total=EPOCHS, desc="Training")
+losses = []
+for epoch in range(EPOCHS):
+    loss = train_model(model, dataloader, loss_fn, optimizer, device)
+    scheduler.step()
+    #accuracy = evaluate_accuracy(model, dataloader, device)
+    progress_bar.set_description(f"Epoch {epoch+1}, Loss: {loss}")
+    losses.append(loss)
+    progress_bar.update(1)
+progress_bar.close()
+
+plt.plot(losses)
+plt.show(block=False)
+
+vb = VectorizedBacktesting(
+    instance_name="AllocationModel",
+    initial_capital=10000,
+    slippage_pct=0.00,
+    commission_fixed=0.0,
+    leverage=1.0
+)
+vb.load_data(test_data)
+vb.run_strategy(model_wrapper, verbose=True)
+vb.plot_performance(mode="basic")

@@ -15,7 +15,7 @@ fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(10, 10), sharex=True)
 window = 7
 
 ax1.plot(data["Close"])
-ax1.plot(data["Close"].rolling(window=window).mean(), color="red")
-ax2.plot(scipy.signal.savgol_filter(data["Close"].rolling(window=window).mean(), window_length=10, polyorder=4, deriv=1))
+ax1.plot(scipy.signal.savgol_filter(data["Close"], window_length=25, polyorder=2, deriv=0), color="red")
+ax2.plot(scipy.signal.savgol_filter(data["Close"], window_length=10, polyorder=2, deriv=2))
 
 plt.show()
