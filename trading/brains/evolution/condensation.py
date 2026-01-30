@@ -9,10 +9,7 @@ import ast
 from tqdm import tqdm
 from rich import print
 from time import time
-<<<<<<< HEAD
-=======
 import matplotlib.pyplot as plt
->>>>>>> 616335ed2a38ede0f174c42c07f10e2d9239da9b
 import os
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -46,7 +43,7 @@ def evaluate_genome(args):
     bo.optimize(
         strategy_func=strategy_func, 
         param_space=param_space, 
-        metric="Sortino_Ratio * (Sortino_Ratio *Sharpe_Ratio)**2 * max(0, 1 + Max_Drawdown)",
+        metric="(Sharpe_Ratio)**3 * max(0, 1 + Max_Drawdown) * Total_Trades * R2",
         n_trials=n_trials,
         direction="maximize",
         callbacks=[quickstop_callback],
@@ -56,16 +53,7 @@ def evaluate_genome(args):
 
 
 if __name__ == "__main__":
-<<<<<<< HEAD
-    start_time = time()
-    population = generate_population(size=1000, min_indicators=2, max_indicators=8, min_logic=2, max_logic=8, allow_logic_composition=True, logic_composition_prob=0.5)
-    for genome in population:
-        genome.remove_unused_genes()
-    end_time = time()
-    print(f"Genomes prepared in {end_time - start_time} seconds.")
-=======
     POPULATION_SIZE = 10000
->>>>>>> 616335ed2a38ede0f174c42c07f10e2d9239da9b
 
     vb_config = {
         "instance_name": "Condensation",
@@ -78,7 +66,7 @@ if __name__ == "__main__":
     data_config = {
         "symbol": "SOL-USDT",
         "days": 800,
-        "interval": "30m",
+        "interval": "15m",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": 999,
@@ -89,7 +77,7 @@ if __name__ == "__main__":
     passes = [
         {"n_trials": 1, "keep_top_n": 2000},
         {"n_trials": 5, "keep_top_n": 500},
-        {"n_trials": 15, "keep_top_n": 100},
+        {"n_trials": 5, "keep_top_n": 100},
         # {"n_trials": 50, "keep_top_n": 10}
     ]
 
@@ -100,20 +88,6 @@ if __name__ == "__main__":
     end_time = time()
     print(f"Genomes prepared in {end_time - start_time} seconds.")
 
-<<<<<<< HEAD
-    for pass_num, pass_config in enumerate(passes, 1):
-        n_trials = pass_config["n_trials"]
-        keep_top_n = pass_config["keep_top_n"]
-        
-        print(f"\n[bold cyan]Pass {pass_num}/{len(passes)}: {n_trials} trials, keeping top {keep_top_n}[/bold cyan]")
-        
-        pass_log = {}
-        progress_bar = tqdm(total=len(current_population), desc=f"Pass {pass_num}")
-        
-        with ProcessPoolExecutor(max_workers=os.cpu_count()-1) as executor:
-            futures = {executor.submit(evaluate_genome, (i, unparsify(genome.get_function_ast()), genome.get_param_space(), vb_config, data_config, n_trials)): i 
-                       for i, genome in enumerate(current_population)}
-=======
     with ProcessPoolExecutor(max_workers=os.cpu_count()-1) as executor:
         for pass_num, pass_config in enumerate(passes, 1):
             n_trials = pass_config["n_trials"]
@@ -122,7 +96,6 @@ if __name__ == "__main__":
             progress_bar = tqdm(total=len(population), desc=f"Pass {pass_num}")
             futures = {executor.submit(evaluate_genome, (i, unparsify(g.get_function_ast()), g.get_param_space(), vb_config, data_config, n_trials)): i
                        for i, g in enumerate(population)}
->>>>>>> 616335ed2a38ede0f174c42c07f10e2d9239da9b
 
             for future in as_completed(futures):
                 genome_index, (params, metric) = future.result()
@@ -139,13 +112,15 @@ if __name__ == "__main__":
 
     vb = VectorizedBacktesting(**vb_config)
     vb.fetch_data(**data_config)
-
-    mc_analysis = mc.MonteCarloAnalysis(best_genome.get_compiled_function(), best_genome.get_best_params(), vb)
-    mc_analysis.build_distribution()
-    mc_analysis.spaghetti_plot(1000, 1000)
-
     vb.run_strategy(best_genome.get_compiled_function(), **best_genome.get_best_params())
     vb.plot_performance(mode="standard")
+
+    num_trades = vb.get_performance_metrics()['Total_Trades']
+    
+    mc_analysis = mc.MonteCarloAnalysis(best_genome.get_compiled_function(), best_genome.get_best_params(), vb)
+    mc_analysis.build_distribution()
+    mc_analysis.spaghetti_plot(1000, num_trades)
+
 
     with open("best.txt", "w") as f:
         for i, genome in enumerate(top_5, 1):
