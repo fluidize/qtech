@@ -16,6 +16,6 @@ window = 7
 
 ax1.plot(data["Close"])
 ax1.plot(scipy.signal.savgol_filter(data["Close"], window_length=25, polyorder=2, deriv=0), color="red")
-ax2.plot(scipy.signal.savgol_filter(data["Close"], window_length=10, polyorder=2, deriv=2))
+ax2.plot(scipy.signal.savgol_filter(data["Close"], window_length=10, polyorder=2, deriv=1) / (data["Close"])) 
 
 plt.show()

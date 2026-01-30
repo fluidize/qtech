@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from sklearn.utils.validation import validate_data
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -94,7 +95,8 @@ class PriceDataset(Dataset):
         if shifted_cols:
             self.X = pd.concat([self.X, pd.DataFrame(shifted_cols)], axis=1)
 
-        y = pd.Series(savgol_filter(self.data['Close'], window_length=25, polyorder=3, deriv=1), index=self.data.index)
+        y = pd.Series(savgol_filter(self.data['Close'], window_length=100, polyorder=3, deriv=1), index=self.data.index)
+
         #y = pd.Series(self.data['Close'].pct_change())
         # y[y > 0] = 1
         # y[y < 0] = 0
@@ -117,32 +119,25 @@ class AllocationModel(nn.Module):
         super().__init__()
         self.input_dim = input_dim
         
-        self.feature_block = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
-            nn.Dropout(dropout)
-        )
         self.main_network = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.LayerNorm(64),
+            nn.ReLU(),
+#            nn.Dropout(dropout),
+            nn.Linear(64, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
+#            nn.Dropout(dropout),
             nn.Linear(128, 64),
             nn.LayerNorm(64),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            # nn.Linear(128, 64),
-            # nn.LayerNorm(64),
-            # nn.ReLU(),
-            # nn.Dropout(dropout),
+#            nn.Dropout(dropout),
             nn.Linear(64, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.feature_block(x)
         x = self.main_network(x)
-        #x = nn.Sigmoid()(x)
+        # x = nn.Sigmoid()(x)
         return x.squeeze()
 
 class Loss(nn.Module):
@@ -151,7 +146,7 @@ class Loss(nn.Module):
 
     def forward(self, output, target):
         # loss = -(target * torch.log(output) + (1 - target) * torch.log(1 - output)).mean()
-        loss = torch.pow(output - target, 2).mean()
+        loss = torch.abs(output - target).mean()
         return loss
 
 def train_model(model, dataloader, loss_fn, optimizer, device):
@@ -167,18 +162,21 @@ def train_model(model, dataloader, loss_fn, optimizer, device):
         total_loss += loss.item() * len(X_batch)
     return total_loss / len(dataloader.dataset)
 
-def evaluate_accuracy(model, dataloader, device):
+def evaluate_loss(model, dataloader, loss_fn, device):
+    """Evaluate model on validation/test set and return loss."""
     model.eval()
+    total_loss = 0
     correct = 0
     total = 0
     with torch.no_grad():
         for X_batch, y_batch in dataloader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             output = model(X_batch)
-            predictions = (output > 0.5).float()
-            correct += (predictions == y_batch).sum().item()
+            loss = loss_fn(output, y_batch)
+            total_loss += loss.item() * len(X_batch)
+            correct += ((output > 0.5) == y_batch).sum().item()
             total += y_batch.size(0)
-    return correct / total
+    return total_loss / len(dataloader.dataset), correct / total
 
 def model_wrapper(data):
     dataset = PriceDataset(data, shift=SHIFTS)
@@ -187,42 +185,88 @@ def model_wrapper(data):
         X_tensor = torch.tensor(dataset.X, dtype=torch.float32).to(device)
         predictions = model(X_tensor).cpu().numpy()
     
+    # predictions[predictions > 0] = 1
+    # predictions[predictions < 0] = -1
+
     signals = pd.Series(0.0, index=data.index)
     signals.loc[dataset.valid_indices] = predictions
     return signals
 
 ### Training ###
 
-EPOCHS = 100
+EPOCHS = 500
 SHIFTS = 100
+DATA = {
+    "symbol": "SOL-USDT",
+    "days": 180,
+    "interval": "30m",
+    "age_days": 0,
+    "data_source": "binance",
+    "cache_expiry_hours": 999,
+    "verbose": True
+}
 
-data = mt.fetch_data(symbol="BTC-USDT", days=180, interval="1h", age_days=180, data_source="binance")
-train_data, test_data = train_test_split(data, test_size=0.2, shuffle=False) #do not shuffle
+data = mt.fetch_data(**DATA)
+train_data, val_data = train_test_split(data, test_size=0.2, shuffle=False) #do not shuffle
 
 train_dataset = PriceDataset(train_data, shift=SHIFTS)
-dataloader = DataLoader(train_dataset, batch_size=train_dataset.X.shape[0], shuffle=True)
+val_dataset = PriceDataset(val_data, shift=SHIFTS)
+train_dataloader = DataLoader(train_dataset, batch_size=len(train_dataset), shuffle=True)
+val_dataloader = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=False)
+
+
 
 model = AllocationModel(input_dim=train_dataset.X.shape[1])
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), weight_decay=1e-5)  
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-8)
-loss_fn = Loss()
-# loss_fn = nn.BCELoss()
+
+loss_fn = nn.L1Loss()
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Using device: {device}")
 model = model.to(device)
 
+# Early stopping parameters
+patience = 50  # Number of epochs to wait before stopping
+best_val_loss = float('inf')
+best_val_accuracy = 0
+best_model_state = None
+
 progress_bar = tqdm(total=EPOCHS, desc="Training")
-losses = []
+train_losses = []
+val_losses = []
+val_accuracies = []
 for epoch in range(EPOCHS):
-    loss = train_model(model, dataloader, loss_fn, optimizer, device)
+    train_loss = train_model(model, train_dataloader, loss_fn, optimizer, device)
+    val_loss, val_accuracy = evaluate_loss(model, val_dataloader, loss_fn, device)
     scheduler.step()
-    #accuracy = evaluate_accuracy(model, dataloader, device)
-    progress_bar.set_description(f"Epoch {epoch+1}, Loss: {loss}")
-    losses.append(loss)
+    
+    train_losses.append(train_loss)
+    val_losses.append(val_loss)
+    val_accuracies.append(val_accuracy)
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_val_accuracy = val_accuracy
+        best_model_state = model.state_dict().copy()
+    
+    progress_bar.set_description(f"Epoch {epoch+1}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}, Val Accuracy: {val_accuracy:.6f}")
     progress_bar.update(1)
+
 progress_bar.close()
 
-plt.plot(losses)
+# Load best model
+if best_model_state is not None:
+    model.load_state_dict(best_model_state)
+    print(f"Loaded best model with validation loss: {best_val_loss:.6f} and validation accuracy: {best_val_accuracy:.6f}")
+
+plt.figure(figsize=(10, 5))
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Validation Loss')
+plt.plot(val_accuracies, label='Validation Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Training, Validation Loss, and Accuracy')
+plt.legend()
+plt.grid(True)
 plt.show(block=False)
 
 vb = VectorizedBacktesting(
@@ -232,6 +276,6 @@ vb = VectorizedBacktesting(
     commission_fixed=0.0,
     leverage=1.0
 )
-vb.load_data(test_data)
+vb.load_data(val_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
 vb.run_strategy(model_wrapper, verbose=True)
 vb.plot_performance(mode="basic")
