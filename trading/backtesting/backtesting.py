@@ -140,7 +140,6 @@ class VectorizedBacktesting:
         if self.data is None or self.data.empty:
             raise ValueError("No data available. Call fetch_data() first.")
 
-        import time
         start_time = time.time()
 
         self.strategy_output = strategy_func(self.data, **kwargs)
@@ -655,3 +654,55 @@ class MultiAssetBacktesting:
         plt.ylabel("Portfolio Value")
         plt.plot(self.weighted_portfolio_value)
         plt.show()
+
+class TorchBacktest:
+    def __init__(self):
+        import torch
+        self.torch = torch
+        self.dataset = None
+
+    def load_dataset(self, dataset):
+        self.dataset = dataset
+        return self.dataset
+    
+    def _model_wrapper(self, model, dataset, device):
+        model.eval()
+        with self.torch.no_grad():
+            X_tensor = self.torch.tensor(dataset.X, dtype=self.torch.float32).to(device)
+            predictions = model(X_tensor).cpu().numpy()
+
+        signals = pd.Series(0.0, index=list(range(len(dataset.X))))
+        signals.iloc[dataset.valid_indices] = predictions
+        return signals 
+    
+    def _torch_shift(self, series, shift: int = 1):
+        if shift > 0:
+            return self.torch.cat(self.torch.zeros(shift), series[:-shift])
+        elif shift < 0:
+            return self.torch.cat(series[shift:], self.torch.zeros(shift))
+        else:
+            return series
+    
+    def _exec_backtest(self, model, dataset, device):
+        open_prices = self.torch.tensor(dataset.data['Open'], dtype=self.torch.float32)
+        
+        open_returns = self.torch.subtract(open_prices, self._torch_shift(open_prices, -1))
+        raw_signals = self._model_wrapper(model, dataset, device)
+
+        position = self._torch_shift(raw_signals, 1)
+
+        strategy_returns = self.torch.multiply(position, open_returns)
+        portfolio_value = self.torch.cumsum(strategy_returns)
+
+        sharpe_ratio = self.torch.divide(self.torch.mean(strategy_returns), self.torch.std(strategy_returns))
+        
+        return {
+            'Signals': raw_signals,
+            'Portfolio_Value': portfolio_value,
+            'Strategy_Returns': strategy_returns,
+            'Sharpe_Ratio': sharpe_ratio,
+        }
+
+    def run_model(self, model, device):
+        pass
+        
