@@ -38,7 +38,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
         if file_age_hours < cache_expiry_hours:
             try:
                 cached_data = pd.read_parquet(cache_file)
-                print(f"[blue]USING CACHE {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB, {cached_data.shape[0]} bars)") if verbose else None
+                print(f"[blue]USING CACHE {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB {cached_data.shape[0]} bars)") if verbose else None
 
                 with open(f"{cache_file}.json", "w") as f:
                     json.dump({
