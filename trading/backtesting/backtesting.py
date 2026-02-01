@@ -656,53 +656,61 @@ class MultiAssetBacktesting:
         plt.show()
 
 class TorchBacktest:
-    def __init__(self):
+    def __init__(self, device: str = "cuda"):
         import torch
         self.torch = torch
+        self.device = device
         self.dataset = None
 
     def load_dataset(self, dataset):
+        "Expects a dataset with .X and .data"
         self.dataset = dataset
         return self.dataset
     
-    def _model_wrapper(self, model, dataset, device):
-        model.eval()
-        with self.torch.no_grad():
-            X_tensor = self.torch.tensor(dataset.X, dtype=self.torch.float32).to(device)
-            predictions = model(X_tensor).cpu().numpy()
+    def _model_wrapper(self, model, dataset):
+        X_tensor = self.torch.tensor(dataset.X, dtype=self.torch.float32, device=self.device)
+        predictions = model(X_tensor)
+        raw_signals_t = self.torch.zeros(len(dataset.data), device=self.device, dtype=predictions.dtype)
+        valid_positions = dataset.data.index.get_indexer(dataset.valid_indices)
+        raw_signals_t[valid_positions] = predictions
+        return raw_signals_t
 
-        signals = pd.Series(0.0, index=list(range(len(dataset.X))))
-        signals.iloc[dataset.valid_indices] = predictions
-        return signals 
-    
     def _torch_shift(self, series, shift: int = 1):
         if shift > 0:
-            return self.torch.cat(self.torch.zeros(shift), series[:-shift])
+            return self.torch.cat([self.torch.zeros(shift, device=self.device, dtype=series.dtype), series[:-shift]])
         elif shift < 0:
-            return self.torch.cat(series[shift:], self.torch.zeros(shift))
+            return self.torch.cat([series[-shift:], self.torch.zeros(-shift, device=self.device, dtype=series.dtype)])
         else:
             return series
-    
-    def _exec_backtest(self, model, dataset, device):
-        open_prices = self.torch.tensor(dataset.data['Open'], dtype=self.torch.float32)
-        
-        open_returns = self.torch.subtract(open_prices, self._torch_shift(open_prices, -1))
-        raw_signals = self._model_wrapper(model, dataset, device)
 
-        position = self._torch_shift(raw_signals, 1)
+    def _exec_backtest(self, model, dataset):
+        # pct_change().shift(-1)
+        open_prices = self.torch.tensor(dataset.data['Open'].values, dtype=self.torch.float32, device=self.device)
+        open_next = self._torch_shift(open_prices, -1)  
+        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
+        open_returns[-1] = 0.0 
 
-        strategy_returns = self.torch.multiply(position, open_returns)
-        portfolio_value = self.torch.cumsum(strategy_returns)
+        raw_signals_t = self._model_wrapper(model, dataset).clamp(0.0, 1.0)
+        # Position[t] = signal[t-1]; earn return Open[t] -> Open[t+1]
+        position = self._torch_shift(raw_signals_t, 1)
 
-        sharpe_ratio = self.torch.divide(self.torch.mean(strategy_returns), self.torch.std(strategy_returns))
-        
+        strategy_returns = position * open_returns
+        portfolio_value = self.torch.cumsum(strategy_returns, dim=0)
+
+        total_return = self.torch.subtract(portfolio_value[-1], portfolio_value[0])
+        excess_returns = self.torch.subtract(strategy_returns, open_returns)
+
+        sharpe_ratio = self.torch.divide(self.torch.mean(strategy_returns), self.torch.std(strategy_returns).clamp(min=1e-12))
+        information_ratio = self.torch.divide(self.torch.mean(excess_returns), self.torch.std(excess_returns))
+
         return {
-            'Signals': raw_signals,
+            'Signals': raw_signals_t,
             'Portfolio_Value': portfolio_value,
-            'Strategy_Returns': strategy_returns,
+            'Total_Return': total_return,
             'Sharpe_Ratio': sharpe_ratio,
+            'Information_Ratio': information_ratio,
         }
 
-    def run_model(self, model, device):
-        pass
+    def run_model(self, model):
+        return self._exec_backtest(model, self.dataset)
         
