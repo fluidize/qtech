@@ -43,7 +43,7 @@ def evaluate_genome(args):
     bo.optimize(
         strategy_func=strategy_func, 
         param_space=param_space, 
-        metric="(Sharpe_Ratio)**3 * max(0, 1 + Max_Drawdown) * Total_Trades * R2",
+        metric="Sortino_Ratio * (Sortino_Ratio *Sharpe_Ratio)**2 * max(0, 1 + Max_Drawdown) * min(500,Total_Trades) * R2",
         n_trials=n_trials,
         direction="maximize",
         callbacks=[quickstop_callback],
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     passes = [
         {"n_trials": 1, "keep_top_n": 2000},
         {"n_trials": 5, "keep_top_n": 500},
-        {"n_trials": 5, "keep_top_n": 100},
+        {"n_trials": 15, "keep_top_n": 100},
         # {"n_trials": 50, "keep_top_n": 10}
     ]
 
