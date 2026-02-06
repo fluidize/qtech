@@ -1,50 +1,74 @@
+import numpy as np
 import yfinance as yf
 from textual.app import App, ComposeResult
 from textual.widgets import Collapsible, Header, Footer, Input, Button, Static
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
-from datetime import datetime
+from scipy.interpolate import griddata
 
-def show_volatility_curve(ticker: str):
-    """Generate and display volatility curve for a given ticker"""
-    try:
-        # Get option chain data
-        ticker_obj = yf.Ticker(ticker)
-        expirations = ticker_obj.options
-        if not expirations:
-            raise ValueError(f"No options available for {ticker}")
-        expiration = expirations[0]
-        chain = ticker_obj.option_chain(expiration)
-        spot = ticker_obj.history(period="1d")['Close'].iloc[-1]
-        
-        # Filter OTM options
-        calls = chain.calls.copy()
-        puts = chain.puts.copy()
-        otm_calls = calls[calls['strike'] > spot]
-        otm_puts = puts[puts['strike'] < spot]
-        
-        # Get implied volatility data
-        otm_calls_iv = otm_calls.impliedVolatility
-        otm_puts_iv = otm_puts.impliedVolatility
-        otm_calls_strike = otm_calls['strike']
-        otm_puts_strike = otm_puts['strike']
+from trading.options.curve.main import get_option_chain, filter_otm, get_option_iv, days_to_expiry
 
-        # Create and display the plot
-        plt.figure(figsize=(10, 6))
-        plt.plot(otm_calls_strike, otm_calls_iv, label='OTM Calls', color='green', marker='o')
-        plt.plot(otm_puts_strike, otm_puts_iv, label='OTM Puts', color='red', marker='o')
-        plt.axvline(spot, color='black', linestyle='--', label='Spot Price')
-        plt.xlabel('Strike Price')
-        plt.ylabel('Implied Volatility')
-        plt.title(f'Volatility Curve for {ticker} (Exp: {expiration})')
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-    except Exception as e:
-        print(f"Error generating volatility curve for {ticker}: {e}")
+
+def show_volatility_surface(ticker: str) -> None:
+    """Generate and display volatility surface (strike x days to expiry x IV) for a given ticker."""
+    ticker_obj = yf.Ticker(ticker)
+    x_calls = np.array([])
+    y_calls = np.array([])
+    z_calls = np.array([])
+    x_puts = np.array([])
+    y_puts = np.array([])
+    z_puts = np.array([])
+    spot = None
+
+    for expiration in ticker_obj.options:
+        chain, spot, expiration = get_option_chain(ticker, expiration)
+        otm_calls, otm_puts = filter_otm(chain, spot)
+        otm_calls_iv = get_option_iv(otm_calls)
+        otm_puts_iv = get_option_iv(otm_puts)
+        otm_calls_strike = otm_calls["strike"]
+        otm_puts_strike = otm_puts["strike"]
+        days_exp = days_to_expiry(expiration)
+
+        x_calls = np.append(x_calls, otm_calls_strike)
+        y_calls = np.append(y_calls, np.full(len(otm_calls_strike), days_exp))
+        z_calls = np.append(z_calls, otm_calls_iv)
+        x_puts = np.append(x_puts, otm_puts_strike)
+        y_puts = np.append(y_puts, np.full(len(otm_puts_strike), days_exp))
+        z_puts = np.append(z_puts, otm_puts_iv)
+
+    if x_calls.size == 0 and x_puts.size == 0:
+        raise ValueError(f"No option data for {ticker}")
+
+    x_all = np.concatenate([x_calls, x_puts])
+    y_all = np.concatenate([y_calls, y_puts])
+    z_all = np.concatenate([z_calls, z_puts])
+
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.scatter(x_calls, y_calls, z_calls, c="green", marker="o", label="OTM Calls", s=10, alpha=0.5)
+    ax.scatter(x_puts, y_puts, z_puts, c="red", marker="o", label="OTM Puts", s=10, alpha=0.5)
+
+    xi = np.linspace(x_all.min(), x_all.max(), 50)
+    yi = np.linspace(y_all.min(), y_all.max(), 50)
+    xi_grid, yi_grid = np.meshgrid(xi, yi)
+    zi_grid = griddata((x_all, y_all), z_all, (xi_grid, yi_grid), method="linear")
+    ax.plot_surface(xi_grid, yi_grid, zi_grid, cmap="viridis", alpha=0.5)
+
+    if spot is not None:
+        x_plane = np.array([spot, spot])
+        y_plane = np.array([0, y_all.max()])
+        ax.plot(x_plane, y_plane, np.zeros_like(x_plane), color="black", label="Spot")
+
+    ax.set_xlabel("Strike Price")
+    ax.set_ylabel("Days to Expiry")
+    ax.set_zlabel("Implied Volatility")
+    ax.set_title(f"Volatility Surface for {ticker}")
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
 
 class Terminal(App):
     CSS = """
@@ -57,27 +81,40 @@ class Terminal(App):
         }
 
         #get_info_btn {
-            width: 14%;
+            width: 15%;
             align: center middle;
         }
 
         #get_chart_btn {
             width: 100%;
             align: center middle;
+            margin: 1 0;
         }
 
-        #volatility_btn {
+        #vol_buttons_row {
             width: 100%;
+            margin: 1 0 0 0;
+        }
+
+        #vol_buttons_row > Button {
+            width: 50%;
             align: center middle;
         }
 
         #info_collapsible {
-            margin: 1 2;
-            border: $primary;
+            margin: 1 2 1 2;
+            margin-top: 0;
+        }
+
+        #report_scroll {
+            height: 20;
+            max-height: 20;
+            overflow-y: auto;
         }
 
         #left {
             align: center middle;
+            padding: 0 2;
         }
 
         #divider {
@@ -106,7 +143,7 @@ class Terminal(App):
         self.ticker = "N/A"
 
     def on_mount(self) -> None:
-        self.theme = "tokyo-night"
+        self.theme = "nord"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -116,21 +153,23 @@ class Terminal(App):
                     yield Input(placeholder="Enter ticker symbol (e.g. AAPL)", id="ticker_input", classes="input")
                     yield Button("Load Info", id="get_info_btn", classes="input")
                 yield Button("Price Chart", id="get_chart_btn", classes="input")
-                yield Button("Volatility Curve", id="volatility_btn", classes="input")
-                
+                with Horizontal(id="vol_buttons_row"):
+                    yield Button("Volatility Surface", id="volatility_btn", classes="input")
+                    yield Button("Volatility Curve", id="volatility_surface_btn", classes="input")
                 with Collapsible(title=f"{self.ticker} Report", collapsed=True, collapsed_symbol="→", expanded_symbol="↘", id="info_collapsible"):
-                    yield Static("Address: ", id="address", classes="info")
-                    yield Static("City: ", id="city", classes="info")
-                    yield Static("State: ", id="state", classes="info")
-                    yield Static("Zipcode: ", id="zip", classes="info")
-                    yield Static("Country: ", id="country", classes="info")
-                    yield Static("Phone: ", id="phone", classes="info")
-                    yield Static("Website: ", id="website", classes="info")
-                    yield Static("Industry: ", id="industry", classes="info")
-                    yield Static("Sector: ", id="sector", classes="info")
-                    yield Static("CEO: ", id="ceo", classes="info")
-                    yield Static("Employees: ", id="employees", classes="info")
-                    yield Static("Description: ", id="description", classes="info")
+                    with VerticalScroll(id="report_scroll"):
+                        yield Static("Address: ", id="address", classes="info")
+                        yield Static("City: ", id="city", classes="info")
+                        yield Static("State: ", id="state", classes="info")
+                        yield Static("Zipcode: ", id="zip", classes="info")
+                        yield Static("Country: ", id="country", classes="info")
+                        yield Static("Phone: ", id="phone", classes="info")
+                        yield Static("Website: ", id="website", classes="info")
+                        yield Static("Industry: ", id="industry", classes="info")
+                        yield Static("Sector: ", id="sector", classes="info")
+                        yield Static("CEO: ", id="ceo", classes="info")
+                        yield Static("Employees: ", id="employees", classes="info")
+                        yield Static("Description: ", id="description", classes="info")
 
             yield Static("", id="divider")
 
@@ -142,7 +181,7 @@ class Terminal(App):
                 yield Static("52-Week Change: ", id="change", classes="info")
                 yield Static("Market Cap: ", id="market_cap", classes="info")
                 yield Static("P/E Ratio: ", id="pe_ratio", classes="info")
-                yield Static("Dividend Yield: ", id="dividend_yield", classes="info")
+                yield Static("Dividend Yield (%): ", id="dividend_yield", classes="info")
                 yield Static("Volume: ", id="volume", classes="info")
                 yield Static("Average Volume: ", id="average_volume", classes="info")
                 yield Static("50-Day Moving Average: ", id="fifty_day_moving_average", classes="info")
@@ -317,10 +356,10 @@ class Terminal(App):
             title.update(f"Error: {e}")
             return
 
-    def show_volatility_curve(self) -> None:
+    def show_volatility_surface(self) -> None:
         title = self.query_one("#info_title", Static)
         try:
-            show_volatility_curve(self.ticker)
+            show_volatility_surface(self.ticker)
         except Exception as e:
             title.update(f"Error: {e}")
             return
@@ -333,9 +372,9 @@ class Terminal(App):
         elif event.button.id == "get_chart_btn":
             self._set_ticker()
             self.show_chart()
-        elif event.button.id == "volatility_btn":
+        elif event.button.id == "volatility_surface_btn":
             self._set_ticker()
-            self.show_volatility_curve()
+            self.show_volatility_surface()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "ticker_input":
