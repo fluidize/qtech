@@ -21,11 +21,11 @@ class PriceDataset(Dataset):
     def __init__(self, data: pd.DataFrame, shift: int = 0):
         self.data = data
 
-        close = self.data['Close']
-        high = self.data['High']
-        low = self.data['Low']
-        open_price = self.data['Open']
-        volume = self.data['Volume']
+        close = pd.Series(ta.tema(self.data['Close'], timeperiod=2), index=self.data.index)
+        high = pd.Series(ta.tema(self.data['High'], timeperiod=2), index=self.data.index)
+        low = pd.Series(ta.tema(self.data['Low'], timeperiod=2), index=self.data.index)
+        open_price = pd.Series(ta.tema(self.data['Open'], timeperiod=2), index=self.data.index)
+        volume = pd.Series(ta.tema(self.data['Volume'], timeperiod=2), index=self.data.index)
         
         # Oscillators
         macd_line, macd_signal, macd_hist = ta.macd(close)
@@ -37,49 +37,49 @@ class PriceDataset(Dataset):
         bb_upper, bb_middle, bb_lower = ta.bbands(close, timeperiod=20)
         kc_upper, kc_middle, kc_lower = ta.keltner_channels(high, low, close, timeperiod=20)
         
+        # Multi-horizon returns (different time scales)
+        ret_1 = close.pct_change(1)
+        ret_5 = close.pct_change(5)
+        ret_20 = close.pct_change(20)
+        log_ret = ta.log_return(close)
+        # Volatility regime: short vs long vol
+        vol_10 = ta.volatility(close, timeperiod=10)
+        vol_20 = ta.volatility(close, timeperiod=20)
+        vol_ratio = vol_10 / vol_20.replace(0, np.nan).clip(lower=1e-12)
+        # Volume context (unusual volume)
+        vol_ma = volume.rolling(20, min_periods=1).mean()
+        volume_ratio = volume / vol_ma.replace(0, np.nan)
+        # Price position in recent range (0–1)
+        roll_20_high = high.rolling(20, min_periods=1).max()
+        roll_20_low = low.rolling(20, min_periods=1).min()
+        range_20 = (roll_20_high - roll_20_low).replace(0, np.nan)
+        price_in_range = (close - roll_20_low) / range_20
+
         self.X = pd.DataFrame({
-            # Oscillators
+            
+            'ret_1': ret_1,
+            'ret_5': ret_5,
+            'ret_20': ret_20,
+            'log_ret': log_ret,
+            'roc_10': ta.roc(close, timeperiod=10),
+            'mom_10': ta.mom(close, timeperiod=10),
+            
+            'rsi_14': ta.rsi(close, timeperiod=14),
             'stoch_k': stoch_k,
             'stoch_d': stoch_d,
-            'rsi_14': ta.rsi(close, timeperiod=14),
-            # 'rsi_21': ta.rsi(close, timeperiod=21),
-            # 'willr_14': ta.willr(high, low, close, timeperiod=14),
-            # 'awesome_oscillator': ta.awesome_oscillator(high, low, fast_period=5, slow_period=34),
-            # 'aroon_oscillator': aroon_up - aroon_down,
-            # 'fisher_transform': ta.fisher_transform(close, timeperiod=10),
-            'vzo': ta.volume_zone_oscillator(close, volume),
-            # 'mfi_14': ta.mfi(high, low, close, volume, timeperiod=14),
-            # 'cmf_20': ta.cmf(high, low, close, volume, timeperiod=20),
-            # 'rvi': ta.rvi(open_price, high, low, close, timeperiod=10),
-            # 'tsi_line': tsi_line,
-            # 'tsi_signal': tsi_signal,
-            # 'ppo_line': ppo_line,
-            # 'ppo_signal': ppo_signal,
-            # 'ppo_hist': ppo_hist,
-            # 'macd_line': macd_line,
-            # 'macd_signal': macd_signal,
-            # 'macd_hist': macd_hist,
-            # 'macd_dema_line': macd_dema_line,
-            # 'macd_dema_signal': macd_dema_signal,
+            'macd_hist': macd_hist,
             'macd_dema_hist': macd_dema_hist,
-            
-            # # Momentum
-            'returns_5': close.pct_change(5),
-            # 'log_return': ta.log_return(close),
-            # 'roc_10': ta.roc(close, timeperiod=10),
-            # 'roc_20': ta.roc(close, timeperiod=20),
-            # 'mom_10': ta.mom(close, timeperiod=10),
-            # 'mom_20': ta.mom(close, timeperiod=20),
-            # 'dpo_20': ta.dpo(close, timeperiod=20),
-            
-            # # Volatility
-            'volatility_20': ta.volatility(close, timeperiod=20),
-            # 'atr_14': ta.atr(high, low, close, timeperiod=14),
-            # 'atr_20': ta.atr(high, low, close, timeperiod=20),
-            # 'bb_width': (bb_upper - bb_lower) / bb_middle,
-            # 'kc_width': (kc_upper - kc_lower) / kc_middle,
-            # 'choppiness_index': ta.choppiness_index(high, low, close, timeperiod=14),
-            #'savgol_filter': pd.Series(savgol_filter(self.data['Close'], window_length=50, polyorder=5, deriv=2), index=self.data.index)
+            'aroon_osc': aroon_up - aroon_down,
+            'willr_14': ta.willr(high, low, close, timeperiod=14),
+            'tsi_line': tsi_line,
+            'volatility_20': vol_20,
+            'vol_ratio': vol_ratio,
+            'atr_14': ta.atr(high, low, close, timeperiod=14),
+            'bb_width': (bb_upper - bb_lower) / bb_middle.replace(0, np.nan),
+            'volume_ratio': volume_ratio,
+            'price_in_range_20': price_in_range,
+            'cmf_20': ta.cmf(high, low, close, volume, timeperiod=20),
+            'mfi_14': ta.mfi(high, low, close, volume, timeperiod=14),
         })
 
         shifted_cols = {}
@@ -169,12 +169,12 @@ def model_wrapper(data, model, device):
     return signals
 ### Training ###
 
-EPOCHS = 1000
-SHIFTS = 10
+EPOCHS = 20
+SHIFTS = 50
 DATA = {
-    "symbol": "JUP-USDT",
-    "days": 50,
-    "interval": "1m",
+    "symbol": "SOL-USDT",
+    "days":180,
+    "interval": "1h",
     "age_days": 0,
     "data_source": "binance",
     "cache_expiry_hours": 999,
@@ -247,6 +247,6 @@ vb = VectorizedBacktesting(
     commission_fixed=0.0,
     leverage=1.0
 )
-vb.load_data(val_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+vb.load_data(train_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
 vb.run_strategy(model_wrapper, verbose=True, model=model, device=device)
 vb.plot_performance(mode="basic")
