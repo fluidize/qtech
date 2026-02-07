@@ -2,7 +2,7 @@ import numpy as np
 import yfinance as yf
 from textual.app import App, ComposeResult
 from textual.widgets import Collapsible, Header, Footer, Input, Button, Static
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, HorizontalGroup, Vertical, VerticalScroll
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -11,9 +11,7 @@ from scipy.interpolate import griddata
 
 from trading.options.curve.main import get_option_chain, filter_otm, get_option_iv, days_to_expiry
 
-
 def show_volatility_surface(ticker: str) -> None:
-    """Generate and display volatility surface (strike x days to expiry x IV) for a given ticker."""
     ticker_obj = yf.Ticker(ticker)
     x_calls = np.array([])
     y_calls = np.array([])
@@ -70,6 +68,29 @@ def show_volatility_surface(ticker: str) -> None:
     plt.tight_layout()
     plt.show()
 
+def show_volatility_curve(ticker: str) -> None:
+    chain, spot, expiration = get_option_chain(ticker)
+    otm_calls, otm_puts = filter_otm(chain, spot)
+
+    otm_calls_iv = get_option_iv(otm_calls)
+    otm_puts_iv = get_option_iv(otm_puts)
+
+    otm_calls_strike = otm_calls['strike']
+    otm_puts_strike = otm_puts['strike']
+
+    plt.figure(figsize=(10, 6))
+
+    plt.plot(otm_calls_strike, otm_calls_iv, label='OTM Calls', color='green', marker='o')
+    plt.plot(otm_puts_strike, otm_puts_iv, label='OTM Puts', color='red', marker='o')
+    plt.axvline(spot, color='black', linestyle='--', label='Spot Price')
+
+    plt.xlabel('Strike Price')
+    plt.ylabel('Implied Volatility')
+    plt.title(f'Volatility Curve for {ticker} (Exp: {expiration})')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
 class Terminal(App):
     CSS = """
         .input {
@@ -77,27 +98,11 @@ class Terminal(App):
         }
 
         #ticker_input {
-            width: 85%;            
+            width: 85%;
         }
 
         #get_info_btn {
             width: 15%;
-            align: center middle;
-        }
-
-        #get_chart_btn {
-            width: 100%;
-            align: center middle;
-            margin: 1 0;
-        }
-
-        #vol_buttons_row {
-            width: 100%;
-            margin: 1 0 0 0;
-        }
-
-        #vol_buttons_row > Button {
-            width: 50%;
             align: center middle;
         }
 
@@ -114,7 +119,6 @@ class Terminal(App):
 
         #left {
             align: center middle;
-            padding: 0 2;
         }
 
         #divider {
@@ -152,10 +156,10 @@ class Terminal(App):
                 with Horizontal():
                     yield Input(placeholder="Enter ticker symbol (e.g. AAPL)", id="ticker_input", classes="input")
                     yield Button("Load Info", id="get_info_btn", classes="input")
-                yield Button("Price Chart", id="get_chart_btn", classes="input")
-                with Horizontal(id="vol_buttons_row"):
-                    yield Button("Volatility Surface", id="volatility_btn", classes="input")
-                    yield Button("Volatility Curve", id="volatility_surface_btn", classes="input")
+                with HorizontalGroup(id="buttons_row"):
+                    yield Button("Price Chart", id="get_chart_btn", classes="input")
+                    yield Button("Volatility Surface", id="volatility_surface_btn", classes="input")
+                    yield Button("Volatility Curve", id="volatility_curve_btn", classes="input")
                 with Collapsible(title=f"{self.ticker} Report", collapsed=True, collapsed_symbol="→", expanded_symbol="↘", id="info_collapsible"):
                     with VerticalScroll(id="report_scroll"):
                         yield Static("Address: ", id="address", classes="info")
@@ -363,6 +367,14 @@ class Terminal(App):
         except Exception as e:
             title.update(f"Error: {e}")
             return
+    
+    def show_volatility_curve(self) -> None:
+        title = self.query_one("#info_title", Static)
+        try:
+            show_volatility_curve(self.ticker)
+        except Exception as e:
+            title.update(f"Error: {e}")
+            return
         
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -372,9 +384,15 @@ class Terminal(App):
         elif event.button.id == "get_chart_btn":
             self._set_ticker()
             self.show_chart()
+            self.update_info()
         elif event.button.id == "volatility_surface_btn":
             self._set_ticker()
             self.show_volatility_surface()
+            self.update_info()
+        elif event.button.id == "volatility_curve_btn":
+            self._set_ticker()
+            self.show_volatility_curve()
+            self.update_info()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "ticker_input":
@@ -385,3 +403,5 @@ class Terminal(App):
 if __name__ == "__main__":
     app = Terminal()
     app.run()
+
+    
