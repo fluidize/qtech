@@ -694,21 +694,22 @@ class TorchBacktest:
         # Position[t] = signal[t-1]; earn return Open[t] -> Open[t+1]
         position = self._torch_shift(raw_signals_t, 1)
 
-        strategy_returns = position * open_returns
-        portfolio_value = self.torch.cumsum(strategy_returns, dim=0)
+        strategy_returns = self.torch.multiply(position, open_returns)
+        strategy_std = self.torch.std(strategy_returns).clamp(min=1e-12)
+        one = self.torch.tensor(1.0, device=self.device, dtype=strategy_returns.dtype)
+        strategy_returns_cumprod = self.torch.cumprod(self.torch.add(one, strategy_returns), dim=0)
+        inv_T = self.torch.tensor(1.0 / len(strategy_returns), device=self.device, dtype=strategy_returns.dtype)
+        strategy_geometric_mean_return = self.torch.subtract(
+            self.torch.pow(strategy_returns_cumprod[-1], inv_T), one
+        )
 
-        total_return = self.torch.subtract(portfolio_value[-1], portfolio_value[0])
-        excess_returns = self.torch.subtract(strategy_returns, open_returns)
+        market_std = self.torch.std(open_returns).clamp(min=1e-12)
 
-        sharpe_ratio = self.torch.divide(self.torch.mean(strategy_returns), self.torch.std(strategy_returns).clamp(min=1e-12))
-        information_ratio = self.torch.divide(self.torch.mean(excess_returns), self.torch.std(excess_returns))
-
+        sharpe_ratio = self.torch.divide(strategy_geometric_mean_return, strategy_std)
+        
         return {
             'Signals': raw_signals_t,
-            'Portfolio_Value': portfolio_value,
-            'Total_Return': total_return,
             'Sharpe_Ratio': sharpe_ratio,
-            'Information_Ratio': information_ratio,
         }
 
     def run_model(self, model):
