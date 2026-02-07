@@ -108,7 +108,7 @@ class PriceDataset(Dataset):
         return self.X[idx]
 
 class AllocationModel(nn.Module):
-    def __init__(self, input_dim, dropout=0.2):
+    def __init__(self, input_dim, dropout=0.03):
         super().__init__()
         self.input_dim = input_dim
         
@@ -133,12 +133,12 @@ class AllocationModel(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
 
-            nn.Linear(512, 128),
-            nn.LayerNorm(128),
+            nn.Linear(512, 512),
+            nn.LayerNorm(512),
             nn.ReLU(),
             nn.Dropout(dropout),
 
-            nn.Linear(128, 1),
+            nn.Linear(512, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -169,12 +169,12 @@ def model_wrapper(data, model, device):
     return signals
 ### Training ###
 
-EPOCHS = 20
-SHIFTS = 50
+EPOCHS = 1000
+SHIFTS = 100
 DATA = {
     "symbol": "SOL-USDT",
     "days":180,
-    "interval": "1h",
+    "interval": "30m",
     "age_days": 0,
     "data_source": "binance",
     "cache_expiry_hours": 999,
@@ -247,6 +247,6 @@ vb = VectorizedBacktesting(
     commission_fixed=0.0,
     leverage=1.0
 )
-vb.load_data(train_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+vb.load_data(val_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
 vb.run_strategy(model_wrapper, verbose=True, model=model, device=device)
 vb.plot_performance(mode="basic")
