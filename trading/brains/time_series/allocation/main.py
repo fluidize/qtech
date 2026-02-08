@@ -154,7 +154,7 @@ class SharpeLoss(nn.Module):
     def forward(self, model, dataset):
         tb = TorchBacktest(device=self.device)
         tb.load_dataset(dataset)
-        sharpe_ratio = tb.run_model(model)['Sharpe_Ratio']
+        sharpe_ratio = tb.run_model(model)
         return -sharpe_ratio
 
 def model_wrapper(data, model, device):
@@ -169,10 +169,10 @@ def model_wrapper(data, model, device):
     return signals
 ### Training ###
 
-EPOCHS = 1000
+EPOCHS = 500
 SHIFTS = 100
 DATA = {
-    "symbol": "SOL-USDT",
+    "symbol": "BTC-USDT",
     "days":180,
     "interval": "30m",
     "age_days": 0,
@@ -247,6 +247,6 @@ vb = VectorizedBacktesting(
     commission_fixed=0.0,
     leverage=1.0
 )
-vb.load_data(val_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+vb.load_data(train_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
 vb.run_strategy(model_wrapper, verbose=True, model=model, device=device)
 vb.plot_performance(mode="basic")
