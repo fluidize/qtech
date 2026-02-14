@@ -90,22 +90,48 @@ class PriceDataset(Dataset):
         if shifted_cols:
             self.X = pd.concat([self.X, pd.DataFrame(shifted_cols)], axis=1)
         
-        #self.y = pd.Series(savgol_filter(self.data['Close'], window_length=50, polyorder=2, deriv=1), index=self.data.index)
-        #y = pd.Series(self.data['Close'].pct_change())
-        # y[y > 0] = 1
-        # y[y < 0] = 0
+        self.y = pd.Series(self.data['Close'].pct_change()).shift(-1)
 
         mask = ~(self.X.isna().any(axis=1))
         self.valid_indices = self.data.index[mask]
 
         self.X = self.X[mask].values.astype(np.float32)
-        #self.y = self.y[mask].values.astype(np.float32)
+        self.y = self.y[mask].values.astype(np.float32)
 
     def __len__(self):
         return len(self.X)
     
     def __getitem__(self, idx):
-        return self.X[idx]
+        return self.X[idx], self.y[idx]
+
+class DirectionalPredictor(nn.Module):
+    def __init__(self, input_dim, dropout=0.03):
+        super().__init__()
+        self.input_dim = input_dim
+        
+        self.main_network = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 1),
+        )
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.main_network(x)
+        return x.squeeze()
 
 class AllocationModel(nn.Module):
     def __init__(self, input_dim, dropout=0.03):
@@ -146,7 +172,7 @@ class AllocationModel(nn.Module):
         x = nn.Sigmoid()(x)
         return x.squeeze()
 
-class SharpeLoss(nn.Module):
+class BacktestLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
         super().__init__()
         self.device = device
@@ -154,8 +180,8 @@ class SharpeLoss(nn.Module):
     def forward(self, model, dataset):
         tb = TorchBacktest(device=self.device)
         tb.load_dataset(dataset)
-        sharpe_ratio = tb.run_model(model)
-        return -sharpe_ratio
+        loss = tb.run_model(model)
+        return -loss
 
 def model_wrapper(data, model, device):
     dataset = PriceDataset(data, shift=SHIFTS)
@@ -190,45 +216,77 @@ train_data, val_data = train_test_split(data, test_size=0.2, shuffle=False) #do 
 train_dataset = PriceDataset(train_data, shift=SHIFTS)
 val_dataset = PriceDataset(val_data, shift=SHIFTS)
 
-model = AllocationModel(input_dim=train_dataset.X.shape[1]).to(device)
-optimizer = optim.Adam(model.parameters(), weight_decay=1e-5)  
-scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-8)
+alloc_model = AllocationModel(input_dim=train_dataset.X.shape[1]).to(device)
+directional_model = DirectionalPredictor(input_dim=train_dataset.X.shape[1]).to(device)
 
-best_val_loss = float('inf')
-best_model_state = None
+alloc_optimizer = optim.Adam(alloc_model.parameters(), weight_decay=1e-5)  
+directional_optimizer = optim.Adam(directional_model.parameters(), weight_decay=1e-5)
 
-sharpe_metric = SharpeLoss(device=device)
+alloc_scheduler = optim.lr_scheduler.CosineAnnealingLR(alloc_optimizer, T_max=EPOCHS, eta_min=1e-8)
+directional_scheduler = optim.lr_scheduler.CosineAnnealingLR(directional_optimizer, T_max=EPOCHS, eta_min=1e-8)
+
+best_val_alloc_loss = float('inf')
+best_val_directional_loss = float('inf')
+best_alloc_model_state = None
+best_directional_model_state = None
+
+alloc_loss_fn = BacktestLoss(device=device)
+directional_loss_fn = nn.MSELoss()
+
 progress_bar = tqdm(total=EPOCHS, desc="Training")
 train_losses = []
 val_losses = []
+val_directional_losses = []
 for epoch in range(EPOCHS):
     #training
-    model.train()
-    optimizer.zero_grad()
-    train_loss = sharpe_metric(model, train_dataset)
-    train_loss.backward()
-    optimizer.step()
-    scheduler.step()
+    alloc_model.train()
+    directional_model.train()
+
+    alloc_optimizer.zero_grad()
+    directional_optimizer.zero_grad()
+
+    train_alloc_loss = alloc_loss_fn(alloc_model, train_dataset)
+    train_directional_loss = directional_loss_fn(
+        directional_model(torch.tensor(train_dataset.X, dtype=torch.float32).to(device)),
+        torch.tensor(train_dataset.y, dtype=torch.float32).to(device)
+    )
+
+    train_alloc_loss.backward()
+    train_directional_loss.backward()
+
+    alloc_optimizer.step()
+    directional_optimizer.step()
+    alloc_scheduler.step()
+    directional_scheduler.step()
 
     # evaluation
-    model.eval()
+    alloc_model.eval()
+    directional_model.eval()
     with torch.no_grad():
-        val_loss = sharpe_metric(model, val_dataset)
+        val_alloc_loss = alloc_loss_fn(alloc_model, val_dataset)
+        val_directional_loss = directional_loss_fn(
+            directional_model(torch.tensor(val_dataset.X, dtype=torch.float32).to(device)),
+            torch.tensor(val_dataset.y, dtype=torch.float32).to(device)
+        )
 
-    train_losses.append(train_loss.item())
-    val_losses.append(val_loss.item())
+    train_losses.append(train_alloc_loss.item())
+    val_losses.append(val_alloc_loss.item())
 
-    if val_loss < best_val_loss:
-        best_val_loss = val_loss
-        best_model_state = model.state_dict().copy()
+    if val_alloc_loss < best_val_alloc_loss:
+        best_val_alloc_loss = val_alloc_loss
+        best_alloc_model_state = alloc_model.state_dict().copy()
+        best_directional_model_state = directional_model.state_dict().copy()
 
-    progress_bar.set_description(f"Epoch {epoch+1}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+    progress_bar.set_description(f"Epoch {epoch+1}, Train Loss: {train_alloc_loss:.6f}, Val Loss: {val_alloc_loss:.6f}")
     progress_bar.update(1)
 progress_bar.close()
 
-if best_model_state is not None:
-    model.load_state_dict(best_model_state)
-    print(f"Loaded best model with validation loss: {best_val_loss:.6f}")
+if best_alloc_model_state is not None and best_directional_model_state is not None:
+    alloc_model.load_state_dict(best_alloc_model_state)
+    directional_model.load_state_dict(best_directional_model_state)
+    print(f"Loaded best model with validation loss: {best_val_alloc_loss:.6f}, {best_val_directional_loss:.6f}")
+else:
+    print("No best model found")
 
 plt.figure(figsize=(10, 5))
 plt.plot(train_losses, label='Train Loss')
@@ -247,6 +305,6 @@ vb = VectorizedBacktesting(
     commission_fixed=0.0,
     leverage=1.0
 )
-vb.load_data(train_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+vb.load_data(val_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
 vb.run_strategy(model_wrapper, verbose=True, model=model, device=device)
 vb.plot_performance(mode="basic")

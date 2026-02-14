@@ -702,7 +702,7 @@ class TorchBacktest:
         
         inv_N = self.torch.tensor(1.0 / len(strategy_returns), device=self.device, dtype=strategy_returns.dtype)
         strategy_geometric_mean_return = self.torch.subtract(
-            self.torch.pow(strategy_returns_cumprod[-1], inv_N), one
+            self.torch.pow(strategy_returns_cumprod[-1].clamp(min=1e-12), inv_N), one
         )
 
         market_std = self.torch.std(open_returns).clamp(min=1e-12)
@@ -712,7 +712,7 @@ class TorchBacktest:
 
         inv_N = self.torch.tensor(1.0 / len(open_returns), device=self.device, dtype=open_returns.dtype)
         market_geometric_mean_return = self.torch.subtract(
-            self.torch.pow(market_returns_cumprod[-1], inv_N), one
+            self.torch.pow(market_returns_cumprod[-1].clamp(min=1e-12), inv_N), one
         )
 
         strategy_sharpe = strategy_geometric_mean_return / strategy_std
@@ -738,8 +738,8 @@ class TorchBacktest:
 
         strategy_returns = self.torch.multiply(position, open_returns)
         strategy_std = self.torch.std(strategy_returns).clamp(min=1e-12)
-
-        return self.torch.divide(strategy_returns.mean(), strategy_std)
+        
+        return strategy_returns.mean() / strategy_std
 
     def run_model(self, model):
         return self._exec_backtest(model, self.dataset)
