@@ -5,7 +5,6 @@ import yfinance as yf
 from tqdm import tqdm
 import pandas as pd
 import os
-import json
 import time
 from pathlib import Path
 import asyncio
@@ -29,7 +28,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     cache_key = f"{symbol}_{days}_{interval}_{age_days}_{data_source}"
-    cache_file = temp_dir / f"{cache_key}.parquet"
+    cache_file = temp_dir / f"{cache_key}.csv"
 
     if cache_expiry_hours > 0 and os.path.exists(cache_file):
         file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
@@ -37,21 +36,8 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
 
         if file_age_hours < cache_expiry_hours:
             try:
-                cached_data = pd.read_parquet(cache_file)
+                cached_data = pd.read_csv(cache_file, parse_dates=["Datetime"])
                 print(f"[blue]USING CACHE {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB {cached_data.shape[0]} bars)") if verbose else None
-
-                with open(f"{cache_file}.json", "w") as f:
-                    json.dump({
-                        "symbol": symbol,
-                        "days": days,
-                        "interval": interval,
-                        "age_days": age_days,
-                        "data_source": data_source,
-                        "cached_time": str(file_modified_time),
-                        "rows": len(cached_data),
-                        "accessed_time": str(datetime.now())
-                    }, f, indent=2)
-
                 return cached_data
             except Exception as e:
                 print(f"[yellow]Cache read error: {e}. Fetching fresh data...[/yellow]")
@@ -270,20 +256,8 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
 
     if cache_expiry_hours > 0 and not data.empty and len(data) > 0:
         try:
-            data.to_parquet(cache_file)
+            data.to_csv(cache_file, index=False)
             print(f"[blue]Data cached to {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB {len(data)} bars)")
-
-            with open(f"{cache_file}.json", "w") as f:
-                json.dump({
-                    "symbol": symbol,
-                    "days": days,
-                    "interval": interval,
-                    "age_days": age_days,
-                    "data_source": data_source,
-                    "cached_time": str(datetime.now()),
-                    "rows": len(data)
-                }, f, indent=2)
-
         except Exception as e:
             print(f"[yellow]Failed to cache data: {e}[/yellow]")
     elif cache_expiry_hours > 0 and (data.empty or len(data) == 0):
