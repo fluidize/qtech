@@ -14,8 +14,9 @@ import matplotlib.pyplot as plt
 
 import trading.model_tools as mt
 import trading.technical_analysis as ta
+
 from trading.backtesting.backtesting import VectorizedBacktesting
-from trading.backtesting.backtesting import TorchBacktest
+from loss_functions import SharpeLoss
 
 class PriceDataset(Dataset):
     def __init__(self, data: pd.DataFrame, shift: int = 0):
@@ -56,30 +57,18 @@ class PriceDataset(Dataset):
         price_in_range = (close - roll_20_low) / range_20
 
         self.X = pd.DataFrame({
-            
             'ret_1': ret_1,
             'ret_5': ret_5,
             'ret_20': ret_20,
             'log_ret': log_ret,
             'roc_10': ta.roc(close, timeperiod=10),
             'mom_10': ta.mom(close, timeperiod=10),
-            
-            'rsi_14': ta.rsi(close, timeperiod=14),
+
             'stoch_k': stoch_k,
             'stoch_d': stoch_d,
             'macd_hist': macd_hist,
             'macd_dema_hist': macd_dema_hist,
             'aroon_osc': aroon_up - aroon_down,
-            'willr_14': ta.willr(high, low, close, timeperiod=14),
-            'tsi_line': tsi_line,
-            'volatility_20': vol_20,
-            'vol_ratio': vol_ratio,
-            'atr_14': ta.atr(high, low, close, timeperiod=14),
-            'bb_width': (bb_upper - bb_lower) / bb_middle.replace(0, np.nan),
-            'volume_ratio': volume_ratio,
-            'price_in_range_20': price_in_range,
-            'cmf_20': ta.cmf(high, low, close, volume, timeperiod=20),
-            'mfi_14': ta.mfi(high, low, close, volume, timeperiod=14),
         })
 
         shifted_cols = {}
@@ -90,13 +79,14 @@ class PriceDataset(Dataset):
         if shifted_cols:
             self.X = pd.concat([self.X, pd.DataFrame(shifted_cols)], axis=1)
         
-        self.y = pd.Series(self.data['Close'].pct_change()).shift(-1)
+        self.y = pd.Series(savgol_filter(self.data['Open'], window_length=20, polyorder=3, deriv=1))
 
-        mask = ~(self.X.isna().any(axis=1))
-        self.valid_indices = self.data.index[mask]
+        self.X = self.X.dropna(axis=1)
+        combined = self.X.join(self.y.rename('y')).dropna()
+        self.valid_indices = combined.index
 
-        self.X = self.X[mask].values.astype(np.float32)
-        self.y = self.y[mask].values.astype(np.float32)
+        self.X = torch.tensor(combined[self.X.columns].values.astype(np.float32))
+        self.y = torch.tensor(combined['y'].values.astype(np.float32))
 
     def __len__(self):
         return len(self.X)
@@ -104,7 +94,7 @@ class PriceDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-class DirectionalPredictor(nn.Module):
+class DirectionalConfidencePredictor(nn.Module):
     def __init__(self, input_dim, dropout=0.03):
         super().__init__()
         self.input_dim = input_dim
@@ -126,11 +116,11 @@ class DirectionalPredictor(nn.Module):
             nn.LayerNorm(128),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(128, 1),
+            nn.Linear(128, 2),
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.main_network(x)
+        x = self.main_network(x) #y2 = upper bound, y1 = lower bound
         return x.squeeze()
 
 class AllocationModel(nn.Module):
@@ -139,7 +129,7 @@ class AllocationModel(nn.Module):
         self.input_dim = input_dim
         
         self.main_network = nn.Sequential(
-            nn.Linear(input_dim, 128),
+            nn.Linear(input_dim + 1, 128),
             nn.LayerNorm(128),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -167,144 +157,128 @@ class AllocationModel(nn.Module):
             nn.Linear(512, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.main_network(x)
-        x = nn.Sigmoid()(x)
-        return x.squeeze()
+    def forward(self, x: torch.Tensor, directional_estimate: torch.Tensor) -> torch.Tensor:
+        est = directional_estimate.unsqueeze(1)
+        x = self.main_network(torch.cat([x, est], dim=1))
+        x = nn.Sigmoid()(x).squeeze()
+        return x
 
-class BacktestLoss(nn.Module):
-    def __init__(self, device: str = "cuda"):
-        super().__init__()
-        self.device = device
-
-    def forward(self, model, dataset):
-        tb = TorchBacktest(device=self.device)
-        tb.load_dataset(dataset)
-        loss = tb.run_model(model)
-        return -loss
-
-def model_wrapper(data, model, device):
+def model_wrapper(data, alloc_model, directional_model, device):
     dataset = PriceDataset(data, shift=SHIFTS)
-    model.eval()
+    alloc_model.eval()
+    directional_model.eval()
     with torch.no_grad():
-        X_tensor = torch.tensor(dataset.X, dtype=torch.float32).to(device)
-        predictions = model(X_tensor).cpu().numpy()
+        X_tensor = dataset.X.to(device)
+        directional_estimate = directional_model(X_tensor)
+        predictions = alloc_model(X_tensor, directional_estimate).cpu().numpy()
 
     signals = pd.Series(0.0, index=data.index)
     signals.loc[dataset.valid_indices] = predictions
     return signals
 ### Training ###
+if __name__ == "__main__":
+    EPOCHS = 1000
+    SHIFTS = 100
+    DATA = {
+        "symbol": "BTC-USDT",
+        "days":180,
+        "interval": "1h",
+        "age_days": 0,
+        "data_source": "binance",
+        "cache_expiry_hours": 999,
+        "verbose": True
+    }
+    DEVICE = 'cuda'
 
-EPOCHS = 500
-SHIFTS = 100
-DATA = {
-    "symbol": "BTC-USDT",
-    "days":180,
-    "interval": "30m",
-    "age_days": 0,
-    "data_source": "binance",
-    "cache_expiry_hours": 999,
-    "verbose": True
-}
+    data = mt.fetch_data(**DATA)
+    train_data, val_data = train_test_split(data, test_size=0.2, shuffle=False) #do not shuffle
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(f"Using device: {device}")
+    train_dataset = PriceDataset(train_data, shift=SHIFTS)
+    val_dataset = PriceDataset(val_data, shift=SHIFTS)
 
-data = mt.fetch_data(**DATA)
-train_data, val_data = train_test_split(data, test_size=0.2, shuffle=False) #do not shuffle
+    alloc_model = AllocationModel(input_dim=train_dataset.X.shape[1]).to(DEVICE)
+    directional_confidence_model = DirectionalConfidencePredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
 
-train_dataset = PriceDataset(train_data, shift=SHIFTS)
-val_dataset = PriceDataset(val_data, shift=SHIFTS)
+    alloc_optimizer = optim.Adam(alloc_model.parameters(), weight_decay=1e-5)  
+    directional_confidence_optimizer = optim.Adam(directional_confidence_model.parameters(), weight_decay=1e-5)
 
-alloc_model = AllocationModel(input_dim=train_dataset.X.shape[1]).to(device)
-directional_model = DirectionalPredictor(input_dim=train_dataset.X.shape[1]).to(device)
+    alloc_scheduler = optim.lr_scheduler.CosineAnnealingLR(alloc_optimizer, T_max=EPOCHS, eta_min=1e-8)
+    directional_confidence_scheduler = optim.lr_scheduler.CosineAnnealingLR(directional_confidence_optimizer, T_max=EPOCHS, eta_min=1e-8)
 
-alloc_optimizer = optim.Adam(alloc_model.parameters(), weight_decay=1e-5)  
-directional_optimizer = optim.Adam(directional_model.parameters(), weight_decay=1e-5)
+    best_val_alloc_loss = float('inf')
+    best_alloc_model_state = None
 
-alloc_scheduler = optim.lr_scheduler.CosineAnnealingLR(alloc_optimizer, T_max=EPOCHS, eta_min=1e-8)
-directional_scheduler = optim.lr_scheduler.CosineAnnealingLR(directional_optimizer, T_max=EPOCHS, eta_min=1e-8)
+    alloc_loss_fn = SharpeLoss(device=DEVICE)
+    directional_confidence_loss_fn = nn.MSELoss()
 
-best_val_alloc_loss = float('inf')
-best_val_directional_loss = float('inf')
-best_alloc_model_state = None
-best_directional_model_state = None
+    progress_bar = tqdm(total=EPOCHS, desc="Training")
+    train_losses = []
+    val_losses = []
+    val_directional_losses = []
+    for epoch in range(EPOCHS):
+        directional_model.train()
+        alloc_model.train()
 
-alloc_loss_fn = BacktestLoss(device=device)
-directional_loss_fn = nn.MSELoss()
+        directional_optimizer.zero_grad()
+        alloc_optimizer.zero_grad()
 
-progress_bar = tqdm(total=EPOCHS, desc="Training")
-train_losses = []
-val_losses = []
-val_directional_losses = []
-for epoch in range(EPOCHS):
-    #training
-    alloc_model.train()
-    directional_model.train()
-
-    alloc_optimizer.zero_grad()
-    directional_optimizer.zero_grad()
-
-    train_alloc_loss = alloc_loss_fn(alloc_model, train_dataset)
-    train_directional_loss = directional_loss_fn(
-        directional_model(torch.tensor(train_dataset.X, dtype=torch.float32).to(device)),
-        torch.tensor(train_dataset.y, dtype=torch.float32).to(device)
-    )
-
-    train_alloc_loss.backward()
-    train_directional_loss.backward()
-
-    alloc_optimizer.step()
-    directional_optimizer.step()
-    alloc_scheduler.step()
-    directional_scheduler.step()
-
-    # evaluation
-    alloc_model.eval()
-    directional_model.eval()
-    with torch.no_grad():
-        val_alloc_loss = alloc_loss_fn(alloc_model, val_dataset)
-        val_directional_loss = directional_loss_fn(
-            directional_model(torch.tensor(val_dataset.X, dtype=torch.float32).to(device)),
-            torch.tensor(val_dataset.y, dtype=torch.float32).to(device)
+        directional_train_loss = directional_loss_fn(
+            directional_model(train_dataset.X.to(DEVICE)), train_dataset.y.to(DEVICE)
         )
+        directional_train_loss.backward()
 
-    train_losses.append(train_alloc_loss.item())
-    val_losses.append(val_alloc_loss.item())
+        alloc_train_loss = alloc_loss_fn(alloc_model, directional_model, train_dataset)
+        alloc_train_loss.backward()
 
-    if val_alloc_loss < best_val_alloc_loss:
-        best_val_alloc_loss = val_alloc_loss
-        best_alloc_model_state = alloc_model.state_dict().copy()
-        best_directional_model_state = directional_model.state_dict().copy()
+        directional_optimizer.step()
+        alloc_optimizer.step()
 
-    progress_bar.set_description(f"Epoch {epoch+1}, Train Loss: {train_alloc_loss:.6f}, Val Loss: {val_alloc_loss:.6f}")
-    progress_bar.update(1)
-progress_bar.close()
+        directional_scheduler.step()
+        alloc_scheduler.step()
 
-if best_alloc_model_state is not None and best_directional_model_state is not None:
-    alloc_model.load_state_dict(best_alloc_model_state)
-    directional_model.load_state_dict(best_directional_model_state)
-    print(f"Loaded best model with validation loss: {best_val_alloc_loss:.6f}, {best_val_directional_loss:.6f}")
-else:
-    print("No best model found")
+        # evaluation
+        alloc_model.eval()
+        directional_model.eval()
+        with torch.no_grad():
+            val_alloc_loss = alloc_loss_fn(alloc_model, directional_model, val_dataset)
+            val_directional_loss = directional_loss_fn(
+                directional_model(val_dataset.X.to(DEVICE)), val_dataset.y.to(DEVICE)
+            )
 
-plt.figure(figsize=(10, 5))
-plt.plot(train_losses, label='Train Loss')
-plt.plot(val_losses, label='Validation Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Training, Validation Loss')
-plt.legend()
-plt.grid(True)
-plt.show(block=False)
+        train_losses.append((alloc_train_loss.item() + directional_train_loss.item()) / 2)
+        val_losses.append((val_alloc_loss.item() + val_directional_loss.item()) / 2)
 
-vb = VectorizedBacktesting(
-    instance_name="AllocationModel",
-    initial_capital=10000,
-    slippage_pct=0.00,
-    commission_fixed=0.0,
-    leverage=1.0
-)
-vb.load_data(val_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
-vb.run_strategy(model_wrapper, verbose=True, model=model, device=device)
-vb.plot_performance(mode="basic")
+        if val_alloc_loss < best_val_alloc_loss:
+            best_val_alloc_loss = val_alloc_loss
+            best_alloc_model_state = alloc_model.state_dict().copy()
+
+        progress_bar.set_description(f"Epoch {epoch+1}, Train Loss: {train_losses[-1]:.6f}, Val Loss: {val_losses[-1]:.6f}")
+        progress_bar.update(1)
+    progress_bar.close()
+
+    if best_alloc_model_state is not None:
+        alloc_model.load_state_dict(best_alloc_model_state)
+        print(f"Loaded best model with validation loss: {best_val_alloc_loss:.6f}")
+    else:
+        print("No best model found")
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training, Validation Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.show(block=False)
+
+    vb = VectorizedBacktesting(
+        instance_name="AllocationModel",
+        initial_capital=10000,
+        slippage_pct=0.00,
+        commission_fixed=0.0,
+        leverage=1.0
+    )
+    vb.load_data(train_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+    vb.run_strategy(model_wrapper, verbose=True, alloc_model=alloc_model, directional_model=directional_model, device=DEVICE)
+    vb.plot_performance(mode="basic")
