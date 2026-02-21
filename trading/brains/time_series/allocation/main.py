@@ -90,14 +90,14 @@ class PriceDataset(Dataset):
 
     def split(self, test_size=0.2):
         train_idx, val_idx = train_test_split(range(len(self.X)), test_size=test_size, shuffle=False)
-        return TensorSubset(self.data, self.X[train_idx], self.y[train_idx]), TensorSubset(self.data, self.X[val_idx], self.y[val_idx])
+        return TensorSubset(self.data.iloc[train_idx], self.X[train_idx], self.y[train_idx]), TensorSubset(self.data.iloc[val_idx], self.X[val_idx], self.y[val_idx])
 
 class TensorSubset(Dataset):
     def __init__(self, data: pd.DataFrame, X: torch.Tensor, y: torch.Tensor):
-        self.data = data
+        self.data = data.reset_index(drop=True)
         self.X = X
         self.y = y
-        self.valid_indices = range(len(self.X))
+        self.valid_indices = self.data.index
 
     def __len__(self):
         return len(self.X)
@@ -184,10 +184,10 @@ def model_wrapper(data, alloc_model, directional_model, device):
     return signals
 ### Training ###
 if __name__ == "__main__":
-    EPOCHS = 10000
+    EPOCHS = 1000
     SHIFTS = 100
     DATA = {
-        "symbol": "SOL-USDT",
+        "symbol": "BTC-USDT",
         "days":365,
         "interval": "1h",
         "age_days": 0,
@@ -296,6 +296,6 @@ if __name__ == "__main__":
         commission_fixed=0.0,
         leverage=1.0
     )
-    vb.load_data(train_dataset.data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+    vb.load_data(val_dataset.data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
     vb.run_strategy(model_wrapper, verbose=True, alloc_model=alloc_model, directional_model=directional_confidence_model, device=DEVICE)
     vb.plot_performance(mode="basic")

@@ -57,7 +57,7 @@ class VectorizedBacktesting:
             return self.data
 
     def load_data(self, data: pd.DataFrame, symbol: str = None, interval: str = None, age_days: int = None):
-        self.data = data
+        self.data = data.copy()
         if symbol is not None:
             self.symbol = symbol
         else:
