@@ -16,7 +16,7 @@ import trading.model_tools as mt
 import trading.technical_analysis as ta
 
 from trading.backtesting.backtesting import VectorizedBacktesting
-from loss_functions import SharpeLoss
+import loss_functions as lf
 
 class PriceDataset(Dataset):
     def __init__(self, data: pd.DataFrame, shift: int = 0):
@@ -88,11 +88,19 @@ class PriceDataset(Dataset):
         self.X = torch.tensor(combined[self.X.columns].values.astype(np.float32))
         self.y = torch.tensor(combined['y'].values.astype(np.float32))
 
+    def split(self, test_size=0.2):
+        train_idx, val_idx = train_test_split(range(len(self.X)), test_size=test_size, shuffle=False)
+        return TensorSubset(self.data, self.X[train_idx], self.y[train_idx]), TensorSubset(self.data, self.X[val_idx], self.y[val_idx])
+
+class TensorSubset(Dataset):
+    def __init__(self, data: pd.DataFrame, X: torch.Tensor, y: torch.Tensor):
+        self.data = data
+        self.X = X
+        self.y = y
+        self.valid_indices = range(len(self.X))
+
     def __len__(self):
         return len(self.X)
-    
-    def __getitem__(self, idx):
-        return self.X[idx], self.y[idx]
 
 class DirectionalConfidencePredictor(nn.Module):
     def __init__(self, input_dim, dropout=0.03):
@@ -129,7 +137,7 @@ class AllocationModel(nn.Module):
         self.input_dim = input_dim
         
         self.main_network = nn.Sequential(
-            nn.Linear(input_dim + 1, 128),
+            nn.Linear(input_dim + 2, 128),
             nn.LayerNorm(128),
             nn.ReLU(),
             nn.Dropout(dropout),
@@ -158,8 +166,7 @@ class AllocationModel(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, directional_estimate: torch.Tensor) -> torch.Tensor:
-        est = directional_estimate.unsqueeze(1)
-        x = self.main_network(torch.cat([x, est], dim=1))
+        x = self.main_network(torch.cat([x, directional_estimate], dim=1))
         x = nn.Sigmoid()(x).squeeze()
         return x
 
@@ -177,11 +184,11 @@ def model_wrapper(data, alloc_model, directional_model, device):
     return signals
 ### Training ###
 if __name__ == "__main__":
-    EPOCHS = 1000
+    EPOCHS = 10000
     SHIFTS = 100
     DATA = {
-        "symbol": "BTC-USDT",
-        "days":180,
+        "symbol": "SOL-USDT",
+        "days":365,
         "interval": "1h",
         "age_days": 0,
         "data_source": "binance",
@@ -191,10 +198,8 @@ if __name__ == "__main__":
     DEVICE = 'cuda'
 
     data = mt.fetch_data(**DATA)
-    train_data, val_data = train_test_split(data, test_size=0.2, shuffle=False) #do not shuffle
-
-    train_dataset = PriceDataset(train_data, shift=SHIFTS)
-    val_dataset = PriceDataset(val_data, shift=SHIFTS)
+    full_dataset = PriceDataset(data, shift=SHIFTS)
+    train_dataset, val_dataset = full_dataset.split(test_size=0.5)
 
     alloc_model = AllocationModel(input_dim=train_dataset.X.shape[1]).to(DEVICE)
     directional_confidence_model = DirectionalConfidencePredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
@@ -208,68 +213,80 @@ if __name__ == "__main__":
     best_val_alloc_loss = float('inf')
     best_alloc_model_state = None
 
-    alloc_loss_fn = SharpeLoss(device=DEVICE)
-    directional_confidence_loss_fn = nn.MSELoss()
+    alloc_loss_fn = lf.SharpeLoss(device=DEVICE)
+    directional_confidence_loss_fn = lf.IntervalLoss(device=DEVICE)
 
     progress_bar = tqdm(total=EPOCHS, desc="Training")
-    train_losses = []
-    val_losses = []
-    val_directional_losses = []
+    alloc_train_losses = []
+    alloc_val_losses = []
+    directional_train_losses = []
+    directional_val_losses = []
     for epoch in range(EPOCHS):
-        directional_model.train()
+        directional_confidence_model.train()
         alloc_model.train()
 
-        directional_optimizer.zero_grad()
+        directional_confidence_optimizer.zero_grad()
         alloc_optimizer.zero_grad()
 
-        directional_train_loss = directional_loss_fn(
-            directional_model(train_dataset.X.to(DEVICE)), train_dataset.y.to(DEVICE)
+        directional_confidence_train_loss = directional_confidence_loss_fn(
+            directional_confidence_model(train_dataset.X.to(DEVICE)), train_dataset.y.to(DEVICE)
         )
-        directional_train_loss.backward()
+        directional_confidence_train_loss.backward()
 
-        alloc_train_loss = alloc_loss_fn(alloc_model, directional_model, train_dataset)
+        alloc_train_loss = alloc_loss_fn(alloc_model, directional_confidence_model, train_dataset)
         alloc_train_loss.backward()
 
-        directional_optimizer.step()
+        directional_confidence_optimizer.step()
         alloc_optimizer.step()
 
-        directional_scheduler.step()
+        directional_confidence_scheduler.step()
         alloc_scheduler.step()
 
         # evaluation
         alloc_model.eval()
-        directional_model.eval()
+        directional_confidence_model.eval()
         with torch.no_grad():
-            val_alloc_loss = alloc_loss_fn(alloc_model, directional_model, val_dataset)
-            val_directional_loss = directional_loss_fn(
-                directional_model(val_dataset.X.to(DEVICE)), val_dataset.y.to(DEVICE)
+            val_alloc_loss = alloc_loss_fn(alloc_model, directional_confidence_model, val_dataset)
+            val_directional_loss = directional_confidence_loss_fn(
+                directional_confidence_model(val_dataset.X.to(DEVICE)), val_dataset.y.to(DEVICE)
             )
 
-        train_losses.append((alloc_train_loss.item() + directional_train_loss.item()) / 2)
-        val_losses.append((val_alloc_loss.item() + val_directional_loss.item()) / 2)
+        alloc_train_losses.append(alloc_train_loss.item())
+        alloc_val_losses.append(val_alloc_loss.item())
+        directional_train_losses.append(directional_confidence_train_loss.item())
+        directional_val_losses.append(val_directional_loss.item())
 
         if val_alloc_loss < best_val_alloc_loss:
             best_val_alloc_loss = val_alloc_loss
             best_alloc_model_state = alloc_model.state_dict().copy()
 
-        progress_bar.set_description(f"Epoch {epoch+1}, Train Loss: {train_losses[-1]:.6f}, Val Loss: {val_losses[-1]:.6f}")
+        progress_bar.set_description(
+            f"Epoch {epoch+1} | alloc T: {alloc_train_losses[-1]:.4f} V: {alloc_val_losses[-1]:.4f} | "
+            f"dir T: {directional_train_losses[-1]:.4f} V: {directional_val_losses[-1]:.4f}"
+        )
         progress_bar.update(1)
     progress_bar.close()
 
-    if best_alloc_model_state is not None:
-        alloc_model.load_state_dict(best_alloc_model_state)
-        print(f"Loaded best model with validation loss: {best_val_alloc_loss:.6f}")
-    else:
-        print("No best model found")
+    # if best_alloc_model_state is not None:
+        # alloc_model.load_state_dict(best_alloc_model_state)
+        # print(f"Loaded best model with validation loss: {best_val_alloc_loss:.6f}")
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Validation Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Training, Validation Loss')
-    plt.legend()
-    plt.grid(True)
+    fig, (ax_alloc, ax_dir) = plt.subplots(1, 2, figsize=(12, 4))
+    ax_alloc.plot(alloc_train_losses, label='Train')
+    ax_alloc.plot(alloc_val_losses, label='Val')
+    ax_alloc.set_xlabel('Epoch')
+    ax_alloc.set_ylabel('Loss')
+    ax_alloc.set_title('Alloc')
+    ax_alloc.legend()
+    ax_alloc.grid(True)
+    ax_dir.plot(directional_train_losses, label='Train')
+    ax_dir.plot(directional_val_losses, label='Val')
+    ax_dir.set_xlabel('Epoch')
+    ax_dir.set_ylabel('Loss')
+    ax_dir.set_title('Directional')
+    ax_dir.legend()
+    ax_dir.grid(True)
+    plt.tight_layout()
     plt.show(block=False)
 
     vb = VectorizedBacktesting(
@@ -279,6 +296,6 @@ if __name__ == "__main__":
         commission_fixed=0.0,
         leverage=1.0
     )
-    vb.load_data(train_data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
-    vb.run_strategy(model_wrapper, verbose=True, alloc_model=alloc_model, directional_model=directional_model, device=DEVICE)
+    vb.load_data(train_dataset.data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+    vb.run_strategy(model_wrapper, verbose=True, alloc_model=alloc_model, directional_model=directional_confidence_model, device=DEVICE)
     vb.plot_performance(mode="basic")

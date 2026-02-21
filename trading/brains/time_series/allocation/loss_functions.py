@@ -111,15 +111,8 @@ class IntervalLoss(nn.Module):
         self.width_weight = width_weight
 
     def forward(self, y, target):
-        target = target.squeeze().float()
         lower_bound = y[:, 0]
         upper_bound = y[:, 1]
-
-        outside_lower = (lower_bound - target).clamp(min=0)
-        outside_upper = (target - upper_bound).clamp(min=0)
-        coverage_penalty = (outside_lower + outside_upper).pow(2)
-
-        width_penalty = (upper_bound - lower_bound).clamp(min=1e-6)
-
-        loss = coverage_penalty.mean() + self.width_weight * width_penalty.mean()
-        return loss
+        midpoint = (lower_bound + upper_bound) / 2
+        loss = (midpoint - target).pow(2)
+        return loss.mean()
