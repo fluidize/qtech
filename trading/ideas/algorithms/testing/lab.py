@@ -4,7 +4,6 @@ import numpy as np
 
 from trading.backtesting.backtesting import VectorizedBacktesting
 from trading.backtesting.algorithm_optim import QuantitativeScreener
-import trading.backtesting.testing.cstrats as cs
 import trading.technical_analysis as ta
 
 def strategy(data, ema27760_timeperiod, vwma27761_timeperiod, fisher_transform27762_timeperiod, LOGIC_vwma27761_Lt_const_27764_constant):
@@ -26,10 +25,10 @@ search_space={'ema27760_timeperiod': (2, 200), 'vwma27761_timeperiod': (2, 200),
 
 #training
 qs = QuantitativeScreener(
-    symbols=["SOL-USDT"],
+    symbols=["BTC-USDT"],
     days=1000,
     intervals=["30m"],
-    age_days=100,
+    age_days=0,
     data_source="binance",
     initial_capital=10000,
     slippage_pct=0.05,
@@ -54,7 +53,7 @@ vb = VectorizedBacktesting(
     slippage_pct=0.05,
     commission_fixed=0.00
 )
-vb.fetch_data(symbol="SOL-USDT", days=100, interval="30m", age_days=0, data_source="binance", cache_expiry_hours=0)
+vb.fetch_data(symbol="BTC-USDT", days=1000, interval="30m", age_days=0, data_source="binance", cache_expiry_hours=0)
 
 vb.run_strategy(strategy, verbose=True, **best_set["params"])
 vb.plot_performance(mode="standard")
