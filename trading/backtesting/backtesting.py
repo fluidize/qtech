@@ -175,6 +175,9 @@ class VectorizedBacktesting:
 
         return self.data
 
+    def get_equity_curve(self):
+        return self.data['Portfolio_Value']
+
     def get_performance_metrics(self):
         if self.data is None or 'Position' not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
@@ -509,6 +512,7 @@ class VectorizedBacktesting:
             window.show()
 
             app.exec_()
+
     def get_cost_summary(self) -> dict:
         """Get a summary of trading costs impact."""
         if self.data is None or 'Position' not in self.data.columns:
