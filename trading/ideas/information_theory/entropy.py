@@ -17,7 +17,7 @@ import sys
 sys.path.append('trading')
 import model_tools as mt
 import technical_analysis as ta
-from backtesting.backtesting import VectorizedBacktesting
+from backtesting.backtesting import VectorizedBacktest
 
 class EntropyAnalyzer:
     def __init__(self, data: pd.DataFrame
@@ -74,7 +74,7 @@ class EntropyAnalyzer:
             return entropy_bits
     
     def zscore_inefficiency(self):
-        vb = VectorizedBacktesting()
+        vb = VectorizedBacktest()
         vb.load_data(self.data)
         vb.run_strategy(vb.zscore_momentum_strategy)
         momentum_strategy_metrics = vb.get_performance_metrics()

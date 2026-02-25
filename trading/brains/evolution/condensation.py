@@ -1,4 +1,4 @@
-from trading.backtesting.backtesting import VectorizedBacktesting
+from trading.backtesting.backtesting import VectorizedBacktest
 import trading.backtesting.mc_analysis as mc
 import trading.model_tools as mt
 
@@ -26,7 +26,7 @@ def quickstop_callback(study, trial):
 def evaluate_genome(args):
     genome_index, ast_str, param_space, vb_config, data_config, n_trials = args
     
-    from trading.backtesting.backtesting import VectorizedBacktesting
+    from trading.backtesting.backtesting import VectorizedBacktest
     from trading.backtesting.algorithm_optim import BayesianOptimizer
     from trading.brains.evolution.genetics.gp_tools import ast_to_function
     from trading.backtesting.mc_analysis import MonteCarloAnalysis
@@ -36,7 +36,7 @@ def evaluate_genome(args):
     strategy_func = ast_to_function(function_ast)
     strategy_func.param_space = param_space
     
-    vb = VectorizedBacktesting(**vb_config)
+    vb = VectorizedBacktest(**vb_config)
     vb.fetch_data(**data_config)
     
     bo = BayesianOptimizer(engine=vb)
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     best_genome = top_5[0]
     display_ast(best_genome.get_function_ast())
 
-    vb = VectorizedBacktesting(**vb_config)
+    vb = VectorizedBacktest(**vb_config)
     vb.fetch_data(**data_config)
     vb.run_strategy(best_genome.get_compiled_function(), **best_genome.get_best_params())
     vb.plot_performance(mode="standard")

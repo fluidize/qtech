@@ -2,7 +2,7 @@ from rich import print
 import pandas as pd
 import numpy as np
 
-from trading.backtesting.backtesting import VectorizedBacktesting
+from trading.backtesting.backtesting import VectorizedBacktest
 from trading.backtesting.algorithm_optim import QuantitativeScreener
 import trading.technical_analysis as ta
 
@@ -47,7 +47,7 @@ qs.optimize(
 # qs.plot_best_performance(mode="standard")
 best_set = qs.get_best()
 
-vb = VectorizedBacktesting(
+vb = VectorizedBacktest(
     instance_name="default",
     initial_capital=10000,
     slippage_pct=0.05,

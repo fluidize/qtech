@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import trading.model_tools as mt
 import trading.technical_analysis as ta
 
-from trading.backtesting.backtesting import VectorizedBacktesting
+from trading.backtesting.backtesting import VectorizedBacktest
 import loss_functions as lf
 
 class PriceDataset(Dataset):
@@ -289,7 +289,7 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show(block=False)
 
-    vb = VectorizedBacktesting(
+    vb = VectorizedBacktest(
         instance_name="AllocationModel",
         initial_capital=10000,
         slippage_pct=0.00,

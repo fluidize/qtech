@@ -14,12 +14,12 @@ import optuna
 import optunahub
 optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
 
-from trading.backtesting.backtesting import VectorizedBacktesting, MultiAssetBacktesting
+from trading.backtesting.backtesting import VectorizedBacktest, MultiAssetBacktesting
 
 class GridSearch:
     def __init__(
         self,
-        engine: VectorizedBacktesting,
+        engine: VectorizedBacktest,
         strategy_func: Callable,
         param_grid: Dict[str, List[Any]],
         metric: str = "Total_Return",
@@ -28,7 +28,7 @@ class GridSearch:
         Initialize the grid search framework.
         
         Args:
-            backtest: VectorizedBacktesting instance with data loaded
+            backtest: VectorizedBacktest instance with data loaded
             strategy_func: The strategy function to optimize
             param_grid: Dictionary of parameters to search
             metric: Performance metric to optimize (default: Total Return)
@@ -141,7 +141,7 @@ class GridSearch:
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class BayesianOptimizer:
-    def __init__(self, engine: VectorizedBacktesting):
+    def __init__(self, engine: VectorizedBacktest):
         self.engine = engine
 
     def _suggest_params(self, trial):
@@ -492,7 +492,7 @@ class QuantitativeScreener:
                 cache_expiry_hours: int = 24
             ):
         
-        self.engine = VectorizedBacktesting(
+        self.engine = VectorizedBacktest(
             instance_name="QuantitativeScreener",
             initial_capital=initial_capital,
             slippage_pct=slippage_pct,

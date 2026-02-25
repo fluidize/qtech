@@ -6,7 +6,7 @@ from rich import print
 import trading.model_tools as mt
 import trading.backtesting.vb_metrics as metrics
 
-class VectorizedBacktesting:
+class VectorizedBacktest:
     def __init__(
         self,
         instance_name: str = "default",
@@ -566,7 +566,7 @@ class VectorizedBacktesting:
             'total_costs': total_slippage_paid + total_commission_paid
         }
 
-class MultiAssetBacktesting:
+class MultiAssetBacktest:
     def __init__(self,
                  initial_capitals: list[float] = [10000],
                  slippage_pct: float = 0.001,
@@ -605,7 +605,7 @@ class MultiAssetBacktesting:
     
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
         for symbol in self.data.keys():
-            vb = VectorizedBacktesting(
+            vb = VectorizedBacktest(
                 instance_name=symbol,
                 initial_capital=self.initial_capitals[self.symbols.index(symbol)],
                 slippage_pct=self.slippage_pct,

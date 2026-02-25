@@ -2,7 +2,7 @@ from rich import print
 import pandas as pd
 import numpy as np
 
-from trading.backtesting.backtesting import VectorizedBacktesting
+from trading.backtesting.backtesting import VectorizedBacktest
 import trading.technical_analysis as ta
 
 from trading.brains.probability.models import EmpiricalDistribution
@@ -20,7 +20,7 @@ def strategy(data):
     signals = upside_probabilities
     return signals, (upside_probabilities, False)
 
-vb = VectorizedBacktesting(
+vb = VectorizedBacktest(
     instance_name="default",
     initial_capital=10000,
     slippage_pct=0.001,

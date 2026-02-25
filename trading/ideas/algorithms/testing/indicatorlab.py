@@ -1,4 +1,4 @@
-from trading.backtesting.backtesting import VectorizedBacktesting
+from trading.backtesting.backtesting import VectorizedBacktest
 import trading.technical_analysis as ta
 
 import numpy as np
@@ -14,7 +14,7 @@ def indicator(data):
     signals[data['Close'] < ma] = 2
     return signals, (ma, False)
 
-vb = VectorizedBacktesting(
+vb = VectorizedBacktest(
     instance_name="default",
     initial_capital=10000,
     slippage_pct=0.00,
