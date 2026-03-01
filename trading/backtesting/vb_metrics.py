@@ -107,7 +107,7 @@ def get_max_drawdown(position: pd.Series, open_prices: pd.Series, initial_capita
     result = drawdown.min()
     return result
 
-def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, n_days: int, risk_free_rate: float = 0.00) -> float:
+def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, risk_free_rate: float = 0.00) -> float:
     """Calculate annualized Sharpe ratio using actual strategy returns that include costs."""
     excess_returns = strategy_returns - risk_free_rate
     if excess_returns.std(ddof=1) == 0:
@@ -116,14 +116,14 @@ def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, n_days: 
     sharpe_per_period = excess_returns.mean() / excess_returns.std(ddof=1)
 
     periods_per_year = {
-        '1m': 365 * 24 * 60,
-        '3m': 365 * 24 * 20,
-        '5m': 365 * 24 * 12,
-        '15m': 365 * 24 * 4,
-        '30m': 365 * 24 * 2,
-        '1h': 365 * 24,
-        '4h': 365 * 6,
-        '1d': 365,
+        '1m': 252 * 24 * 60,
+        '3m': 252 * 24 * 20,
+        '5m': 252 * 24 * 12,
+        '15m': 252 * 24 * 4,
+        '30m': 252 * 24 * 2,
+        '1h': 252 * 24,
+        '4h': 252 * 6,
+        '1d': 252,
     }.get(return_interval, 252)
 
     sharpe_annualized = sharpe_per_period * np.sqrt(periods_per_year)
