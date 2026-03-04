@@ -4,7 +4,7 @@ import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from trading.model_tools import fetch_data
 from loss_functions import IntervalLoss
-from main import PriceDataset
+from models import PriceDataset, TensorSubset, DirectionalConfidencePredictor
 import matplotlib.pyplot as plt
 
 EPOCHS = 500
@@ -18,55 +18,20 @@ DATA = {
     "cache_expiry_hours": 999,
     "verbose": True
 }
-class DirectionalConfidencePredictor(nn.Module):
-    def __init__(self, input_dim, dropout=0.03):
-        super().__init__()
-        self.input_dim = input_dim
-        
-        self.main_network = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 2),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.main_network(x) #y2 = upper bound, y1 = lower bound
-        return x.squeeze()
-
-class TensorSubset:
-    def __init__(self, X, y):
-        self.X = X
-        self.y = y
 
 data = fetch_data(**DATA)
 full_dataset = PriceDataset(data, shift=10)
-train_idx, val_idx = train_test_split(range(len(full_dataset)), test_size=0.2, shuffle=False)
-train_dataset = TensorSubset(full_dataset.X[train_idx], full_dataset.y[train_idx])
-val_dataset = TensorSubset(full_dataset.X[val_idx], full_dataset.y[val_idx])
+train_dataset, val_dataset = full_dataset.split(test_size=0.2)
 
-directional_confidence_model = DirectionalConfidencePredictor(input_dim=full_dataset.X.shape[1]).to(DEVICE)
+directional_confidence_model = DirectionalConfidencePredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
 directional_confidence_optimizer = optim.Adam(directional_confidence_model.parameters(), weight_decay=1e-5)
 directional_confidence_scheduler = optim.lr_scheduler.CosineAnnealingLR(directional_confidence_optimizer, T_max=EPOCHS, eta_min=1e-8)
 directional_confidence_loss_fn = IntervalLoss()
 
-best_val_loss = float('inf')
-best_model_state = None
 train_losses = []
 val_losses = []
+best_val_loss = float('inf')
+best_model_state = None
 
 for i in range(EPOCHS):
     directional_confidence_model.train()
