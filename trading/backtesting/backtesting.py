@@ -200,7 +200,7 @@ class VectorizedBacktest:
         drawdown = (portfolio_value - peak) / peak
         max_drawdown = drawdown.min()
 
-        sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(strategy_returns, self.interval, self.n_days)
+        sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(strategy_returns, self.interval)
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         info_ratio = metrics.get_information_ratio(strategy_returns, asset_returns, self.interval, self.n_days) if strategy_returns.std() != 0 else float('nan')
         alpha, beta = metrics.get_alpha_beta(strategy_returns, asset_returns, n_days=self.n_days, return_interval=self.interval)
@@ -639,7 +639,7 @@ class MultiAssetBacktest:
         newest = self.data[list(self.data.keys())[0]]['Datetime'].iloc[-1]
         n_days = (newest - oldest).days
         
-        sharpe_ratio = metrics.get_sharpe_ratio(strategy_returns, self.interval, n_days)
+        sharpe_ratio, _ = metrics.get_sharpe_ratio(strategy_returns, self.interval)
         
         sortino_ratio = metrics.get_sortino_ratio(strategy_returns, self.interval, n_days)
         
