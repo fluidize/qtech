@@ -14,8 +14,6 @@ from plotly.subplots import make_subplots
 import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 
-from trading.options.curve.main import get_option_chain, filter_otm, get_option_iv, days_to_expiry
-
 
 TICKERTICK_BASE = "https://api.tickertick.com/feed"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0"}
@@ -29,7 +27,6 @@ def _fuzzy_match(text: str, pattern: str) -> bool:
         if i < len(pattern) and c == pattern[i]:
             i += 1
     return i == len(pattern)
-
 
 def fetch_rss_articles(ticker: str) -> list[dict]:
     try:
@@ -49,7 +46,6 @@ def fetch_rss_articles(ticker: str) -> list[dict]:
     except Exception:
         return []
 
-
 def format_num(value, prefix: str = "", suffix: str = "", compact: bool = True, decimals: int = 2) -> str:
     if value is None or value == "N/A":
         return "N/A"
@@ -66,6 +62,33 @@ def format_num(value, prefix: str = "", suffix: str = "", compact: bool = True, 
             return f"{prefix}{value/1e3:.2f}K{suffix}"
     return f"{prefix}{format(value, f'.{decimals}f')}{suffix}"
 
+def get_option_chain(ticker: str, expiration: str | None = None):
+    ticker_obj = yf.Ticker(ticker)
+    if expiration is None:
+        expirations = ticker_obj.options
+        if not expirations:
+            raise ValueError(f"No options available for {ticker}")
+        expiration = expirations[0]
+    chain = ticker_obj.option_chain(expiration)
+    spot = ticker_obj.history(period="1d")["Close"].iloc[-1]
+    return chain, spot, expiration
+
+
+def filter_otm(options, spot):
+    calls = options.calls.copy()
+    puts = options.puts.copy()
+    otm_calls = calls[calls["strike"] > spot]
+    otm_puts = puts[puts["strike"] < spot]
+    return otm_calls, otm_puts
+
+
+def get_option_iv(option):
+    return option.impliedVolatility
+
+
+def days_to_expiry(expiration_str: str) -> int:
+    expiry_date = datetime.strptime(expiration_str, "%Y-%m-%d")
+    return (expiry_date - datetime.now()).days
 
 def show_volatility_surface(ticker: str) -> None:
     ticker_obj = yf.Ticker(ticker)
