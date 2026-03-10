@@ -1,11 +1,13 @@
-import pandas as pd
-import trading.technical_analysis as ta
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 from scipy.signal import savgol_filter
+
+import trading.technical_analysis as ta
+
 
 class PriceDataset(Dataset):
     def __init__(self, data: pd.DataFrame, shift: int = 0):

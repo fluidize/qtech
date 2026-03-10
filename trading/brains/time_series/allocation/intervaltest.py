@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from trading.model_tools import fetch_data
 from loss_functions import IntervalLoss
-from models import PriceDataset, DirectionalConfidencePredictor
+from models import PriceDataset, TensorSubset, DirectionalConfidencePredictor
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
@@ -19,20 +19,19 @@ DATA = {
     "verbose": True
 }
 
-
 data = fetch_data(**DATA)
 full_dataset = PriceDataset(data, shift=10)
 train_dataset, val_dataset = full_dataset.split(test_size=0.2)
 
-directional_confidence_model = DirectionalConfidencePredictor(input_dim=full_dataset.X.shape[1]).to(DEVICE)
+directional_confidence_model = DirectionalConfidencePredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
 directional_confidence_optimizer = optim.Adam(directional_confidence_model.parameters(), weight_decay=1e-5)
 directional_confidence_scheduler = optim.lr_scheduler.CosineAnnealingLR(directional_confidence_optimizer, T_max=EPOCHS, eta_min=1e-8)
 directional_confidence_loss_fn = IntervalLoss()
 
-best_val_loss = float('inf')
-best_model_state = None
 train_losses = []
 val_losses = []
+best_val_loss = float('inf')
+best_model_state = None
 
 for i in tqdm(range(EPOCHS)):
     directional_confidence_model.train()

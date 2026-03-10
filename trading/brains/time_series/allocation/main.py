@@ -12,7 +12,21 @@ import loss_functions as lf
 from models import PriceDataset, AllocationModel, DirectionalConfidencePredictor
 
 from trading.backtesting.backtesting import VectorizedBacktest
+import loss_functions as lf
+from models import PriceDataset, TensorSubset, DirectionalConfidencePredictor, AllocationModel
 
+def model_wrapper(data, alloc_model, directional_model, device):
+    dataset = PriceDataset(data, shift=SHIFTS)
+    alloc_model.eval()
+    directional_model.eval()
+    with torch.no_grad():
+        X_tensor = dataset.X.to(device)
+        directional_estimate = directional_model(X_tensor)
+        predictions = alloc_model(X_tensor, directional_estimate).cpu().numpy()
+
+    signals = pd.Series(0.0, index=data.index)
+    signals.loc[dataset.valid_indices] = predictions
+    return signals
 ### Training ###
 if __name__ == "__main__":
     EPOCHS = 1000
