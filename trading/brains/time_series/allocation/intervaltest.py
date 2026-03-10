@@ -1,13 +1,14 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from trading.model_tools import fetch_data
-from loss_functions import IntervalLoss
-from models import PriceDataset, TensorSubset, DirectionalConfidencePredictor
+from loss_functions import NegativeLogLikelihoodLoss
+from models import PriceDataset, TensorSubset, DistributionPredictor
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-EPOCHS = 10
+EPOCHS = 100
 DEVICE = 'cuda'
 DATA = {
     "symbol": "SOL-USDT",
@@ -23,10 +24,10 @@ data = fetch_data(**DATA)
 full_dataset = PriceDataset(data, shift=10)
 train_dataset, val_dataset = full_dataset.split(test_size=0.2)
 
-directional_confidence_model = DirectionalConfidencePredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
-directional_confidence_optimizer = optim.Adam(directional_confidence_model.parameters(), weight_decay=1e-5)
-directional_confidence_scheduler = optim.lr_scheduler.CosineAnnealingLR(directional_confidence_optimizer, T_max=EPOCHS, eta_min=1e-8)
-directional_confidence_loss_fn = IntervalLoss()
+model = DistributionPredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
+optimizer = optim.Adam(model.parameters(), weight_decay=1e-5)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-8)
+loss_fn = NegativeLogLikelihoodLoss()
 
 train_losses = []
 val_losses = []
@@ -34,27 +35,27 @@ best_val_loss = float('inf')
 best_model_state = None
 
 for i in tqdm(range(EPOCHS)):
-    directional_confidence_model.train()
-    directional_confidence_optimizer.zero_grad()
-    yhat = directional_confidence_model(train_dataset.X.to(DEVICE))
-    loss = directional_confidence_loss_fn(yhat, train_dataset.y.to(DEVICE))
+    model.train()
+    optimizer.zero_grad()
+    yhat = model(train_dataset.X.to(DEVICE))
+    loss = loss_fn(yhat, train_dataset.y.to(DEVICE))
     loss.backward()
-    directional_confidence_optimizer.step()
-    directional_confidence_scheduler.step()
+    optimizer.step()
+    scheduler.step()
     train_losses.append(loss.item())
 
-    directional_confidence_model.eval()
+    model.eval()
     with torch.no_grad():
-        val_yhat = directional_confidence_model(val_dataset.X.to(DEVICE))
-        val_loss = directional_confidence_loss_fn(val_yhat, val_dataset.y.to(DEVICE)).item()
+        val_yhat = model(val_dataset.X.to(DEVICE))
+        val_loss = loss_fn(val_yhat, val_dataset.y.to(DEVICE)).item()
     val_losses.append(val_loss)
 
     if val_loss < best_val_loss:
         best_val_loss = val_loss
-        best_model_state = directional_confidence_model.state_dict().copy()
+        best_model_state = model.state_dict().copy()
 
 if best_model_state is not None:
-    directional_confidence_model.load_state_dict(best_model_state)
+    model.load_state_dict(best_model_state)
 
 plt.figure(figsize=(10, 5))
 plt.plot(train_losses, label='Train Loss')
@@ -66,18 +67,23 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
-directional_confidence_model.eval()
+model.eval()
 with torch.no_grad():
-    test_y = directional_confidence_model(val_dataset.X.to(DEVICE)).detach().cpu().numpy()
+    test_y = model(val_dataset.X.to(DEVICE)).detach().cpu().numpy()
 
-plt.figure(figsize=(10, 5))
+mean = test_y[:, 0]
+std = test_y[:, 1]
+upper = mean + std
+lower = mean - std
+
+plt.figure(figsize=(12, 5))
 plt.plot(val_dataset.y.numpy(), label='True')
-plt.plot(test_y[:,1], label='Predicted Upper Bound')
-plt.plot(test_y[:,0], label='Predicted Lower Bound')
-plt.plot(test_y[:,1] - test_y[:,0], label='Spread')
+plt.plot(upper, label='Upper band', color='blue')
+plt.plot(lower, label='Lower band', color='blue')
+plt.fill_between(range(len(mean)), lower, upper, alpha=0.3)
 plt.xlabel('Time')
 plt.ylabel('Price')
-plt.title('True vs Predicted')
+plt.title('True vs Predicted (1 std range)')
 plt.legend()
 plt.grid(True)
 plt.show()

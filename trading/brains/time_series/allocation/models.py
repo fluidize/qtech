@@ -93,8 +93,8 @@ class TensorSubset(Dataset):
     def __len__(self):
         return len(self.X)
 
-class DirectionalConfidencePredictor(nn.Module):
-    def __init__(self, input_dim, dropout=0.03):
+class DistributionPredictor(nn.Module):
+    def __init__(self, input_dim, dropout=0.5):
         super().__init__()
         self.input_dim = input_dim
         
@@ -119,7 +119,7 @@ class DirectionalConfidencePredictor(nn.Module):
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.main_network(x) #y2 = upper bound, y1 = lower bound
+        x = self.main_network(x) #y2 = std, y1 = mean
         return x.squeeze()
 
 class AllocationModel(nn.Module):
@@ -160,3 +160,14 @@ class AllocationModel(nn.Module):
         x = self.main_network(torch.cat([x, directional_estimate], dim=1))
         x = nn.Sigmoid()(x).squeeze()
         return x
+
+
+class AllocationWrapper(nn.Module):
+    def __init__(self, input_dim: int, alloc_dropout: float = 0.03, dist_dropout: float = 0.5):
+        super().__init__()
+        self.distribution_model = DistributionPredictor(input_dim, dropout=dist_dropout)
+        self.alloc = AllocationModel(input_dim, dropout=alloc_dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dist_estimate = self.distribution_model(x)
+        return self.alloc(x, dist_estimate)

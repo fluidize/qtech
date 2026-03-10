@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.distributions import Normal
 
 class TorchBacktest:
     def __init__(self, device: str = "cuda"):
@@ -11,11 +12,9 @@ class TorchBacktest:
         self.dataset = dataset
         return self.dataset
     
-    def _model_wrapper(self, alloc_model, directional_model):
+    def _model_wrapper(self, model):
         X_tensor = self.dataset.X.to(self.device)
-
-        directional_estimate = directional_model(X_tensor)
-        predictions = alloc_model(X_tensor, directional_estimate)
+        predictions = model(X_tensor)
 
         raw_signals_t = torch.zeros(len(self.dataset.data), dtype=torch.float32, device=self.device)
         valid_positions = torch.tensor(
@@ -33,14 +32,14 @@ class TorchBacktest:
         else:
             return series
 
-    def _exec_backtest_hulltac(self, alloc_model, directional_model):
+    def _exec_backtest_hulltac(self, model):
         # pct_change().shift(-1)
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
         open_next = self._torch_shift(open_prices, -1)  
         open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
         open_returns[-1] = 0.0 
 
-        raw_signals_t = self._model_wrapper(alloc_model, directional_model).clamp(0.0, 1.0)
+        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
 
         position = self._torch_shift(raw_signals_t, 1)
 
@@ -76,13 +75,13 @@ class TorchBacktest:
         loss = strategy_sharpe / (return_penalty * volatility_penalty)
         return loss
     
-    def get_sharpe(self, alloc_model, directional_model):
+    def get_sharpe(self, model):
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
         open_next = self._torch_shift(open_prices, -1)  
         open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
         open_returns[-1] = 0.0 
 
-        raw_signals_t = self._model_wrapper(alloc_model, directional_model).clamp(0.0, 1.0)
+        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
 
         position = self._torch_shift(raw_signals_t, 1)
 
@@ -98,21 +97,21 @@ class SharpeLoss(nn.Module):
         super().__init__()
         self.device = device
 
-    def forward(self, alloc_model, directional_model, dataset):
+    def forward(self, model, dataset):
         tb = TorchBacktest(device=self.device)
         tb.load_dataset(dataset)
-        loss = tb.get_sharpe(alloc_model, directional_model)
+        loss = tb.get_sharpe(model)
         return -loss
 
-class IntervalLoss(nn.Module):
+class NegativeLogLikelihoodLoss(nn.Module):
     def __init__(self, width_weight: float = 0.1, device: str = "cuda"):
         super().__init__()
         self.device = device
         self.width_weight = width_weight
 
     def forward(self, y, target):
-        lower_bound = y[:, 0]
-        upper_bound = y[:, 1]
-        midpoint = (lower_bound + upper_bound) / 2
-        loss = (midpoint - target).pow(2)
+        mean = y[:, 0]
+        std = y[:, 1].clamp(min=1e-8)
+        dist = Normal(mean, std)
+        loss = -dist.log_prob(target)
         return loss.mean()
