@@ -8,12 +8,12 @@ from models import PriceDataset, TensorSubset, DistributionPredictor
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-EPOCHS = 100
+EPOCHS = 5000
 DEVICE = 'cuda'
 DATA = {
-    "symbol": "SOL-USDT",
-    "days":180,
-    "interval": "30m",
+    "symbol": "BTC-USDT",
+    "days":365,
+    "interval": "1h",
     "age_days": 0,
     "data_source": "binance",
     "cache_expiry_hours": 999,
@@ -76,14 +76,23 @@ std = test_y[:, 1]
 upper = mean + std
 lower = mean - std
 
-plt.figure(figsize=(12, 5))
-plt.plot(val_dataset.y.numpy(), label='True')
-plt.plot(upper, label='Upper band', color='blue')
-plt.plot(lower, label='Lower band', color='blue')
-plt.fill_between(range(len(mean)), lower, upper, alpha=0.3)
-plt.xlabel('Time')
-plt.ylabel('Price')
-plt.title('True vs Predicted (1 std range)')
-plt.legend()
-plt.grid(True)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+ax1.plot(val_dataset.y.numpy(), label='True')
+ax1.plot(upper, label='Upper band', color='blue')
+ax1.plot(lower, label='Lower band', color='blue')
+ax1.plot(mean, label='Predicted mean', color='orange')
+ax1.fill_between(range(len(mean)), lower, upper, alpha=0.3)
+ax1.set_xlabel('Time')
+ax1.set_ylabel('Price')
+ax1.set_title('True vs Predicted (1 std range)')
+ax1.legend()
+ax1.grid(True)
+
+ax2.plot(std, label='Predicted std', color='blue')
+ax2.set_xlabel('Time')
+ax2.set_ylabel('Std')
+ax2.set_title('Model Std')
+ax2.legend()
+ax2.grid(True)
+plt.tight_layout()
 plt.show()

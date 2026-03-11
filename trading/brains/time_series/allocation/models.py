@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 from scipy.signal import savgol_filter
+import torch.nn.functional as F
 
 import trading.technical_analysis as ta
 
@@ -94,76 +95,57 @@ class TensorSubset(Dataset):
         return len(self.X)
 
 class DistributionPredictor(nn.Module):
-    def __init__(self, input_dim, dropout=0.5):
+    def __init__(self, input_dim: int, hidden_dim: int = 256, dropout: float = 0.2):
         super().__init__()
         self.input_dim = input_dim
-        
-        self.main_network = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.LayerNorm(128),
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(128, 128),
-            nn.LayerNorm(128),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(128, 128),
-            nn.LayerNorm(128),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(128, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 2),
         )
-    
+        self.mean_head = nn.Linear(hidden_dim, 1)
+        self.mean_skip = nn.Linear(input_dim, 1)
+        self.std_head = nn.Linear(hidden_dim, 1)
+        self.std_skip = nn.Linear(input_dim, 1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.main_network(x) #y2 = std, y1 = mean
-        return x.squeeze()
+        h = self.encoder(x)
+        mean = self.mean_head(h).squeeze(-1) + self.mean_skip(x).squeeze(-1)
+        std = F.softplus(self.std_head(h).squeeze(-1) + self.std_skip(x).squeeze(-1))
+        return torch.stack([mean, std], dim=1)
 
 class AllocationModel(nn.Module):
-    def __init__(self, input_dim, dropout=0.03):
+    def __init__(self, input_dim: int, hidden_dim: int = 256, dropout: float = 0.05):
         super().__init__()
         self.input_dim = input_dim
-        
-        self.main_network = nn.Sequential(
-            nn.Linear(input_dim + 2, 128),
-            nn.LayerNorm(128),
-            nn.ReLU(),
+        self.net = nn.Sequential(
+            nn.Linear(input_dim + 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
             nn.Dropout(dropout),
-
-            nn.Linear(128, 512),
-            nn.LayerNorm(512),
-            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
             nn.Dropout(dropout),
-
-            nn.Linear(512, 512),
-            nn.LayerNorm(512),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-
-            nn.Linear(512, 512),
-            nn.LayerNorm(512),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-
-            nn.Linear(512, 512),
-            nn.LayerNorm(512),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-
-            nn.Linear(512, 1),
+            nn.Linear(hidden_dim, 1),
         )
 
     def forward(self, x: torch.Tensor, directional_estimate: torch.Tensor) -> torch.Tensor:
-        x = self.main_network(torch.cat([x, directional_estimate], dim=1))
-        x = nn.Sigmoid()(x).squeeze()
-        return x
+        h = torch.cat([x, directional_estimate], dim=1)
+        return torch.sigmoid(self.net(h)).squeeze(-1)
 
 
-class AllocationWrapper(nn.Module):
-    def __init__(self, input_dim: int, alloc_dropout: float = 0.03, dist_dropout: float = 0.5):
+class CombinedModelWrapper(nn.Module):
+    def __init__(self, input_dim: int, alloc_dropout: float = 0.1, dist_dropout: float = 0.3):
         super().__init__()
         self.distribution_model = DistributionPredictor(input_dim, dropout=dist_dropout)
         self.alloc = AllocationModel(input_dim, dropout=alloc_dropout)

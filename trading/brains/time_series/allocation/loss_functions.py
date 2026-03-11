@@ -11,7 +11,7 @@ class TorchBacktest:
         "Expects a dataset with .X and .data"
         self.dataset = dataset
         return self.dataset
-    
+
     def _model_wrapper(self, model):
         X_tensor = self.dataset.X.to(self.device)
         predictions = model(X_tensor)
@@ -32,7 +32,7 @@ class TorchBacktest:
         else:
             return series
 
-    def _exec_backtest_hulltac(self, model):
+    def get_hulltac(self, model):
         # pct_change().shift(-1)
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
         open_next = self._torch_shift(open_prices, -1)  
@@ -40,7 +40,6 @@ class TorchBacktest:
         open_returns[-1] = 0.0 
 
         raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
-
         position = self._torch_shift(raw_signals_t, 1)
 
         strategy_returns = torch.multiply(position, open_returns)
@@ -82,7 +81,6 @@ class TorchBacktest:
         open_returns[-1] = 0.0 
 
         raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
-
         position = self._torch_shift(raw_signals_t, 1)
 
         strategy_returns = torch.multiply(position, open_returns)
@@ -91,6 +89,35 @@ class TorchBacktest:
         sharpe = strategy_returns.mean() / strategy_std
 
         return sharpe
+    
+    def get_total_return(self, model):
+        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
+        open_next = self._torch_shift(open_prices, -1)  
+        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
+        open_returns[-1] = 0.0 
+
+        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        position = self._torch_shift(raw_signals_t, 1)
+
+        strategy_returns = torch.multiply(position, open_returns)
+
+        total_return = (1 + strategy_returns).prod() - 1
+        return total_return
+
+    def get_max_drawdown(self, model):
+        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
+        open_next = self._torch_shift(open_prices, -1)
+        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
+        open_returns[-1] = 0.0
+
+        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        position = self._torch_shift(raw_signals_t, 1)
+
+        strategy_returns = torch.multiply(position, open_returns)
+        equity = torch.cumprod(torch.add(torch.tensor(1.0, device=self.device, dtype=strategy_returns.dtype), strategy_returns), dim=0)
+        running_max = torch.cummax(equity, dim=0).values
+        drawdown = (running_max - equity) / running_max.clamp(min=1e-12)
+        return drawdown.max()
 
 class SharpeLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
@@ -103,15 +130,48 @@ class SharpeLoss(nn.Module):
         loss = tb.get_sharpe(model)
         return -loss
 
-class NegativeLogLikelihoodLoss(nn.Module):
-    def __init__(self, width_weight: float = 0.1, device: str = "cuda"):
+class TRLoss(nn.Module):
+    def __init__(self, device: str = "cuda"):
         super().__init__()
         self.device = device
-        self.width_weight = width_weight
+
+    def forward(self, model, dataset):
+        tb = TorchBacktest(device=self.device)
+        tb.load_dataset(dataset)
+        loss = tb.get_total_return(model)
+        return -loss
+
+class HullTacLoss(nn.Module):
+    def __init__(self, device: str = "cuda"):
+        super().__init__()
+        self.device = device
+
+    def forward(self, model, dataset):
+        tb = TorchBacktest(device=self.device)
+        tb.load_dataset(dataset)
+        loss = tb.get_hulltac(model)
+        return -loss
+
+class CombinedAllocLoss(nn.Module):
+    def __init__(self, device: str = "cuda"):
+        super().__init__()
+        self.device = device
+
+    def forward(self, model, dataset):
+        tb = TorchBacktest(device=self.device)
+        tb.load_dataset(dataset)
+        sharpe = tb.get_sharpe(model)
+        max_dd = tb.get_max_drawdown(model)
+        loss = sharpe * (1 + max_dd).clamp(min=0.0)
+        return loss
+
+class NegativeLogLikelihoodLoss(nn.Module):
+    def __init__(self, device: str = "cuda"):
+        super().__init__()
+        self.device = device
 
     def forward(self, y, target):
         mean = y[:, 0]
-        std = y[:, 1].clamp(min=1e-8)
-        dist = Normal(mean, std)
-        loss = -dist.log_prob(target)
-        return loss.mean()
+        std = y[:, 1].clamp(min=0.01)
+        nll = -Normal(mean, std).log_prob(target)
+        return nll.mean()
