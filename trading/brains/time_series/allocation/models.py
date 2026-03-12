@@ -3,9 +3,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
+import torch.nn.functional as F
+
 from sklearn.model_selection import train_test_split
 from scipy.signal import savgol_filter
-import torch.nn.functional as F
+from hmmlearn import hmm
 
 import trading.technical_analysis as ta
 
@@ -62,40 +64,56 @@ class PriceDataset(Dataset):
             'macd_dema_hist': macd_dema_hist,
             'aroon_osc': aroon_up - aroon_down,
         })
-
         shifted_cols = {}
         for i in range(shift):
             for col in self.X.columns:
                 shifted_cols[col + f'_{i}'] = self.X[col].shift(i)
-
         if shifted_cols:
             self.X = pd.concat([self.X, pd.DataFrame(shifted_cols)], axis=1)
-        
-        self.y = pd.Series(savgol_filter(self.data['Open'], window_length=20, polyorder=3, deriv=1))
 
+        velocity = savgol_filter(self.data['Open'], window_length=20, polyorder=3, deriv=1)
+        y_velocity = pd.Series(velocity, index=self.data.index)
+        
+        hmm_model = hmm.GaussianHMM(
+            n_components=2,
+            covariance_type="diag",
+            n_iter=10000,
+            init_params="kmeans",
+            random_state=42
+        )
+        hmm_model.fit(y_velocity.values.reshape(-1, 1))
+        states = hmm_model.predict(y_velocity.values.reshape(-1, 1))
+        y_regime = pd.Series(states, index=self.data.index)
+        
         self.X = self.X.dropna(axis=1)
-        combined = self.X.join(self.y.rename('y')).dropna()
+        combined = pd.concat([self.X, y_velocity.rename('y_velocity'), y_regime.rename('y_regime')], axis=1).dropna()
         self.valid_indices = combined.index
 
         self.X = torch.tensor(combined[self.X.columns].values.astype(np.float32))
-        self.y = torch.tensor(combined['y'].values.astype(np.float32))
+        self.y_velocity = torch.tensor(combined['y_velocity'].values.astype(np.float32))
+        self.y_regime = torch.tensor(combined['y_regime'].values.astype(np.float32))
 
     def split(self, test_size=0.2):
         train_idx, val_idx = train_test_split(range(len(self.X)), test_size=test_size, shuffle=False)
-        return TensorSubset(self.data.iloc[train_idx], self.X[train_idx], self.y[train_idx]), TensorSubset(self.data.iloc[val_idx], self.X[val_idx], self.y[val_idx])
+        return (
+            TensorSubset(self.data.iloc[train_idx], self.X[train_idx], self.y_velocity[train_idx], self.y_regime[train_idx]),
+            TensorSubset(self.data.iloc[val_idx], self.X[val_idx], self.y_velocity[val_idx], self.y_regime[val_idx]),
+        )
 
 class TensorSubset(Dataset):
-    def __init__(self, data: pd.DataFrame, X: torch.Tensor, y: torch.Tensor):
+    def __init__(self, data: pd.DataFrame, X: torch.Tensor, y_velocity: torch.Tensor, y_regime: torch.Tensor):
         self.data = data.reset_index(drop=True)
         self.X = X
-        self.y = y
+        self.y_velocity = y_velocity
+        self.y_regime = y_regime
         self.valid_indices = self.data.index
 
     def __len__(self):
         return len(self.X)
 
-class DistributionPredictor(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int = 256, dropout: float = 0.2):
+class VelocityDistributionPredictor(nn.Module):
+    """Predicts a normal distribution of price velocity"""
+    def __init__(self, input_dim: int, hidden_dim: int = 256, dropout: float = 0.05):
         super().__init__()
         self.input_dim = input_dim
         self.encoder = nn.Sequential(
@@ -123,12 +141,40 @@ class DistributionPredictor(nn.Module):
         std = F.softplus(self.std_head(h).squeeze(-1) + self.std_skip(x).squeeze(-1))
         return torch.stack([mean, std], dim=1)
 
+class RegimeClassifier(nn.Module):
+    """HMM proxy for price regime, assume hmm is true"""
+    def __init__(self, input_dim: int, hidden_dim: int = 256, dropout: float = 0.05):
+        super().__init__()
+        self.input_dim = input_dim
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+        )
+        self.bull_trend_head = nn.Linear(hidden_dim, 1)
+        self.bear_trend_head = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.encoder(x)
+        bull_trend = self.bull_trend_head(h).squeeze(-1)
+        bear_trend = self.bear_trend_head(h).squeeze(-1)
+        return torch.softmax(torch.stack([bull_trend, bear_trend], dim=1), dim=1)
+
 class AllocationModel(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int = 256, dropout: float = 0.05):
         super().__init__()
         self.input_dim = input_dim
         self.net = nn.Sequential(
-            nn.Linear(input_dim + 2, hidden_dim),
+            nn.Linear(input_dim + 4, hidden_dim), #mean, std, bull_trend, bear_trend
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -139,17 +185,18 @@ class AllocationModel(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, x: torch.Tensor, directional_estimate: torch.Tensor) -> torch.Tensor:
-        h = torch.cat([x, directional_estimate], dim=1)
+    def forward(self, x: torch.Tensor, directional_estimate: torch.Tensor, regime_estimate: torch.Tensor) -> torch.Tensor:
+        h = torch.cat([x, directional_estimate, regime_estimate], dim=1)
         return torch.sigmoid(self.net(h)).squeeze(-1)
 
-
 class CombinedModelWrapper(nn.Module):
-    def __init__(self, input_dim: int, alloc_dropout: float = 0.1, dist_dropout: float = 0.3):
+    def __init__(self, input_dim: int, alloc_dropout: float = 0.05, dist_dropout: float = 0.05, regime_dropout: float = 0.05):
         super().__init__()
-        self.distribution_model = DistributionPredictor(input_dim, dropout=dist_dropout)
+        self.distribution_model = VelocityDistributionPredictor(input_dim, dropout=dist_dropout)
+        self.regime_model = RegimeClassifier(input_dim, dropout=regime_dropout)
         self.alloc = AllocationModel(input_dim, dropout=alloc_dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         dist_estimate = self.distribution_model(x)
-        return self.alloc(x, dist_estimate)
+        regime_estimate = self.regime_model(x)
+        return self.alloc(x, dist_estimate, regime_estimate)

@@ -166,10 +166,6 @@ class CombinedAllocLoss(nn.Module):
         return loss
 
 class NegativeLogLikelihoodLoss(nn.Module):
-    def __init__(self, device: str = "cuda"):
-        super().__init__()
-        self.device = device
-
     def forward(self, y, target):
         mean = y[:, 0]
         std = y[:, 1].clamp(min=0.01)

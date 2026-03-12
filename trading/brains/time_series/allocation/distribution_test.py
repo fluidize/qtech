@@ -1,10 +1,8 @@
-import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from trading.model_tools import fetch_data
 from loss_functions import NegativeLogLikelihoodLoss
-from models import PriceDataset, TensorSubset, DistributionPredictor
+from models import PriceDataset, VelocityDistributionPredictor
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
@@ -24,7 +22,7 @@ data = fetch_data(**DATA)
 full_dataset = PriceDataset(data, shift=10)
 train_dataset, val_dataset = full_dataset.split(test_size=0.2)
 
-model = DistributionPredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
+model = VelocityDistributionPredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
 optimizer = optim.Adam(model.parameters(), weight_decay=1e-5)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-8)
 loss_fn = NegativeLogLikelihoodLoss()
