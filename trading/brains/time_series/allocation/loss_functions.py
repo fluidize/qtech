@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch.distributions import Normal
+from torch.distributions import Normal, StudentT
 
 class TorchBacktest:
     def __init__(self, device: str = "cuda"):
@@ -170,4 +170,16 @@ class NegativeLogLikelihoodLoss(nn.Module):
         mean = y[:, 0]
         std = y[:, 1].clamp(min=0.01)
         nll = -Normal(mean, std).log_prob(target)
+        return nll.mean()
+
+class StudentTLoss(nn.Module):
+    def __init__(self, dof: float = 5.0, min_scale: float = 0.01):
+        super().__init__()
+        self.dof = dof
+        self.min_scale = min_scale
+
+    def forward(self, y, target):
+        mean = y[:, 0]
+        scale = y[:, 1].clamp(min=self.min_scale)
+        nll = -StudentT(df=self.dof, loc=mean, scale=scale).log_prob(target)
         return nll.mean()

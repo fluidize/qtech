@@ -15,10 +15,10 @@ from trading.backtesting.backtesting import VectorizedBacktest
 
 ### Training ###
 if __name__ == "__main__":
-    EPOCHS = 1000
-    SHIFTS = 100
+    EPOCHS = 5000
+    SHIFTS = 10
     DATA = {
-        "symbol": "SOL-USDT",
+        "symbol": "BTC-USDT",
         "days":1095,
         "interval": "30m",
         "age_days": 0,
@@ -48,7 +48,7 @@ if __name__ == "__main__":
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-7)
 
     alloc_loss_fn = lf.SharpeLoss(device=DEVICE)
-    distribution_loss_fn = lf.NegativeLogLikelihoodLoss()
+    distribution_loss_fn = lf.StudentTLoss(dof=5.0)
     regime_loss_fn = nn.CrossEntropyLoss()
 
     best_val_loss = float('inf')

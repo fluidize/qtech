@@ -197,6 +197,6 @@ class CombinedModelWrapper(nn.Module):
         self.alloc = AllocationModel(input_dim, dropout=alloc_dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        dist_estimate = self.distribution_model(x)
-        regime_estimate = self.regime_model(x)
+        dist_estimate = self.distribution_model(x) #.detach()
+        regime_estimate = self.regime_model(x) #.detach()
         return self.alloc(x, dist_estimate, regime_estimate)
