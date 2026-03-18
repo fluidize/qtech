@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.distributions import Normal
+from torch.distributions import Normal, StudentT
 
 from sklearn.utils.class_weight import compute_class_weight
 
@@ -202,7 +202,6 @@ class NegativeLogLikelihoodLoss(nn.Module):
         nll = -Normal(mean, std).log_prob(target)
         return nll.mean()
 
-
 class WeightedCrossEntropyLoss(nn.Module):
     def __init__(self, num_classes: int, target: torch.Tensor):
         super().__init__()
@@ -213,3 +212,14 @@ class WeightedCrossEntropyLoss(nn.Module):
 
     def forward(self, y: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         return F.cross_entropy(y, target.long(), weight=self.weight)
+class StudentTLoss(nn.Module):
+    def __init__(self, dof: float = 5.0, min_scale: float = 0.01):
+        super().__init__()
+        self.dof = dof
+        self.min_scale = min_scale
+
+    def forward(self, y, target):
+        mean = y[:, 0]
+        scale = y[:, 1].clamp(min=self.min_scale)
+        nll = -StudentT(df=self.dof, loc=mean, scale=scale).log_prob(target)
+        return nll.mean()

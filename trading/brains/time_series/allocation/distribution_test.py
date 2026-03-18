@@ -1,17 +1,18 @@
 import torch
 import torch.optim as optim
 from trading.model_tools import fetch_data
-from loss_functions import NegativeLogLikelihoodLoss
+from loss_functions import StudentTLoss
 from models import PriceDataset, VelocityDistributionPredictor
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 EPOCHS = 5000
 DEVICE = 'cuda'
+DOF = 5.0
 DATA = {
-    "symbol": "BTC-USDT",
-    "days":365,
-    "interval": "1h",
+    "symbol": "SOL-USDT",
+    "days":1095,
+    "interval": "30m",
     "age_days": 0,
     "data_source": "binance",
     "cache_expiry_hours": 999,
@@ -25,7 +26,7 @@ train_dataset, val_dataset = full_dataset.split(test_size=0.2)
 model = VelocityDistributionPredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
 optimizer = optim.Adam(model.parameters(), weight_decay=1e-5)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-8)
-loss_fn = NegativeLogLikelihoodLoss()
+loss_fn = StudentTLoss(dof=DOF)
 
 train_losses = []
 val_losses = []
@@ -36,7 +37,7 @@ for i in tqdm(range(EPOCHS)):
     model.train()
     optimizer.zero_grad()
     yhat = model(train_dataset.X.to(DEVICE))
-    loss = loss_fn(yhat, train_dataset.y.to(DEVICE))
+    loss = loss_fn(yhat, train_dataset.y_velocity.to(DEVICE))
     loss.backward()
     optimizer.step()
     scheduler.step()
@@ -45,7 +46,7 @@ for i in tqdm(range(EPOCHS)):
     model.eval()
     with torch.no_grad():
         val_yhat = model(val_dataset.X.to(DEVICE))
-        val_loss = loss_fn(val_yhat, val_dataset.y.to(DEVICE)).item()
+        val_loss = loss_fn(val_yhat, val_dataset.y_velocity.to(DEVICE)).item()
     val_losses.append(val_loss)
 
     if val_loss < best_val_loss:
@@ -70,26 +71,27 @@ with torch.no_grad():
     test_y = model(val_dataset.X.to(DEVICE)).detach().cpu().numpy()
 
 mean = test_y[:, 0]
-std = test_y[:, 1]
+scale = test_y[:, 1]
+std = scale * (DOF / (DOF - 2)) ** 0.5
 upper = mean + std
 lower = mean - std
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-ax1.plot(val_dataset.y.numpy(), label='True')
+ax1.plot(val_dataset.y_velocity.numpy(), label='True')
 ax1.plot(upper, label='Upper band', color='blue')
 ax1.plot(lower, label='Lower band', color='blue')
 ax1.plot(mean, label='Predicted mean', color='orange')
 ax1.fill_between(range(len(mean)), lower, upper, alpha=0.3)
 ax1.set_xlabel('Time')
-ax1.set_ylabel('Price')
+ax1.set_ylabel('Velocity')
 ax1.set_title('True vs Predicted (1 std range)')
 ax1.legend()
 ax1.grid(True)
 
-ax2.plot(std, label='Predicted std', color='blue')
+ax2.plot(scale, label='Predicted scale', color='blue')
 ax2.set_xlabel('Time')
-ax2.set_ylabel('Std')
-ax2.set_title('Model Std')
+ax2.set_ylabel('Scale')
+ax2.set_title('Student-t Scale')
 ax2.legend()
 ax2.grid(True)
 plt.tight_layout()
