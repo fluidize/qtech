@@ -71,19 +71,12 @@ class PriceDataset(Dataset):
         if shifted_cols:
             self.X = pd.concat([self.X, pd.DataFrame(shifted_cols)], axis=1)
 
-        velocity = savgol_filter(self.data['Open'], window_length=20, polyorder=3, deriv=1)
+        velocity = savgol_filter(self.data['Open'], window_length=25, polyorder=3, deriv=1)
         y_velocity = pd.Series(velocity, index=self.data.index)
         
-        hmm_model = hmm.GaussianHMM(
-            n_components=2,
-            covariance_type="diag",
-            n_iter=10000,
-            init_params="kmeans",
-            random_state=42
-        )
-        hmm_model.fit(y_velocity.values.reshape(-1, 1))
-        states = hmm_model.predict(y_velocity.values.reshape(-1, 1))
-        y_regime = pd.Series(states, index=self.data.index)
+        regime_observations = savgol_filter(self.data['Open'], window_length=75, polyorder=3, deriv=1) #higher window trend
+        y_regime = pd.Series(0, index=self.data.index)
+        y_regime[regime_observations > 0] = 1
         
         self.X = self.X.dropna(axis=1)
         combined = pd.concat([self.X, y_velocity.rename('y_velocity'), y_regime.rename('y_regime')], axis=1).dropna()
@@ -93,7 +86,7 @@ class PriceDataset(Dataset):
         self.y_velocity = torch.tensor(combined['y_velocity'].values.astype(np.float32))
         self.y_regime = torch.tensor(combined['y_regime'].values.astype(np.float32))
 
-    def split(self, test_size=0.2):
+    def split(self, test_size=0.25):
         train_idx, val_idx = train_test_split(range(len(self.X)), test_size=test_size, shuffle=False)
         return (
             TensorSubset(self.data.iloc[train_idx], self.X[train_idx], self.y_velocity[train_idx], self.y_regime[train_idx]),
@@ -107,6 +100,11 @@ class TensorSubset(Dataset):
         self.y_velocity = y_velocity
         self.y_regime = y_regime
         self.valid_indices = self.data.index
+    
+    def all_to_device(self, device='cuda'):
+        self.X = self.X.to(device=device)
+        self.y_velocity = self.y_velocity.to(device=device)
+        self.y_regime = self.y_regime.to(device=device)
 
     def __len__(self):
         return len(self.X)

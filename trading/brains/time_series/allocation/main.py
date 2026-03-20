@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from pyarrow import Device
 from tqdm import tqdm
 
 import torch
@@ -22,9 +23,9 @@ def train_loop(epochs, shifts, data_dict, device, split_size=0.25):
     optimizer = optim.Adam(model.parameters(), weight_decay=1e-2)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-8)
 
-    alloc_loss_fn = lf.InformationRatioLoss(device=device)
-    distribution_loss_fn = lf.NegativeLogLikelihoodLoss()
-    regime_loss_fn = lf.WeightedCrossEntropyLoss(num_classes=2, target=train_dataset.y_regime).to(device)
+    alloc_loss_fn = lf.SharpeLoss(device=device)
+    distribution_loss_fn = lf.StudentTLoss(dof=5.0)
+    regime_loss_fn = lf.WeightedCrossEntropyLoss(device=device, num_classes=2, target=train_dataset.y_regime)
 
     alloc_train_losses = []
     alloc_val_losses = []
@@ -35,12 +36,8 @@ def train_loop(epochs, shifts, data_dict, device, split_size=0.25):
 
     progress_bar = tqdm(total=epochs, desc="Training")
     for epoch in range(epochs):
-        train_dataset.X = train_dataset.X.to(device)
-        train_dataset.y_velocity = train_dataset.y_velocity.to(device)
-        train_dataset.y_regime = train_dataset.y_regime.to(device)
-        val_dataset.X = val_dataset.X.to(device)
-        val_dataset.y_velocity = val_dataset.y_velocity.to(device)
-        val_dataset.y_regime = val_dataset.y_regime.to(device)
+        train_dataset.all_to_device(device=device)
+        val_dataset.all_to_device(device=device)
 
         model.train()
         optimizer.zero_grad()
@@ -87,10 +84,10 @@ def train_loop(epochs, shifts, data_dict, device, split_size=0.25):
 ### Training ###
 if __name__ == "__main__":
     EPOCHS = 1000
-    SHIFTS = 100
+    SHIFTS = 10
     DATA = {
         "symbol": "SOL-USDT",
-        "days": 365,
+        "days": 1095,
         "interval": "1h",
         "age_days": 0,
         "data_source": "binance",
@@ -116,7 +113,7 @@ if __name__ == "__main__":
         regime_train_losses, regime_val_losses,
         model, train_dataset, val_dataset,
     ) = train_loop(
-        EPOCHS, SHIFTS, DATA, DEVICE, split_size=0.75
+        EPOCHS, SHIFTS, DATA, DEVICE, split_size=0.25
     )
 
     fig, (ax_alloc, ax_distribution, ax_regime) = plt.subplots(1, 3, figsize=(14, 4))

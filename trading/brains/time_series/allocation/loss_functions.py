@@ -229,15 +229,17 @@ class NegativeLogLikelihoodLoss(nn.Module):
         return nll.mean()
 
 class WeightedCrossEntropyLoss(nn.Module):
-    def __init__(self, num_classes: int, target: torch.Tensor):
+    def __init__(self, device: str, num_classes: int, target: torch.Tensor):
         super().__init__()
         self.num_classes = num_classes
         weights = compute_class_weight('balanced', classes=np.arange(num_classes), y=target.cpu().numpy().astype(int))
         weights = np.nan_to_num(weights, posinf=1.0).astype(np.float32)
-        self.register_buffer('weight', torch.tensor(weights))
+        self.register_buffer('weight', torch.tensor(weights, device=device))
 
     def forward(self, y: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return F.cross_entropy(y, target.long(), weight=self.weight)
+        target = target.long().view(-1)
+        return F.cross_entropy(y, target, weight=self.weight)
+
 class StudentTLoss(nn.Module):
     def __init__(self, dof: float = 5.0, min_scale: float = 0.01):
         super().__init__()

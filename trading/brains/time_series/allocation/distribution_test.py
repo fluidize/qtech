@@ -6,21 +6,22 @@ from models import PriceDataset, VelocityDistributionPredictor
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-EPOCHS = 5000
-DEVICE = 'cuda'
-DOF = 5.0
+EPOCHS = 1000
+SHIFTS = 10
 DATA = {
     "symbol": "SOL-USDT",
-    "days":1095,
+    "days":365,
     "interval": "30m",
     "age_days": 0,
     "data_source": "binance",
     "cache_expiry_hours": 999,
     "verbose": True
 }
+DEVICE = 'cuda'
+DOF = 5.0
 
 data = fetch_data(**DATA)
-full_dataset = PriceDataset(data, shift=10)
+full_dataset = PriceDataset(data, shift=SHIFTS)
 train_dataset, val_dataset = full_dataset.split(test_size=0.2)
 
 model = VelocityDistributionPredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
