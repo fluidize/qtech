@@ -93,7 +93,21 @@ class TorchBacktest:
         sharpe = strategy_returns.mean() / strategy_std
 
         return sharpe
-    
+
+    def get_information_ratio(self, model):
+        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
+        open_next = self._torch_shift(open_prices, -1)
+        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
+        open_returns[-1] = 0.0
+
+        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        position = self._torch_shift(raw_signals_t, 1)
+
+        strategy_returns = torch.multiply(position, open_returns)
+        active_returns = strategy_returns - open_returns
+        tracking_error = torch.std(active_returns).clamp(min=1e-12)
+        return active_returns.mean() / tracking_error
+
     def get_total_return(self, model):
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
         open_next = self._torch_shift(open_prices, -1)  
@@ -147,6 +161,18 @@ class SharpeLoss(nn.Module):
         tb.load_dataset(dataset)
         loss = tb.get_sharpe(model)
         return -loss
+
+
+class InformationRatioLoss(nn.Module):
+    def __init__(self, device: str = "cuda"):
+        super().__init__()
+        self.device = device
+
+    def forward(self, model, dataset):
+        tb = TorchBacktest(device=self.device)
+        tb.load_dataset(dataset)
+        ir = tb.get_information_ratio(model)
+        return -ir
 
 class TRLoss(nn.Module):
     def __init__(self, device: str = "cuda"):

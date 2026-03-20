@@ -36,7 +36,11 @@ def train_loop(epochs, shifts, data_dict, device, split_size=0.25):
     progress_bar = tqdm(total=epochs, desc="Training")
     for epoch in range(epochs):
         train_dataset.X = train_dataset.X.to(device)
+        train_dataset.y_velocity = train_dataset.y_velocity.to(device)
+        train_dataset.y_regime = train_dataset.y_regime.to(device)
         val_dataset.X = val_dataset.X.to(device)
+        val_dataset.y_velocity = val_dataset.y_velocity.to(device)
+        val_dataset.y_regime = val_dataset.y_regime.to(device)
 
         model.train()
         optimizer.zero_grad()
@@ -90,7 +94,7 @@ if __name__ == "__main__":
         "interval": "1h",
         "age_days": 0,
         "data_source": "binance",
-        "cache_expiry_hours": 24,
+        "cache_expiry_hours": 999,
         "verbose": True
     }
     DEVICE = 'cuda'
@@ -112,7 +116,7 @@ if __name__ == "__main__":
         regime_train_losses, regime_val_losses,
         model, train_dataset, val_dataset,
     ) = train_loop(
-        EPOCHS, SHIFTS, DATA, DEVICE, split_size=0.25
+        EPOCHS, SHIFTS, DATA, DEVICE, split_size=0.75
     )
 
     fig, (ax_alloc, ax_distribution, ax_regime) = plt.subplots(1, 3, figsize=(14, 4))
