@@ -3,6 +3,7 @@
 This repository contains a collection of **quantitative trading ideas**, **neural network models**, and **Solana-related tools**.
 
 ## Table of Contents
-- [Trading Ideas and Neural Networks](https://github.com/Fluidize/fintech/tree/main/trading)
-- [Jupiter Aggregator Trading Environment](https://github.com/Fluidize/fintech/tree/main/solana/jupiter)
-- [Alpaca Trading Environment](https://github.com/Fluidize/fintech/tree/main/alpaca)
+- [Backtesting Library](https://github.com/fluidize/qtech/tree/main/trading/backtesting)
+- [Jupiter Aggregator Python Trading Environment](https://github.com/Fluidize/fintech/tree/main/trading/solana/jupiter)
+- [Technical-Analysis-Based Genetic Algorithms](https://github.com/fluidize/qtech/tree/main/trading/brains/evolution)
+- [Textual Stock Terminal](https://github.com/fluidize/qtech/tree/main/trading/ideas/terminal)
