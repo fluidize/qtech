@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from pyarrow import Device
 from tqdm import tqdm
 
 import torch
