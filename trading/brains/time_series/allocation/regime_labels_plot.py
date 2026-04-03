@@ -15,7 +15,7 @@ DATA = {
 }
 
 data = fetch_data(**DATA)
-dataset = PriceDataset(data, shift=10)
+dataset = PriceDataset(data, seq_len=10)
 
 true_state = dataset.y_regime.numpy()
 price = dataset.data.loc[dataset.valid_indices]['Close'].values

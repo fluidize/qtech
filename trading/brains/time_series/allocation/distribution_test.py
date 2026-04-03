@@ -21,10 +21,13 @@ DEVICE = 'cuda'
 DOF = 5.0
 
 data = fetch_data(**DATA)
-full_dataset = PriceDataset(data, shift=SHIFTS)
+full_dataset = PriceDataset(data, seq_len=SHIFTS)
 train_dataset, val_dataset = full_dataset.split(test_size=0.2)
 
-model = VelocityDistributionPredictor(input_dim=train_dataset.X.shape[1]).to(DEVICE)
+model = VelocityDistributionPredictor(
+    input_dim=train_dataset.X.shape[2],
+    seq_len=train_dataset.X.shape[1],
+).to(DEVICE)
 optimizer = optim.Adam(model.parameters(), weight_decay=1e-5)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-8)
 loss_fn = StudentTLoss(dof=DOF)
