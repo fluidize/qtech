@@ -25,7 +25,7 @@ class TorchBacktest:
             self.dataset.data.index.get_indexer(self.dataset.valid_indices),
             dtype=torch.long, device=self.device
         )
-        raw_signals_t[valid_positions] = predictions
+        raw_signals_t[valid_positions] = predictions.float()
         return raw_signals_t
 
     def _torch_shift(self, series, shift: int = 1):

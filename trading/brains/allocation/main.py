@@ -24,8 +24,11 @@ def train_loop(epochs, seq_len, data_dict, device, split_size=0.25):
     ).to(device)
     optimizer = optim.Adam(model.parameters(), weight_decay=1e-2)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-8)
+    
+    # Mixed precision training
+    scaler = torch.amp.GradScaler(device=device)
 
-    alloc_loss_fn = lf.SharpeLoss(device=device)
+    alloc_loss_fn = lf.ExcessReturnLoss(device=device)
     distribution_loss_fn = lf.StudentTLoss(dof=5.0)
 
     alloc_train_losses = []
@@ -41,19 +44,23 @@ def train_loop(epochs, seq_len, data_dict, device, split_size=0.25):
         model.train()
         optimizer.zero_grad()
 
-        distribution_train_loss = distribution_loss_fn(model.distribution_model(train_dataset.X), train_dataset.y_velocity)
-        distribution_train_loss.backward()
-
-        alloc_train_loss = alloc_loss_fn(model, train_dataset)
-        alloc_train_loss.backward()
-
-        optimizer.step()
+        # Mixed precision training
+        with torch.amp.autocast(device_type=device):
+            distribution_train_loss = distribution_loss_fn(model.distribution_model(train_dataset.X), train_dataset.y_velocity)
+            alloc_train_loss = alloc_loss_fn(model, train_dataset)
+            total_loss = distribution_train_loss + alloc_train_loss
+        
+        scaler.scale(total_loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        
         scheduler.step()
 
         model.eval()
         with torch.no_grad():
-            val_alloc_loss = alloc_loss_fn(model, val_dataset)
-            val_distribution_loss = distribution_loss_fn(model.distribution_model(val_dataset.X), val_dataset.y_velocity)
+            with torch.amp.autocast(device_type=device):
+                val_alloc_loss = alloc_loss_fn(model, val_dataset)
+                val_distribution_loss = distribution_loss_fn(model.distribution_model(val_dataset.X), val_dataset.y_velocity)
 
         alloc_train_losses.append(alloc_train_loss.item())
         alloc_val_losses.append(val_alloc_loss.item())
@@ -75,12 +82,12 @@ def train_loop(epochs, seq_len, data_dict, device, split_size=0.25):
 
 ### Training ###
 if __name__ == "__main__":
-    EPOCHS = 1000
-    SEQ_LEN = 50
+    EPOCHS = 250
+    SEQ_LEN = 10
     DATA = {
         "symbol": "SOL-USDT",
-        "days": 365,
-        "interval": "1h",
+        "days": 730,
+        "interval": "30m",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": 999,
