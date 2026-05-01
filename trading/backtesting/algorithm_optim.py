@@ -14,7 +14,7 @@ import optuna
 import optunahub
 optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
 
-from trading.backtesting.backtesting import VectorizedBacktest, MultiAssetBacktesting
+from trading.backtesting.backtesting import VectorizedBacktest, MultiAssetBacktest
 
 class GridSearch:
     def __init__(
