@@ -10,6 +10,7 @@ from tqdm import tqdm
 from rich import print
 from time import time
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -51,22 +52,30 @@ def evaluate_genome(args):
     )
     return genome_index, bo.get_best()
 
+def plot_genome_spaghetti(best_genome, vb_config, data_config, num_simulations=1000):
+    vb = VectorizedBacktest(**vb_config)
+    vb.fetch_data(**data_config)
+    vb.run_strategy(best_genome.get_compiled_function(), **best_genome.get_best_params())
+    num_trades = vb.get_performance_metrics()['Total_Trades']
+    mc_analysis = mc.MonteCarloAnalysis(best_genome.get_compiled_function(), best_genome.get_best_params(), vb)
+    mc_analysis.build_distribution()
+    mc_analysis.spaghetti_plot(num_simulations, num_trades)
 
 if __name__ == "__main__":
-    POPULATION_SIZE = 10000
+    POPULATION_SIZE = 8192
 
     vb_config = {
         "instance_name": "Condensation",
         "initial_capital": 1,
-        "slippage_pct": 0.05,
+        "slippage_pct": 0.0,
         "commission_fixed": 0.0,
         "leverage": 1.0
     }
 
     data_config = {
         "symbol": "SOL-USDT",
-        "days": 800,
-        "interval": "15m",
+        "days": 365,
+        "interval": "1h",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": 999,
@@ -75,9 +84,9 @@ if __name__ == "__main__":
     mt.fetch_data(**data_config)
 
     passes = [
-        {"n_trials": 1, "keep_top_n": 2000},
-        {"n_trials": 5, "keep_top_n": 500},
-        {"n_trials": 15, "keep_top_n": 100},
+        {"n_trials": 1, "keep_top_n": POPULATION_SIZE},
+        # {"n_trials": 5, "keep_top_n": POPULATION_SIZE//8},
+        # {"n_trials": 15, "keep_top_n": POPULATION_SIZE//16},
         # {"n_trials": 50, "keep_top_n": 10}
     ]
 
@@ -110,17 +119,21 @@ if __name__ == "__main__":
     best_genome = top_5[0]
     display_ast(best_genome.get_function_ast())
 
-    vb = VectorizedBacktest(**vb_config)
-    vb.fetch_data(**data_config)
-    vb.run_strategy(best_genome.get_compiled_function(), **best_genome.get_best_params())
-    vb.plot_performance(mode="standard")
 
-    num_trades = vb.get_performance_metrics()['Total_Trades']
-    
-    mc_analysis = mc.MonteCarloAnalysis(best_genome.get_compiled_function(), best_genome.get_best_params(), vb)
-    mc_analysis.build_distribution()
-    mc_analysis.spaghetti_plot(1000, num_trades)
+    # vb = VectorizedBacktest(**vb_config)
+    # vb.fetch_data(**data_config)
+    # vb.run_strategy(best_genome.get_compiled_function(), **best_genome.get_best_params())
+    # vb.plot_performance(mode="standard")
 
+    # plot_genome_spaghetti(best_genome, vb_config, data_config, num_simulations=1000)
+
+    complexities = [genome.get_complexity(shannon_entropy=False) for genome in population]
+    metrics = [genome.get_best_metric() for genome in population]
+    plt.scatter(complexities, metrics, alpha=0.75)
+    plt.xlabel("Complexity")
+    plt.ylabel("Metric")
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.show()
 
     with open("best.txt", "w") as f:
         for i, genome in enumerate(top_5, 1):

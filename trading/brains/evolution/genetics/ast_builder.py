@@ -2,9 +2,10 @@ import pandas as pd
 import ast
 import inspect
 import numpy as np
+from collections import Counter
 
 from .param_space import registered_param_specs, ParamSpec
-from .gp_tools import unique_counter, make_compare, ast_to_function, paramspecs_to_dict
+from .gp_tools import unique_counter, make_compare, ast_to_function, paramspecs_to_dict, unparsify
 
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 
@@ -591,8 +592,18 @@ class Genome:
     def get_param_space(self) -> dict:
         return self.param_space
 
-    def get_complexity(self) -> int:
-        return len(self.indicator_genes) + len(self.logic_genes) + len(self.signal_genes)
+    def get_complexity(self, shannon_entropy: bool = False) -> int:
+        if shannon_entropy:
+            function_str = unparsify(self.function_ast)
+            counts = Counter(function_str)
+            total = len(function_str)
+            entropy = 0
+            for count in counts.values():
+                p = count / total
+                entropy += p * np.log2(p)
+            return -entropy
+        else:
+            return len(self.indicator_genes) + len(self.logic_genes) + len(self.signal_genes)
 
     def __call__(self, data: pd.DataFrame, **kwargs) -> pd.Series:
         return self.compiled_function(data, **kwargs)
