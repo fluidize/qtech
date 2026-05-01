@@ -413,16 +413,6 @@ class Genome:
         self._best_params = None
         self._best_metric = None
 
-    def get_best_params(self) -> dict | None:
-        return self._best_params
-
-    def get_best_metric(self) -> float | None:
-        return self._best_metric
-
-    def set_best(self, params: dict, metric: float) -> None:
-        self._best_params = params
-        self._best_metric = metric
-
     def _prepare_genes(self):
         algorithm_parameter_specs = [] #all algorithm parameter search spaces to be fed into bayes opt engine
 
@@ -450,7 +440,6 @@ class Genome:
 
         return indicator_ast_list, logic_ast_list, algorithm_parameter_specs
 
-    
     def _construct_algorithm(self, indicator_ast_list, logic_ast_list, algorithm_parameter_specs):
         #signals = pd.Series(0, index=data.index)
         signals_init = ast.Assign(
@@ -583,6 +572,16 @@ class Genome:
             else:
                 self.sequence_dict[gene.get_name()] = gene
 
+    def set_best(self, params: dict, metric: float) -> None:
+        self._best_params = params
+        self._best_metric = metric
+
+    def get_best_params(self) -> dict | None:
+        return self._best_params
+
+    def get_best_metric(self) -> float | None:
+        return self._best_metric
+
     def get_function_ast(self) -> ast.AST:
         return self.function_ast
     
@@ -591,6 +590,9 @@ class Genome:
 
     def get_param_space(self) -> dict:
         return self.param_space
+
+    def get_complexity(self) -> int:
+        return len(self.indicator_genes) + len(self.logic_genes) + len(self.signal_genes)
 
     def __call__(self, data: pd.DataFrame, **kwargs) -> pd.Series:
         return self.compiled_function(data, **kwargs)
