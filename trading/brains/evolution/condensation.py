@@ -3,7 +3,7 @@ import trading.backtesting.mc_analysis as mc
 import trading.model_tools as mt
 
 from evolution import generate_population
-from genetics.gp_tools import display_ast, unparsify, ast_to_function
+from genetics.gp_tools import display_ast, unparsify
 import ast
 
 from tqdm import tqdm

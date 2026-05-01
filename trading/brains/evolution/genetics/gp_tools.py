@@ -13,6 +13,10 @@ from .param_space import registered_param_specs, ParamSpec
 import trading.technical_analysis as ta
 
 COUNTER = 0  # Used to generate unique parameter names per run
+def reset_counter():
+    """Reset the unique variable counter to zero."""
+    global COUNTER
+    COUNTER = 0
 
 def unique_counter() -> str:
     """Generate a unique integer string."""

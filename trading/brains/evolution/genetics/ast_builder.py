@@ -5,7 +5,7 @@ import numpy as np
 from collections import Counter
 
 from .param_space import registered_param_specs, ParamSpec
-from .gp_tools import unique_counter, make_compare, ast_to_function, paramspecs_to_dict, unparsify
+from .gp_tools import unique_counter, make_compare, ast_to_function, paramspecs_to_dict, unparsify, reset_counter
 
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 
@@ -415,6 +415,7 @@ class Genome:
         self._best_metric = None
 
     def _prepare_genes(self):
+        reset_counter()
         algorithm_parameter_specs = [] #all algorithm parameter search spaces to be fed into bayes opt engine
 
         indicator_ast_list = []
