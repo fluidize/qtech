@@ -4,22 +4,15 @@ source .venv/bin/activate
 install_dependencies() {
     echo "Installing dependencies..."
 
-    pip install -e .
-
-    pip install numpy pandas matplotlib seaborn plotly
-
-    pip install scikit-learn scipy hmmlearn optuna optunahub lightgbm
-
-    pip install yfinance requests aiohttp websockets
-
-    pip install beautifulsoup4 selenium
-
-    pip install rich tqdm textual
-
-    pip install discord-webhook
-
-    pip install pytest torch torchvision
-
+    pip install -e . \
+        numpy pandas matplotlib seaborn plotly \
+        scikit-learn scipy hmmlearn optuna optunahub lightgbm \
+        yfinance requests aiohttp websockets \
+        beautifulsoup4 selenium \
+        rich tqdm textual \
+        discord-webhook \
+        torch torchvision\
+        numba
 
     echo "All dependencies installed!"
 }
