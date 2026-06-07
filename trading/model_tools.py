@@ -30,11 +30,11 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
     cache_key = f"{symbol}_{days}_{interval}_{age_days}_{data_source}"
     cache_file = temp_dir / f"{cache_key}.csv"
 
-    if cache_expiry_hours > 0 and os.path.exists(cache_file):
+    if os.path.exists(cache_file):
         file_modified_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
         file_age_hours = (datetime.now() - file_modified_time).total_seconds() / 3600
 
-        if file_age_hours < cache_expiry_hours:
+        if (file_age_hours < cache_expiry_hours) or (cache_expiry_hours == -1):
             try:
                 cached_data = pd.read_csv(cache_file, parse_dates=["Datetime"])
                 print(f"[blue]USING CACHE {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB {cached_data.shape[0]} bars)") if verbose else None
