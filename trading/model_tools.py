@@ -254,13 +254,13 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
     else:
         raise ValueError(f"Unknown data_source: {data_source}. Choose from 'binance', 'kucoin', 'yfinance'.")
 
-    if cache_expiry_hours > 0 and not data.empty and len(data) > 0:
+    if not data.empty and len(data) > 0:
         try:
             data.to_csv(cache_file, index=False)
             print(f"[blue]Data cached to {cache_file}[/blue] ({os.path.getsize(cache_file)/(1024**2):.2f} MB {len(data)} bars)")
         except Exception as e:
             print(f"[yellow]Failed to cache data: {e}[/yellow]")
-    elif cache_expiry_hours > 0 and (data.empty or len(data) == 0):
+    elif (data.empty or len(data) == 0):
         print(f"[yellow]Skipping cache - data is empty[/yellow]")
 
     return data
