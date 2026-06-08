@@ -6,12 +6,14 @@ from torch.distributions import Normal, StudentT
 
 from sklearn.utils.class_weight import compute_class_weight
 
+from models import PriceDataset
+
 class TorchBacktest:
     def __init__(self, device: str = "cuda"):
         self.device = device
         self.dataset = None
 
-    def load_dataset(self, dataset):
+    def load_dataset(self, dataset: PriceDataset):
         "Expects a dataset with .X and .data"
         self.dataset = dataset
         return self.dataset
@@ -161,7 +163,6 @@ class SharpeLoss(nn.Module):
         tb.load_dataset(dataset)
         loss = tb.get_sharpe(model)
         return -loss
-
 
 class InformationRatioLoss(nn.Module):
     def __init__(self, device: str = "cuda"):

@@ -1,102 +1,97 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from rich import print
 
 import torch
 import torch.optim as optim
+from torchinfo import summary
+
+from sklearn.model_selection import train_test_split
 
 import matplotlib.pyplot as plt
 
 import trading.model_tools as mt
 import loss_functions as lf
-from models import PriceDataset, CombinedModelWrapper
+from models import PriceDataset, BasicModel
 from trading.backtesting.backtesting import VectorizedBacktest
 
+plt.ioff()
 
-def train_loop(epochs, seq_len, data_dict, device, split_size=0.25):
+def train_loop(epochs, data_dict, device, split_size=0.25, seq_len=10):
     data = mt.fetch_data(**data_dict)
-    full_dataset = PriceDataset(data, seq_len=seq_len)
-    train_dataset, val_dataset = full_dataset.split(test_size=split_size)
+    train_dataset_raw, val_dataset_raw = train_test_split(
+        data,
+        test_size=split_size,
+        shuffle=False,
+    )
 
-    model = CombinedModelWrapper(
-        input_dim=train_dataset.X.shape[2],
-        seq_len=train_dataset.X.shape[1],
+    train_dataset = PriceDataset(train_dataset_raw, seq_len=seq_len)
+    val_dataset = PriceDataset(val_dataset_raw, seq_len=seq_len)
+
+    num_features = train_dataset.X.shape[1]
+    sequence_length = train_dataset.X.shape[2]
+    model = BasicModel(
+        channels=num_features,
+        width=sequence_length,
     ).to(device)
-    optimizer = optim.Adam(model.parameters(), weight_decay=1e-2)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-8)
-    
-    # Mixed precision training
-    scaler = torch.amp.GradScaler(device=device)
+    optimizer = optim.Adam(model.parameters(), lr=5e-6)
+    loss_fn = lf.SharpeLoss(device=device)
 
-    alloc_loss_fn = lf.ExcessReturnLoss(device=device)
-    distribution_loss_fn = lf.StudentTLoss(dof=5.0)
+    print(summary(model))
 
-    alloc_train_losses = []
-    alloc_val_losses = []
-    distribution_train_losses = []
-    distribution_val_losses = []
+    train_losses = []
+    val_losses = []
 
     progress_bar = tqdm(total=epochs, desc="Training")
     for epoch in range(epochs):
-        train_dataset.all_to_device(device=device)
-        val_dataset.all_to_device(device=device)
-
+        ### training
         model.train()
+
+        train_loss = loss_fn(model, train_dataset)
+        train_loss.backward()
+
+        optimizer.step()
         optimizer.zero_grad()
+        ###
 
-        # Mixed precision training
-        with torch.amp.autocast(device_type=device):
-            distribution_train_loss = distribution_loss_fn(model.distribution_model(train_dataset.X), train_dataset.y_velocity)
-            alloc_train_loss = alloc_loss_fn(model, train_dataset)
-            total_loss = distribution_train_loss + alloc_train_loss
-        
-        scaler.scale(total_loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        
-        scheduler.step()
-
+        ### validation
         model.eval()
         with torch.no_grad():
-            with torch.amp.autocast(device_type=device):
-                val_alloc_loss = alloc_loss_fn(model, val_dataset)
-                val_distribution_loss = distribution_loss_fn(model.distribution_model(val_dataset.X), val_dataset.y_velocity)
-
-        alloc_train_losses.append(alloc_train_loss.item())
-        alloc_val_losses.append(val_alloc_loss.item())
-        distribution_train_losses.append(distribution_train_loss.item())
-        distribution_val_losses.append(val_distribution_loss.item())
+            val_loss = loss_fn(model, val_dataset)
+        
+        train_losses.append(train_loss.item())
+        val_losses.append(val_loss.item())
+        ###
 
         progress_bar.set_description(
-            f"Epoch {epoch+1} | alloc T: {alloc_train_losses[-1]:.4f} V: {alloc_val_losses[-1]:.4f}"
+            f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss.item():.4f} - Val Loss: {val_loss.item():.4f}"
         )
         progress_bar.update(1)
     progress_bar.close()
 
     return (
-        alloc_train_losses, alloc_val_losses,
-        distribution_train_losses, distribution_val_losses,
-        model, train_dataset, val_dataset,
+        model, train_dataset_raw, val_dataset_raw, train_losses, val_losses,
     )
 
 
 ### Training ###
 if __name__ == "__main__":
-    EPOCHS = 250
-    SEQ_LEN = 10
+    EPOCHS = 1000
+    SEQ_LEN = 16
     DATA = {
         "symbol": "SOL-USDT",
-        "days": 730,
+        "days": 1095,
         "interval": "30m",
         "age_days": 0,
         "data_source": "binance",
-        "cache_expiry_hours": 999,
+        "cache_expiry_hours": -1,
         "verbose": True
     }
     DEVICE = 'cuda'
 
-    def model_wrapper(data, model, device):
-        dataset = PriceDataset(data, seq_len=SEQ_LEN)
+    def model_wrapper(data, model, device, seq_len=10):
+        dataset = PriceDataset(data, seq_len=seq_len)
         model.eval()
         with torch.no_grad():
             X_tensor = dataset.X.to(device)
@@ -106,48 +101,27 @@ if __name__ == "__main__":
         signals.loc[dataset.valid_indices] = predictions
         return signals
 
-    (
-        alloc_train_losses, alloc_val_losses,
-        distribution_train_losses, distribution_val_losses,
-        model, train_dataset, val_dataset,
-    ) = train_loop(
-        EPOCHS, SEQ_LEN, DATA, DEVICE, split_size=0.25,
+    model, train_dataset_raw, val_dataset_raw, train_losses, val_losses = train_loop(
+        EPOCHS, DATA, DEVICE, split_size=0.25, seq_len=SEQ_LEN,
     )
 
-    fig, (ax_alloc, ax_distribution) = plt.subplots(1, 2, figsize=(10, 4))
-    ax_alloc.plot(alloc_train_losses, label='Train')
-    ax_alloc.plot(alloc_val_losses, label='Val')
-    ax_alloc.set_xlabel('Epoch')
-    ax_alloc.set_ylabel('Loss')
-    ax_alloc.set_title('Alloc')
-    ax_alloc.legend()
-    ax_alloc.grid(True)
-    ax_distribution.plot(distribution_train_losses, label='Train')
-    ax_distribution.plot(distribution_val_losses, label='Val')
-    ax_distribution.set_xlabel('Epoch')
-    ax_distribution.set_ylabel('Loss')
-    ax_distribution.set_title('Distribution')
-    ax_distribution.legend()
-    ax_distribution.grid(True)
-    plt.tight_layout()
-    plt.show(block=False)
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(val_losses, label='Val Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    # plt.show()
 
-    def run_vb(dataset):
-        vb = VectorizedBacktest(instance_name="AllocationModel", initial_capital=10000, slippage_pct=0.0, commission_fixed=0.0, leverage=1.0)
-        vb.load_data(dataset.data, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
-        vb.run_strategy(model_wrapper, verbose=True, model=model, device=DEVICE)
-        return vb
+    vb = VectorizedBacktest(
+        instance_name="AllocationModel",
+        initial_capital=10000,
+        slippage_pct=0.0,
+        commission_fixed=0.0,
+        leverage=1.0,
+    )
+    vb.load_data(val_dataset_raw, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+    vb.run_strategy(model_wrapper, verbose=True, model=model, device=DEVICE, seq_len=SEQ_LEN)
 
-    vb_val = run_vb(val_dataset)
-    vb_train = run_vb(train_dataset)
+    print("Backtest metrics:", vb.get_performance_metrics())
+    vb.plot_performance(mode="basic")
 
-    fig, ((ax_val0, ax_train0), (ax_val1, ax_train1)) = plt.subplots(2, 2, figsize=(14, 8))
-    for vb, ax0, ax1, label in [(vb_val, ax_val0, ax_val1, "Val"), (vb_train, ax_train0, ax_train1, "Train")]:
-        s = vb.get_performance_metrics()
-        ax0.plot(vb.data['Datetime'], vb.data['Portfolio_Value'], color='orange')
-        ax0.plot(vb.data['Datetime'], vb.initial_capital * (1 + vb.data['Open_Return']).cumprod(), color='blue')
-        ax0.set_title(f"{label} | TR: {s['Total_Return']*100:.3f}% | Sharpe: {s['Sharpe_Ratio']:.3f} | Max DD: {s['Max_Drawdown']*100:.3f}%")
-        ax1.plot(vb.data['Datetime'], vb.data['Position'], color='green')
-        ax1.set_title("Position")
-    plt.tight_layout()
-    plt.show()
