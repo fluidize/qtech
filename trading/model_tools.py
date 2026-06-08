@@ -71,7 +71,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
 
         chunk_results = []
         times = []
-        progress_bar = tqdm(total=chunks, desc="BIRDEYE PROGRESS", ascii="#>")
+        progress_bar = tqdm(total=chunks, desc="BIRDEYE PROGRESS")
         
         for chunk_index in range(chunks):
             retries = 0
@@ -213,7 +213,7 @@ def fetch_data(symbol, days, interval, age_days, data_source: str = "binance", c
             connector = aiohttp.TCPConnector(limit=max_concurrent)
             timeout = aiohttp.ClientTimeout(total=30)
             
-            progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS", ascii="#>")
+            progress_bar = tqdm(total=chunks, desc="BINANCE PROGRESS")
             
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 tasks = [download_chunk(session, x, semaphore) for x in range(chunks)]
