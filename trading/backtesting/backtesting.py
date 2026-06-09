@@ -323,8 +323,8 @@ class VectorizedBacktest:
             ax[1].plot(self.data["Datetime"], self.data["Position"], color="green")
             ax[1].legend(["Position"])
 
-            plt.title(
-                f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return'] * 100:.3f}% | Alpha: {summary['Alpha'] * 100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown'] * 100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}"
+            ax[0].set_title(
+                f"{self.symbol} {self.n_days} days {self.interval} | TR: {summary['Total_Return'] * 100:.2f}% | Alpha: {summary['Alpha'] * 100:.2f}% | Beta: {summary['Beta']:.2f} | Max DD: {summary['Max_Drawdown'] * 100:.2f}% | Sharpe: {summary['Sharpe_Ratio']:.2f} | Trades: {summary['Total_Trades']}"
             )
             plt.show()
 
