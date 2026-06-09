@@ -6,14 +6,9 @@ from typing import Dict
 import requests
 import numpy as np
 
-sys.path.append("trading")
-sys.path.append("trading/backtesting")
-sys.path.append("trading/live")
-sys.path.append("solana/jupiter")
-
 from live_system import LiveTradingSystem, SimulatedPortfolio
 import strategy
-import jupiter as jup
+import trading.solana.jupiter_tools.jupiter_api as jup
 
 def create_enhanced_portfolio_callback(portfolio: SimulatedPortfolio, wallethandler: jup.JupiterWalletHandler, console=None, log_interval: int = 5, webhook_url: str = None):
     """

@@ -6,11 +6,6 @@ from typing import Dict
 import requests
 from discord_webhook import DiscordWebhook, DiscordEmbed
 
-sys.path.append("trading")
-sys.path.append("trading/backtesting")
-sys.path.append("trading/live")
-sys.path.append("solana/jupiter")
-
 from live_system import LiveTradingSystem, SimulatedPortfolio
 import strategy
 
