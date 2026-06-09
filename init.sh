@@ -11,8 +11,8 @@ install_dependencies() {
         beautifulsoup4 selenium \
         rich tqdm textual \
         discord-webhook \
-        torch torchvision\
-        numba
+        torch torchvision torchinfo \
+        numba base58 solders
 
     echo "All dependencies installed!"
 }
