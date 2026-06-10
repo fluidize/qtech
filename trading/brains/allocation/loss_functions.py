@@ -1,10 +1,7 @@
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import nn
-from torch.distributions import Normal, StudentT
-
-from sklearn.utils.class_weight import compute_class_weight
+from torch.utils.data import DataLoader
 
 from models import PriceDataset
 
@@ -18,18 +15,6 @@ class TorchBacktest:
         self.dataset = dataset
         return self.dataset
 
-    def _model_wrapper(self, model):
-        X_tensor = self.dataset.X.to(self.device)
-        predictions = model(X_tensor)
-
-        raw_signals_t = torch.zeros(len(self.dataset.data), dtype=torch.float32, device=self.device)
-        valid_positions = torch.tensor(
-            self.dataset.data.index.get_indexer(self.dataset.valid_indices),
-            dtype=torch.long, device=self.device
-        )
-        raw_signals_t[valid_positions] = predictions.float()
-        return raw_signals_t
-
     def _torch_shift(self, series, shift: int = 1):
         if shift > 0:
             return torch.cat([torch.zeros(shift, device=self.device, dtype=series.dtype), series[:-shift]])
@@ -38,14 +23,14 @@ class TorchBacktest:
         else:
             return series
 
-    def get_hulltac(self, model):
+    def get_hulltac(self, raw_signals):
         # pct_change().shift(-1)
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)  
+        open_next = self._torch_shift(open_prices, -1)
         open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0 
+        open_returns[-1] = 0.0
 
-        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        raw_signals_t = raw_signals.clamp(0.0, 1.0)
         position = self._torch_shift(raw_signals_t, 1)
 
         strategy_returns = torch.multiply(position, open_returns)
@@ -80,13 +65,13 @@ class TorchBacktest:
         loss = strategy_sharpe / (return_penalty * volatility_penalty)
         return loss
     
-    def get_sharpe(self, model):
+    def get_sharpe(self, raw_signals):
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)  
+        open_next = self._torch_shift(open_prices, -1)
         open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0 
+        open_returns[-1] = 0.0
 
-        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        raw_signals_t = raw_signals.clamp(0.0, 1.0)
         position = self._torch_shift(raw_signals_t, 1)
 
         strategy_returns = torch.multiply(position, open_returns)
@@ -96,13 +81,13 @@ class TorchBacktest:
 
         return sharpe
 
-    def get_information_ratio(self, model):
+    def get_information_ratio(self, raw_signals):
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
         open_next = self._torch_shift(open_prices, -1)
         open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
         open_returns[-1] = 0.0
 
-        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        raw_signals_t = raw_signals.clamp(0.0, 1.0)
         position = self._torch_shift(raw_signals_t, 1)
 
         strategy_returns = torch.multiply(position, open_returns)
@@ -110,13 +95,13 @@ class TorchBacktest:
         tracking_error = torch.std(active_returns).clamp(min=1e-12)
         return active_returns.mean() / tracking_error
 
-    def get_total_return(self, model):
+    def get_total_return(self, raw_signals):
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)  
+        open_next = self._torch_shift(open_prices, -1)
         open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0 
+        open_returns[-1] = 0.0
 
-        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        raw_signals_t = raw_signals.clamp(0.0, 1.0)
         position = self._torch_shift(raw_signals_t, 1)
 
         strategy_returns = torch.multiply(position, open_returns)
@@ -124,13 +109,13 @@ class TorchBacktest:
         total_return = (1 + strategy_returns).prod() - 1
         return total_return
 
-    def get_excess_return(self, model):
+    def get_excess_return(self, raw_signals):
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
         open_next = self._torch_shift(open_prices, -1)
         open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
         open_returns[-1] = 0.0
 
-        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        raw_signals_t = raw_signals.clamp(0.0, 1.0)
         position = self._torch_shift(raw_signals_t, 1)
         strategy_returns = torch.multiply(position, open_returns)
 
@@ -138,13 +123,13 @@ class TorchBacktest:
         benchmark_total = (1 + open_returns).prod() - 1
         return strategy_total - benchmark_total
 
-    def get_max_drawdown(self, model):
+    def get_max_drawdown(self, raw_signals):
         open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
         open_next = self._torch_shift(open_prices, -1)
         open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
         open_returns[-1] = 0.0
 
-        raw_signals_t = self._model_wrapper(model).clamp(0.0, 1.0)
+        raw_signals_t = raw_signals.clamp(0.0, 1.0)
         position = self._torch_shift(raw_signals_t, 1)
 
         strategy_returns = torch.multiply(position, open_returns)
@@ -153,102 +138,112 @@ class TorchBacktest:
         drawdown = (running_max - equity) / running_max.clamp(min=1e-12)
         return drawdown.max()
 
+    def get_sortino(self, raw_signals, target_return=0.0):
+        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
+        open_next = self._torch_shift(open_prices, -1)
+        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
+        open_returns[-1] = 0.0
+
+        raw_signals_t = raw_signals
+        position = self._torch_shift(raw_signals_t, 1)
+
+        strategy_returns = torch.multiply(position, open_returns)
+        excess_returns = strategy_returns - target_return
+        downside_returns = torch.clamp(excess_returns, max=0.0)
+        downside_risk = torch.std(downside_returns).clamp(min=1e-6)
+        return -excess_returns.mean() / downside_risk
+
+    def get_turnover(self, raw_signals):
+        position_changes = torch.diff(raw_signals, dim=0)
+        turnover = torch.abs(position_changes).mean()
+        return turnover
+
+    def get_pos_penalty(self, raw_signals, penalty_factor=0.1):
+        near_zero_penalty = torch.mean(torch.exp(-torch.abs(raw_signals) * 5))
+        return penalty_factor * near_zero_penalty
+
 class SharpeLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
         super().__init__()
         self.device = device
+        self.tb = TorchBacktest(device=device)
 
-    def forward(self, model, dataset):
-        tb = TorchBacktest(device=self.device)
-        tb.load_dataset(dataset)
-        loss = tb.get_sharpe(model)
+    def forward(self, raw_signals, dataset):
+        self.tb.load_dataset(dataset)
+        loss = self.tb.get_sharpe(raw_signals)
         return -loss
 
 class InformationRatioLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
         super().__init__()
         self.device = device
+        self.tb = TorchBacktest(device=device)
 
-    def forward(self, model, dataset):
-        tb = TorchBacktest(device=self.device)
-        tb.load_dataset(dataset)
-        ir = tb.get_information_ratio(model)
+    def forward(self, raw_signals, dataset):
+        self.tb.load_dataset(dataset)
+        ir = self.tb.get_information_ratio(raw_signals)
         return -ir
 
-class TRLoss(nn.Module):
+class TotalReturnLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
         super().__init__()
         self.device = device
+        self.tb = TorchBacktest(device=device)
 
-    def forward(self, model, dataset):
-        tb = TorchBacktest(device=self.device)
-        tb.load_dataset(dataset)
-        loss = tb.get_total_return(model)
+    def forward(self, raw_signals, dataset):
+        self.tb.load_dataset(dataset)
+        loss = self.tb.get_total_return(raw_signals)
         return -loss
-
 
 class ExcessReturnLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
         super().__init__()
         self.device = device
+        self.tb = TorchBacktest(device=device)
 
-    def forward(self, model, dataset):
-        tb = TorchBacktest(device=self.device)
-        tb.load_dataset(dataset)
-        excess = tb.get_excess_return(model)
+    def forward(self, raw_signals, dataset):
+        self.tb.load_dataset(dataset)
+        excess = self.tb.get_excess_return(raw_signals)
         return -excess
 
 class HullTacLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
         super().__init__()
         self.device = device
+        self.tb = TorchBacktest(device=device)
 
-    def forward(self, model, dataset):
-        tb = TorchBacktest(device=self.device)
-        tb.load_dataset(dataset)
-        loss = tb.get_hulltac(model)
+    def forward(self, raw_signals, dataset):
+        self.tb.load_dataset(dataset)
+        loss = self.tb.get_hulltac(raw_signals)
         return -loss
 
-class CombinedAllocLoss(nn.Module):
+class TurnoverLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
         super().__init__()
         self.device = device
+        self.tb = TorchBacktest(device=device)
 
-    def forward(self, model, dataset):
-        tb = TorchBacktest(device=self.device)
-        tb.load_dataset(dataset)
-        sharpe = tb.get_sharpe(model)
-        max_dd = tb.get_max_drawdown(model)
-        loss = sharpe * (1 + max_dd).clamp(min=0.0)
-        return loss
+    def forward(self, raw_signals, dataset):
+        self.tb.load_dataset(dataset)
 
-class NegativeLogLikelihoodLoss(nn.Module):
-    def forward(self, y, target):
-        mean = y[:, 0]
-        std = y[:, 1].clamp(min=0.01)
-        nll = -Normal(mean, std).log_prob(target)
-        return nll.mean()
+        position_changes = torch.diff(raw_signals, dim=0)
+        turnover = torch.abs(position_changes).mean()
 
-class WeightedCrossEntropyLoss(nn.Module):
-    def __init__(self, device: str, num_classes: int, target: torch.Tensor):
+        return turnover
+
+class AllocationLoss(nn.Module):
+    def __init__(self, device: str = "cuda", sortino_weight=1.0, turnover_weight=0.01, undertrading_weight=0.1):
         super().__init__()
-        self.num_classes = num_classes
-        weights = compute_class_weight('balanced', classes=np.arange(num_classes), y=target.cpu().numpy().astype(int))
-        weights = np.nan_to_num(weights, posinf=1.0).astype(np.float32)
-        self.register_buffer('weight', torch.tensor(weights, device=device))
+        self.tb = TorchBacktest(device=device)
+        self.sortino_weight = sortino_weight
+        self.turnover_weight = turnover_weight
+        self.undertrading_weight = undertrading_weight
 
-    def forward(self, y: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        target = target.long().view(-1)
-        return F.cross_entropy(y, target, weight=self.weight)
-
-class StudentTLoss(nn.Module):
-    def __init__(self, dof: float = 5.0, min_scale: float = 0.01):
-        super().__init__()
-        self.dof = dof
-        self.min_scale = min_scale
-
-    def forward(self, y, target):
-        mean = y[:, 0]
-        scale = y[:, 1].clamp(min=self.min_scale)
-        nll = -StudentT(df=self.dof, loc=mean, scale=scale).log_prob(target)
-        return nll.mean()
+    def forward(self, raw_signals, dataset):
+        self.tb.load_dataset(dataset)
+        sortino_value = self.tb.get_sortino(raw_signals)
+        turnover_value = self.tb.get_turnover(raw_signals)
+        undertrading_value = self.tb.get_pos_penalty(raw_signals)
+        return (self.sortino_weight * sortino_value +
+                self.turnover_weight * turnover_value +
+                self.undertrading_weight * undertrading_value)
