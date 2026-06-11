@@ -1,6 +1,6 @@
 import numpy as np
 from trading.backtesting.backtesting import VectorizedBacktest
-import trading.backtesting.vb_metrics as metrics
+import trading.backtesting.metrics as metrics
 
 class MonteCarloAnalysis:
     def __init__(self, strategy, strategy_params, engine: VectorizedBacktest):

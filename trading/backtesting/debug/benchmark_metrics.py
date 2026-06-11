@@ -7,7 +7,7 @@ from rich.table import Table
 from rich import print as rprint
 import matplotlib.pyplot as plt
 
-import trading.backtesting.vb_metrics as metrics
+import trading.backtesting.metrics as metrics
 from trading.backtesting.backtesting import VectorizedBacktest
 from trading.backtesting.testing.basic_strategies import signal_spam
 

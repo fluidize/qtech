@@ -2,9 +2,10 @@ import time
 
 import numpy as np
 import pandas as pd
+import scipy.stats as stats
 from rich import print
 
-import trading.backtesting.vb_metrics as metrics
+import trading.backtesting.metrics as metrics
 import trading.model_tools as mt
 
 
@@ -255,6 +256,7 @@ class VectorizedBacktest:
         sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(
             strategy_returns, self.interval
         )
+        sharpe_p_val = 1 - stats.t.cdf(sharpe_t_stat, df=len(strategy_returns) - 1)
         sortino_ratio = (
             metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days)
             if strategy_returns.std() != 0
@@ -283,6 +285,7 @@ class VectorizedBacktest:
             "Max_Drawdown": max_drawdown,
             "Sharpe_Ratio": sharpe_ratio,
             "Sharpe_T_Stat": sharpe_t_stat,
+            "Sharpe_P_Val": sharpe_p_val,
             "Sortino_Ratio": sortino_ratio,
             "Information_Ratio": info_ratio,
             "Total_Trades": metrics.get_total_trades(position),
@@ -292,10 +295,7 @@ class VectorizedBacktest:
 
     def plot_performance(self, mode: str = "basic"):
         """
-        Modes: "basic", "standard", "extended"
-        Standard mode can plot indicators attached as a tuple in the strategy output containing either True or False for using price scale.
-
-        Ex: return signals, (indicator, True)
+        Modes: "basic", "standard"
 
         """
         if self.data is None or "Portfolio_Value" not in self.data.columns:
@@ -500,137 +500,6 @@ class VectorizedBacktest:
             fig.update_yaxes(title_text="Price ($)")
             fig.update_yaxes(title_text="Portfolio Value ($)")
             fig.show()
-
-        elif mode == "tradingview":
-            from lightweight_charts.widgets import QtChart
-            from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
-
-            app = QApplication([])
-            window = QMainWindow()
-            layout = QVBoxLayout()
-            widget = QWidget()
-            widget.setLayout(layout)
-
-            window.resize(1920, 1080)
-            layout.setContentsMargins(0, 0, 0, 0)
-
-            chart = QtChart(widget)
-
-            # Prepare candlestick data
-            df = self.data.rename(
-                columns={
-                    "Datetime": "time",
-                    "Open": "open",
-                    "High": "high",
-                    "Low": "low",
-                    "Close": "close",
-                    "Volume": "volume",
-                }
-            ).drop(columns=["HL2", "OHLC4", "HLC3"], errors="ignore")
-            chart.set(df)
-            portfolio_line = chart.create_line(name="Portfolio Value")
-            portfolio_line.set(
-                pd.DataFrame(
-                    {
-                        "time": self.data["Datetime"],
-                        "Portfolio Value": self.data["Portfolio_Value"],
-                    }
-                )
-            )
-            hodl_line = chart.create_line(name="Buy & Hold")
-            hodl_line.set(
-                pd.DataFrame(
-                    {
-                        "time": self.data["Datetime"],
-                        "Buy & Hold": self.initial_capital
-                        * (1 + self.data["Open_Return"].fillna(0)).cumprod(),
-                    }
-                )
-            )
-
-            if isinstance(self.strategy_output, tuple):
-                for output_idx in range(1, len(self.strategy_output)):
-                    indicator_data = self.strategy_output[output_idx][0]
-                    use_price_scale = self.strategy_output[output_idx][1]
-
-                    indicator_df = pd.DataFrame(
-                        {"time": self.data["Datetime"], "value": indicator_data}
-                    )
-
-                    if use_price_scale:
-                        # Add to main price pane
-                        indicator_line = chart.add_line_series(
-                            name=f"Indicator {output_idx}", color="yellow", width=1
-                        )
-                        indicator_line.set(indicator_df.to_dict("records"))
-                    else:
-                        # Add to separate pane (volume pane can be used or create new)
-                        # For now, add to main pane with different color
-                        indicator_line = chart.add_line_series(
-                            name=f"Indicator {output_idx}", color="cyan", width=1
-                        )
-                        indicator_line.set(indicator_df.to_dict("records"))
-
-            # Add entry/exit markers
-            position_changes = self.data["Position"].diff()
-            markers = []
-
-            for i in range(1, len(self.data)):
-                if position_changes.iloc[i] != 0 and not pd.isna(
-                    position_changes.iloc[i]
-                ):
-                    current_pos = self.data["Position"].iloc[i]
-                    timestamp = self.data["Datetime"].iloc[i]
-
-                    if (current_pos == 0) and (position_changes.iloc[i] != 0):
-                        markers.append(
-                            {
-                                "time": timestamp,
-                                "position": "belowBar",
-                                "color": "yellow",
-                                "shape": "circle",
-                                "text": "Exit",
-                            }
-                        )
-                    elif position_changes.iloc[i] > 0:
-                        markers.append(
-                            {
-                                "time": timestamp,
-                                "position": "belowBar",
-                                "color": "#26FF00",
-                                "shape": "arrowUp",
-                                "text": "Long",
-                            }
-                        )
-                    elif position_changes.iloc[i] < 0:
-                        markers.append(
-                            {
-                                "time": timestamp,
-                                "position": "aboveBar",
-                                "color": "#ff073a",
-                                "shape": "arrowDown",
-                                "text": "Short",
-                            }
-                        )
-
-            # Add markers to chart
-            # if markers:
-            #     chart.marker(markers)
-
-            # Set title with performance metrics
-            title_text = f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | TR: {summary['Total_Return'] * 100:.3f}% | Alpha: {summary['Alpha'] * 100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown'] * 100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}"
-            try:
-                chart.topbar.textbox("title", title_text)
-            except:
-                # If topbar API doesn't work, set window title instead
-                window.setWindowTitle(title_text)
-
-            layout.addWidget(chart.get_webview())
-
-            window.setCentralWidget(widget)
-            window.show()
-
-            app.exec_()
 
     def get_cost_summary(self) -> dict:
         """Get a summary of trading costs impact."""
