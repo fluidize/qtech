@@ -1,12 +1,16 @@
 import numpy as np
 import pandas as pd
+
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 import torch.nn.functional as F
+
 from scipy.signal import savgol_filter
 
 import trading.technical_analysis as ta
+
+DROPOUT = 0.15
 
 class PriceDataset(Dataset):
     def __init__(self, data: pd.DataFrame, seq_len: int = 10):
@@ -63,16 +67,7 @@ class PriceDataset(Dataset):
         # Return both the data and the corresponding dataframe index
         return self.X[idx], idx
 
-class StochasticLayer(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        if self.training:
-            x += torch.randn_like(x)*0.4
-        return x
-
-class ConvolutionHead(nn.Module):
+class ConvolutionEncoder(nn.Module):
     def __init__(self, channels, width, hidden_channel_size=64, hidden_linear_size=256, out_size=256):
         super().__init__()
 
@@ -103,26 +98,29 @@ class ConvolutionHead(nn.Module):
             nn.ReLU(),
         )
 
-        self.embedding = nn.Sequential(
+        self.encoder = nn.Sequential(
             nn.Linear(hidden_channel_size * self.width, hidden_linear_size),
             nn.GroupNorm(8, hidden_linear_size),
             nn.ReLU(),
+            nn.Dropout(DROPOUT),
             nn.Linear(hidden_linear_size, hidden_linear_size),
             nn.GroupNorm(8, hidden_linear_size),
             nn.ReLU(),
+            nn.Dropout(DROPOUT),
             nn.Linear(hidden_linear_size, hidden_linear_size),
             nn.GroupNorm(8, hidden_linear_size),
             nn.ReLU(),
+            nn.Dropout(DROPOUT),
             nn.Linear(hidden_linear_size, self.out_size),
         )
 
     def forward(self, x):
         x = self.convolver(x)
         x = x.flatten(1, 2)
-        embedding = self.embedding(x)
+        embedding = self.encoder(x)
         return embedding
 
-class LSTMHead(nn.Module):
+class LSTMEncoder(nn.Module):
     def __init__(self, channels, width, hidden_size=64, out_size=256):
         super().__init__()
 
@@ -132,16 +130,19 @@ class LSTMHead(nn.Module):
         self.out_size = out_size
 
         self.lstm = nn.LSTM(channels, hidden_size, batch_first=True)
-        self.embedding = nn.Sequential(
+        self.encoder = nn.Sequential(
             nn.Linear(hidden_size * width, 128),
             nn.GroupNorm(8, 128),
             nn.ReLU(),
+            nn.Dropout(DROPOUT),
             nn.Linear(128, 128),
             nn.GroupNorm(8, 128),
             nn.ReLU(),
+            nn.Dropout(DROPOUT),
             nn.Linear(128, 128),
             nn.GroupNorm(8, 128),
             nn.ReLU(),
+            nn.Dropout(DROPOUT),
             nn.Linear(128, out_size),
         )
 
@@ -149,10 +150,10 @@ class LSTMHead(nn.Module):
         x = x.transpose(1, 2)  #(B, W, C)
         x, _ = self.lstm(x)
         x = x.flatten(1, 2)  #(B, hidden_size * W)
-        embedding = self.embedding(x)
+        embedding = self.encoder(x)
         return embedding
 
-class Allocator(nn.Module):
+class AllocatorPolicy(nn.Module):
     def __init__(
             self,
             channels,
@@ -166,25 +167,49 @@ class Allocator(nn.Module):
 
         super().__init__()
 
-        self.conv = ConvolutionHead(channels, width, hidden_channel_size=conv_hidden_channel_size, hidden_linear_size=conv_hidden_linear_size, out_size=conv_out_size)
-        self.lstm = LSTMHead(channels, width, hidden_size=lstm_hidden_size, out_size=lstm_out_size)
+        self.conv = ConvolutionEncoder(channels, width, hidden_channel_size=conv_hidden_channel_size, hidden_linear_size=conv_hidden_linear_size, out_size=conv_out_size)
+        self.lstm = LSTMEncoder(channels, width, hidden_size=lstm_hidden_size, out_size=lstm_out_size)
 
         self.out_size = self.conv.out_size + self.lstm.out_size
 
-        self.fc = nn.Sequential(
+        self.dist_encoder = nn.Sequential(
             nn.Linear(self.out_size, 128),
             nn.GroupNorm(8, 128),
             nn.ReLU(),
+            nn.Dropout(DROPOUT),
             nn.Linear(128, 128),
             nn.GroupNorm(8, 128),
             nn.ReLU(),
-            nn.Linear(128, 1),
-            nn.Tanh(),
+            nn.Dropout(DROPOUT),
+            nn.Linear(128, 128),
+            nn.GroupNorm(8, 128),
+            nn.ReLU(),
+            nn.Dropout(DROPOUT),
         )
+
+        self.mean_head = nn.Linear(128, 1)
+        self.log_std_head = nn.Linear(128, 1)
+    
+    def get_action(self, obs):
+        mean, log_std = self.forward(obs)
+        if self.training:
+            log_std = torch.clamp(log_std, -40, 20)
+            std = torch.exp(log_std)
+
+            epsilon = torch.randn_like(mean)
+            action = mean + std * epsilon
+        else:
+            action = mean
+
+        ### tanh squish
+        return F.tanh(action).squeeze(-1)
     
     def forward(self, x):
         x1 = self.conv(x)
         x2 = self.lstm(x)
         x = torch.cat([x1, x2], dim=1)
-        x = self.fc(x)
-        return x.squeeze(-1)
+        x = self.dist_encoder(x)
+        mean = self.mean_head(x)
+        log_std = self.log_std_head(x)
+
+        return mean, log_std

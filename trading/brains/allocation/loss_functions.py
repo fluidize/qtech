@@ -5,6 +5,31 @@ from torch.utils.data import DataLoader
 
 from models import PriceDataset
 
+def model_to_signals(model, dataset, device: str = "cuda", batch_size: int = 32, eval_mode: bool = True):
+
+    dataloader = DataLoader(
+        dataset, batch_size=batch_size,
+        shuffle=False,
+    )
+    
+    num_sequences = len(dataset)
+    predictions = torch.zeros(num_sequences, dtype=torch.float32, device=device)
+
+    with (torch.enable_grad() if not eval_mode else torch.no_grad()):
+        for batch_X, batch_indices in dataloader:
+            batch_X = batch_X.to(device)
+            batch_predictions = model.get_action(batch_X)
+            predictions[batch_indices] = batch_predictions.float()
+
+    raw_signals_t = torch.zeros(len(dataset.data), dtype=torch.float32, device=device)
+    valid_positions = torch.tensor(
+        dataset.data.index.get_indexer(dataset.valid_indices),
+        dtype=torch.long, device=device
+    )
+    raw_signals_t[valid_positions] = predictions
+
+    return raw_signals_t
+
 class TorchBacktest:
     def __init__(self, device: str = "cuda"):
         self.device = device
@@ -232,7 +257,7 @@ class TurnoverLoss(nn.Module):
         return turnover
 
 class AllocationLoss(nn.Module):
-    def __init__(self, device: str = "cuda", sortino_weight=1.0, turnover_weight=0.01, undertrading_weight=0.1):
+    def __init__(self, device: str = "cuda", sortino_weight=1, turnover_weight=0.05, undertrading_weight=0.01):
         super().__init__()
         self.tb = TorchBacktest(device=device)
         self.sortino_weight = sortino_weight
