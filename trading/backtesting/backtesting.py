@@ -24,7 +24,7 @@ class VectorizedBacktest:
         self.commission_fixed = commission_fixed
         self.leverage = leverage
 
-        self.symbol = None
+        self.symbols = None
         self.chunks = None
         self.interval = None
         self.age_days = None
@@ -38,49 +38,48 @@ class VectorizedBacktest:
 
     def fetch_data(
         self,
-        symbol: str = "None",
-        days: int = "None",
-        interval: str = "None",
-        age_days: int = "None",
-        data_source: str = "kucoin",
+        symbols: list[str],
+        days: int,
+        interval: str,
+        age_days: int,
+        data_source: str,
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True,
+        proxies: dict = {}
     ):
-        self.symbol = symbol
+        self.symbols = symbols
         self.days = days
         self.interval = interval
         self.age_days = age_days
         self.data_source = data_source
-        if any([symbol, days, interval, age_days]) == "None":
-            pass
-        else:
-            self.data = mt.fetch_data(
-                symbol,
-                days,
-                interval,
-                age_days,
-                data_source=data_source,
-                cache_expiry_hours=cache_expiry_hours,
-                retry_limit=retry_limit,
-                verbose=verbose,
-            )
-            self._set_n_days()
 
-            return self.data
+        self.data = mt.fetch_data(
+            symbols,
+            days,
+            interval,
+            age_days,
+            data_source=data_source,
+            cache_expiry_hours=cache_expiry_hours,
+            retry_limit=retry_limit,
+            verbose=verbose,
+        )
+        self._set_n_days()
+
+        return self.data
 
     def load_data(
         self,
         data: pd.DataFrame,
-        symbol: str = None,
+        symbols: list[str] = None,
         interval: str = None,
         age_days: int = None,
     ):
         self.data = data.copy()
-        if symbol is not None:
-            self.symbol = symbol
+        if symbols is not None:
+            self.symbols = symbols
         else:
-            self.symbol = "Unknown"
+            self.symbols = ["Unknown"]
         if interval is not None:
             self.interval = interval
         else:
@@ -324,7 +323,7 @@ class VectorizedBacktest:
             ax[1].legend(["Position"])
 
             ax[0].set_title(
-                f"{self.symbol} {self.n_days} days {self.interval} | TR: {summary['Total_Return'] * 100:.2f}% | Alpha: {summary['Alpha'] * 100:.2f}% | Beta: {summary['Beta']:.2f} | Max DD: {summary['Max_Drawdown'] * 100:.2f}% | Sharpe: {summary['Sharpe_Ratio']:.2f} | Trades: {summary['Total_Trades']}"
+                f"{self.symbols[0]} {self.n_days} days {self.interval} | TR: {summary['Total_Return'] * 100:.2f}% | Alpha: {summary['Alpha'] * 100:.2f}% | Beta: {summary['Beta']:.2f} | Max DD: {summary['Max_Drawdown'] * 100:.2f}% | Sharpe: {summary['Sharpe_Ratio']:.2f} | Trades: {summary['Total_Trades']}"
             )
             plt.show()
 
@@ -463,7 +462,7 @@ class VectorizedBacktest:
                             )
                         )
             fig.update_layout(
-                title=f"{self.symbol} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return'] * 100:.3f}% | Alpha: {summary['Alpha'] * 100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown'] * 100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}",
+                title=f"{self.symbols[0]} {self.n_days} days of {self.interval} | {self.age_days}d old | Linear | TR: {summary['Total_Return'] * 100:.3f}% | Alpha: {summary['Alpha'] * 100:.3f}% | Beta: {summary['Beta']:.3f} | Max DD: {summary['Max_Drawdown'] * 100:.3f}% | Sharpe: {summary['Sharpe_Ratio']:.3f} | Sortino: {summary['Sortino_Ratio']:.3f} | Trades: {summary['Total_Trades']}",
                 xaxis=dict(
                     title="Date",
                     rangeslider=dict(visible=False),
