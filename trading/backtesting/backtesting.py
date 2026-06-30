@@ -46,7 +46,7 @@ class VectorizedBacktest:
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True,
-        proxies: dict = {}
+        proxies: dict = {},
     ):
         self.symbols = symbols
         self.days = days
@@ -166,6 +166,8 @@ class VectorizedBacktest:
         - Signal generated at Close[t] using all data up to time t
         - Trade executed at Open[t+1] (next period's open)
         - Return earned from Open[t+1] to Open[t+2]
+
+        additional returns following signal will be interpreted as indicators
 
         Returns a pd.Series of the data.
         """
@@ -308,19 +310,27 @@ class VectorizedBacktest:
 
         summary = self.get_performance_metrics()
         if mode == "basic":
-            fig, ax = plt.subplots(2, 1)
+            fig, ax = plt.subplots(2, 1, sharex=True)
+            indicator_ax = None
+
             ax[0].plot(
-                self.data["Datetime"], self.data["Portfolio_Value"], color="orange"
+                self.data["Datetime"],
+                self.data["Portfolio_Value"],
+                color="orange",
+                label="Strategy Portfolio",
             )
             ax[0].plot(
                 self.data["Datetime"],
                 self.initial_capital * (1 + self.data["Open_Return"]).cumprod(),
                 color="blue",
+                label="Buy & Hold",
             )
-            ax[0].legend(["Strategy Portfolio", "Buy & Hold"])
+
+            handles, labels = ax[0].get_legend_handles_labels()
+            ax[0].legend(handles, labels, loc="upper right")
 
             ax[1].plot(self.data["Datetime"], self.data["Position"], color="green")
-            ax[1].legend(["Position"])
+            ax[1].legend(["Position"], loc="upper right")
 
             ax[0].set_title(
                 f"{self.symbols[0]} {self.n_days} days {self.interval} | TR: {summary['Total_Return'] * 100:.2f}% | Alpha: {summary['Alpha'] * 100:.2f}% | Beta: {summary['Beta']:.2f} | Max DD: {summary['Max_Drawdown'] * 100:.2f}% | Sharpe: {summary['Sharpe_Ratio']:.2f} | Trades: {summary['Total_Trades']}"
@@ -495,9 +505,7 @@ class VectorizedBacktest:
                     orientation="h", yanchor="bottom", y=1, xanchor="right", x=1
                 ),
             )
-
-            fig.update_yaxes(title_text="Price ($)")
-            fig.update_yaxes(title_text="Portfolio Value ($)")
+            
             fig.show()
 
     def get_cost_summary(self) -> dict:

@@ -13,7 +13,7 @@ vb = bt.VectorizedBacktest(
 vb.fetch_data(
     symbols=["SOL-USDT"],
     days=365,
-    interval="15m",
+    interval="4h",
     age_days=0,
     data_source="binance",
     cache_expiry_hours=-1,
@@ -27,14 +27,14 @@ def strategy(data):
     signals = pd.Series(0, index=data.index)
     close = data["Close"]
 
-    ema50 = ta.ema(close, timeperiod=50)
-    ema200 = ta.ema(close, timeperiod=200)
+    ema_short = ta.ema(close, timeperiod=20)
+    ema_long = ta.ema(close, timeperiod=50)
 
-    signals[ema50 > ema200] = 1
-    signals[ema50 < ema200] = 0
+    signals[ema_short > ema_long] = 1
+    signals[ema_short < ema_long] = -1
 
-    return signals
+    return signals, (ema_short, True) #Use the price scale for indicator plot
 
 
 vb.run_strategy(strategy, verbose=True)
-vb.plot_performance(mode="basic")
+vb.plot_performance(mode="standard")
