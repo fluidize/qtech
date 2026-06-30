@@ -6,7 +6,6 @@ from torch.utils.data import DataLoader
 from models import PriceDataset
 
 def model_to_signals(model, dataset, device: str = "cuda", batch_size: int = 32, eval_mode: bool = True):
-
     dataloader = DataLoader(
         dataset, batch_size=batch_size,
         shuffle=False,
@@ -21,9 +20,9 @@ def model_to_signals(model, dataset, device: str = "cuda", batch_size: int = 32,
             batch_predictions = model.get_action(batch_X)
             predictions[batch_indices] = batch_predictions.float()
 
-    raw_signals_t = torch.zeros(len(dataset.data), dtype=torch.float32, device=device)
+    raw_signals_t = torch.zeros(len(dataset.main_data), dtype=torch.float32, device=device)
     valid_positions = torch.tensor(
-        dataset.data.index.get_indexer(dataset.valid_indices),
+        dataset.main_data.index.get_indexer(dataset.valid_indices),
         dtype=torch.long, device=device
     )
     raw_signals_t[valid_positions] = predictions
@@ -36,7 +35,7 @@ class TorchBacktest:
         self.dataset = None
 
     def load_dataset(self, dataset: PriceDataset):
-        "Expects a dataset with .X and .data"
+        "Expects a dataset with .features and .main_data"
         self.dataset = dataset
         return self.dataset
 
@@ -45,147 +44,97 @@ class TorchBacktest:
             return torch.cat([torch.zeros(shift, device=self.device, dtype=series.dtype), series[:-shift]])
         elif shift < 0:
             return torch.cat([series[-shift:], torch.zeros(-shift, device=self.device, dtype=series.dtype)])
-        else:
-            return series
+        return series
+
+    def _get_open_prices(self):
+        return torch.tensor(
+            self.dataset.main_data['Open'].values,
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+    def _get_open_returns(self):
+        open_prices = self._get_open_prices()
+        open_next = self._torch_shift(open_prices, -1)
+        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
+        open_returns[-1] = 0.0
+        return open_returns
+
+    def _get_strategy_returns(self, raw_signals, clamp_signals: bool = True):
+        open_returns = self._get_open_returns()
+        if clamp_signals:
+            raw_signals = raw_signals.clamp(0.0, 1.0)
+        position = self._torch_shift(raw_signals, 1)
+        return torch.multiply(position, open_returns), open_returns
+
+    def _cumulative_return(self, returns):
+        return (1 + returns).prod() - 1
+
+    def _geometric_mean_return(self, returns):
+        one = torch.tensor(1.0, device=self.device, dtype=returns.dtype)
+        cumprod = torch.cumprod(one + returns, dim=0)
+        inv_N = torch.tensor(1.0 / len(returns), device=self.device, dtype=returns.dtype)
+        return torch.pow(cumprod[-1].clamp(min=1e-12), inv_N) - one
+
+    def _equity_curve(self, returns):
+        one = torch.tensor(1.0, device=self.device, dtype=returns.dtype)
+        return torch.cumprod(one + returns, dim=0)
 
     def get_hulltac(self, raw_signals):
-        # pct_change().shift(-1)
-        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)
-        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0
-
-        raw_signals_t = raw_signals.clamp(0.0, 1.0)
-        position = self._torch_shift(raw_signals_t, 1)
-
-        strategy_returns = torch.multiply(position, open_returns)
+        strategy_returns, open_returns = self._get_strategy_returns(raw_signals)
         strategy_std = torch.std(strategy_returns).clamp(min=1e-12)
-        
-        one = torch.tensor(1.0, device=self.device, dtype=strategy_returns.dtype)
-        strategy_returns_cumprod = torch.cumprod(torch.add(one, strategy_returns), dim=0)
-        
-        inv_N = torch.tensor(1.0 / len(strategy_returns), device=self.device, dtype=strategy_returns.dtype)
-        strategy_geometric_mean_return = torch.subtract(
-            torch.pow(strategy_returns_cumprod[-1].clamp(min=1e-12), inv_N), one
-        )
+        strategy_geometric_mean_return = self._geometric_mean_return(strategy_returns)
 
         market_std = torch.std(open_returns).clamp(min=1e-12)
-
-        one = torch.tensor(1.0, device=self.device, dtype=strategy_returns.dtype)
-        market_returns_cumprod = torch.cumprod(torch.add(one, open_returns), dim=0)
-
-        inv_N = torch.tensor(1.0 / len(open_returns), device=self.device, dtype=open_returns.dtype)
-        market_geometric_mean_return = torch.subtract(
-            torch.pow(market_returns_cumprod[-1].clamp(min=1e-12), inv_N), one
-        )
+        market_geometric_mean_return = self._geometric_mean_return(open_returns)
 
         strategy_sharpe = strategy_geometric_mean_return / strategy_std
-
-        excess_volatility = torch.divide(strategy_std, market_std).clamp(max=1.2)
+        excess_volatility = torch.div(strategy_std, market_std).clamp(max=1.2)
         volatility_penalty = 1 + excess_volatility
-        
-        return_gap = torch.subtract(market_geometric_mean_return, strategy_geometric_mean_return).clamp(min=0.0)
+
+        return_gap = (market_geometric_mean_return - strategy_geometric_mean_return).clamp(min=0.0)
         return_penalty = 1 + return_gap / 100
 
-        loss = strategy_sharpe / (return_penalty * volatility_penalty)
-        return loss
-    
+        return strategy_sharpe / (return_penalty * volatility_penalty)
+
     def get_sharpe(self, raw_signals):
-        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)
-        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0
-
-        raw_signals_t = raw_signals.clamp(0.0, 1.0)
-        position = self._torch_shift(raw_signals_t, 1)
-
-        strategy_returns = torch.multiply(position, open_returns)
+        strategy_returns, _ = self._get_strategy_returns(raw_signals)
         strategy_std = torch.std(strategy_returns).clamp(min=1e-12)
-
-        sharpe = strategy_returns.mean() / strategy_std
-
-        return sharpe
+        return strategy_returns.mean() / strategy_std
 
     def get_information_ratio(self, raw_signals):
-        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)
-        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0
-
-        raw_signals_t = raw_signals.clamp(0.0, 1.0)
-        position = self._torch_shift(raw_signals_t, 1)
-
-        strategy_returns = torch.multiply(position, open_returns)
+        strategy_returns, open_returns = self._get_strategy_returns(raw_signals)
         active_returns = strategy_returns - open_returns
         tracking_error = torch.std(active_returns).clamp(min=1e-12)
         return active_returns.mean() / tracking_error
 
     def get_total_return(self, raw_signals):
-        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)
-        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0
-
-        raw_signals_t = raw_signals.clamp(0.0, 1.0)
-        position = self._torch_shift(raw_signals_t, 1)
-
-        strategy_returns = torch.multiply(position, open_returns)
-
-        total_return = (1 + strategy_returns).prod() - 1
-        return total_return
+        strategy_returns, _ = self._get_strategy_returns(raw_signals)
+        return self._cumulative_return(strategy_returns)
 
     def get_excess_return(self, raw_signals):
-        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)
-        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0
-
-        raw_signals_t = raw_signals.clamp(0.0, 1.0)
-        position = self._torch_shift(raw_signals_t, 1)
-        strategy_returns = torch.multiply(position, open_returns)
-
-        strategy_total = (1 + strategy_returns).prod() - 1
-        benchmark_total = (1 + open_returns).prod() - 1
-        return strategy_total - benchmark_total
+        strategy_returns, open_returns = self._get_strategy_returns(raw_signals)
+        return self._cumulative_return(strategy_returns) - self._cumulative_return(open_returns)
 
     def get_max_drawdown(self, raw_signals):
-        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)
-        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0
-
-        raw_signals_t = raw_signals.clamp(0.0, 1.0)
-        position = self._torch_shift(raw_signals_t, 1)
-
-        strategy_returns = torch.multiply(position, open_returns)
-        equity = torch.cumprod(torch.add(torch.tensor(1.0, device=self.device, dtype=strategy_returns.dtype), strategy_returns), dim=0)
+        strategy_returns, _ = self._get_strategy_returns(raw_signals)
+        equity = self._equity_curve(strategy_returns)
         running_max = torch.cummax(equity, dim=0).values
         drawdown = (running_max - equity) / running_max.clamp(min=1e-12)
         return drawdown.max()
 
     def get_sortino(self, raw_signals, target_return=0.0):
-        open_prices = torch.tensor(self.dataset.data['Open'].values, dtype=torch.float32, device=self.device)
-        open_next = self._torch_shift(open_prices, -1)
-        open_returns = (open_next - open_prices) / open_prices.clamp(min=1e-12)
-        open_returns[-1] = 0.0
-
-        raw_signals_t = raw_signals
-        position = self._torch_shift(raw_signals_t, 1)
-
-        strategy_returns = torch.multiply(position, open_returns)
+        strategy_returns, _ = self._get_strategy_returns(raw_signals, clamp_signals=False)
         excess_returns = strategy_returns - target_return
         downside_returns = torch.clamp(excess_returns, max=0.0)
         downside_risk = torch.std(downside_returns).clamp(min=1e-6)
         return -excess_returns.mean() / downside_risk
 
     def get_turnover(self, raw_signals):
-        position_changes = torch.diff(raw_signals, dim=0)
-        turnover = torch.abs(position_changes).mean()
-        return turnover
+        return torch.abs(torch.diff(raw_signals, dim=0)).mean()
 
     def get_pos_penalty(self, raw_signals, penalty_factor=0.1):
-        near_zero_penalty = torch.mean(torch.exp(-torch.abs(raw_signals) * 5))
-        return penalty_factor * near_zero_penalty
+        return penalty_factor * torch.mean(torch.exp(-torch.abs(raw_signals) * 5))
 
 class SharpeLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
