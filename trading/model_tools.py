@@ -239,10 +239,10 @@ def _fetch_binance(symbol, days, interval, age_days, retry_limit, proxies, end_t
 
 def fetch_data(
     symbols: list[str],  # first symbol is treated as main symbol
-    days,
-    interval,
-    age_days,
-    data_source: str = "binance",
+    days: int,
+    interval: str,
+    age_days: int,
+    data_source: str,
     cache_expiry_hours: int = 24,
     retry_limit: int = 3,
     verbose: bool = True,
