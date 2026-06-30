@@ -5,7 +5,7 @@ import numpy as np
 from collections import Counter
 
 from .param_space import registered_param_specs, ParamSpec
-from .gp_tools import unique_counter, make_compare, ast_to_function, paramspecs_to_dict, unparsify, reset_counter
+from .tools import unique_counter, make_compare, ast_to_function, paramspecs_to_dict, unparsify, reset_counter
 
 FUNCTIONAL_ALIAS = "ta" #module alias for technical analysis functions
 

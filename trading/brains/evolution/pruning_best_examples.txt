@@ -1,0 +1,68 @@
+=== Algorithm 1 (Metric: 649.3222120132924) ===
+def strategy(data, keltner_channels5_timeperiod, keltner_channels5_atr_multiplier):
+    signals = pd.Series(0, index=data.index)
+    keltner_channels5, keltner_channels6, keltner_channels7 = ta.keltner_channels(high=data['High'], low=data['Low'], close=data['Close'], timeperiod=keltner_channels5_timeperiod, atr_multiplier=keltner_channels5_atr_multiplier)
+    LOGIC_keltner_channels6_Gt_Open = keltner_channels6 > data['Open']
+    LOGIC_keltner_channels7_Gt_High = keltner_channels7 > data['High']
+    signals[LOGIC_keltner_channels6_Gt_Open] = 1
+    signals[LOGIC_keltner_channels7_Gt_High] = 0
+    return signals
+params={'keltner_channels5_timeperiod': 65, 'keltner_channels5_atr_multiplier': 1.685999528045316}
+search_space={'keltner_channels5_timeperiod': (2, 200), 'keltner_channels5_atr_multiplier': (0.1, 5.0)}
+
+=== Algorithm 2 (Metric: 104.07112562047833) ===
+def strategy(data, kama3_er_period, kama3_fast_period, kama3_slow_period, tema4_timeperiod):
+    signals = pd.Series(0, index=data.index)
+    kama3 = ta.kama(series=data['Close'], er_period=kama3_er_period, fast_period=kama3_fast_period, slow_period=kama3_slow_period)
+    tema4 = ta.tema(series=data['Close'], timeperiod=tema4_timeperiod)
+    LOGIC_tema4_Lt_High = tema4 < data['High']
+    LOGIC_tema4_Lt_kama3 = tema4 < kama3
+    signals[LOGIC_tema4_Lt_High] = 1
+    signals[LOGIC_tema4_Lt_kama3] = 0
+    return signals
+params={'kama3_er_period': 64, 'kama3_fast_period': 185, 'kama3_slow_period': 153, 'tema4_timeperiod': 172}
+search_space={'kama3_er_period': (2, 200), 'kama3_fast_period': (2, 200), 'kama3_slow_period': (2, 200), 'tema4_timeperiod': (2, 200)}
+
+=== Algorithm 3 (Metric: 65.38799779942833) ===
+def strategy(data, aroon0_timeperiod, aroon2_timeperiod, LOGIC_aroon1_Lt_const_0_constant):
+    signals = pd.Series(0, index=data.index)
+    aroon0, aroon1 = ta.aroon(high=data['High'], low=data['Low'], timeperiod=aroon0_timeperiod)
+    aroon2, aroon3 = ta.aroon(high=data['High'], low=data['Low'], timeperiod=aroon2_timeperiod)
+    LOGIC_aroon2_Gt_Open = aroon2 > data['Open']
+    LOGIC_aroon1_Lt_const_0 = aroon1 < LOGIC_aroon1_Lt_const_0_constant
+    signals[LOGIC_aroon2_Gt_Open] = 1
+    signals[LOGIC_aroon1_Lt_const_0] = 0
+    return signals
+params={'aroon0_timeperiod': 121, 'aroon2_timeperiod': 35, 'LOGIC_aroon1_Lt_const_0_constant': 63}
+search_space={'aroon0_timeperiod': (2, 200), 'aroon2_timeperiod': (2, 200), 'LOGIC_aroon1_Lt_const_0_constant': (-100, 100)}
+
+=== Algorithm 4 (Metric: 30.627745700719828) ===
+def strategy(data, kama7_er_period, kama7_fast_period, kama7_slow_period, sma8_timeperiod, sma9_timeperiod):
+    signals = pd.Series(0, index=data.index)
+    kama7 = ta.kama(series=data['Close'], er_period=kama7_er_period, fast_period=kama7_fast_period, slow_period=kama7_slow_period)
+    sma8 = ta.sma(series=data['Close'], timeperiod=sma8_timeperiod)
+    sma9 = ta.sma(series=data['Close'], timeperiod=sma9_timeperiod)
+    LOGIC_kama7_Gt_Open = kama7 > data['Open']
+    LOGIC_kama7_Gt_sma8 = kama7 > sma8
+    LOGIC_COMPOSITE_2 = LOGIC_kama7_Gt_sma8 | LOGIC_kama7_Gt_Open
+    signals[LOGIC_COMPOSITE_2] = 1
+    signals[LOGIC_kama7_Gt_sma8] = 0
+    return signals
+params={'kama7_er_period': 199, 'kama7_fast_period': 2, 'kama7_slow_period': 190, 'sma8_timeperiod': 7, 'sma9_timeperiod': 3}
+search_space={'kama7_er_period': (2, 200), 'kama7_fast_period': (2, 200), 'kama7_slow_period': (2, 200), 'sma8_timeperiod': (2, 200), 'sma9_timeperiod': (2, 200)}
+
+=== Algorithm 5 (Metric: 23.782140182637097) ===
+def strategy(data, aobv3_fast_period, aobv3_slow_period, aroon5_timeperiod):
+    signals = pd.Series(0, index=data.index)
+    aobv3, aobv4 = ta.aobv(close=data['Close'], volume=data['Volume'], fast_period=aobv3_fast_period, slow_period=aobv3_slow_period)
+    aroon5, aroon6 = ta.aroon(high=data['High'], low=data['Low'], timeperiod=aroon5_timeperiod)
+    LOGIC_aobv4_Lt_aobv3 = aobv4 < aobv3
+    LOGIC_aroon5_Gt_Close = aroon5 > data['Close']
+    LOGIC_COMPOSITE_0 = LOGIC_aroon5_Gt_Close & LOGIC_aobv4_Lt_aobv3
+    LOGIC_COMPOSITE_1 = LOGIC_aroon5_Gt_Close | LOGIC_COMPOSITE_0
+    signals[LOGIC_COMPOSITE_1] = 1
+    signals[LOGIC_aobv4_Lt_aobv3] = 0
+    return signals
+params={'aobv3_fast_period': 53, 'aobv3_slow_period': 138, 'aroon5_timeperiod': 5}
+search_space={'aobv3_fast_period': (2, 200), 'aobv3_slow_period': (2, 200), 'aroon5_timeperiod': (2, 200)}
+

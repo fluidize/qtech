@@ -12,7 +12,7 @@ from rich.table import Table
 from rich import print as rprint
 
 from trading.brains.evolution.genetics.param_space import registered_param_specs, FunctionSpec
-from trading.brains.evolution.genetics.gp_tools import get_indicators
+from trading.brains.evolution.genetics.tools import get_indicators
 
 def generate_sample_data(n: int = 1000) -> pd.DataFrame:
     """Generate synthetic OHLCV data for testing."""
