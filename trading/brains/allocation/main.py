@@ -22,7 +22,7 @@ if __name__ == "__main__":
     SEQ_LEN = 16
     BATCH_SIZE = 2 ** 10
     DATA = {
-        "symbol": "SOL-USDT",
+        "symbols": ["SOL-USDT", "BTC-USDT"],
         "days": 1095,
         "interval": "30m",
         "age_days": 0,
@@ -34,9 +34,10 @@ if __name__ == "__main__":
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     data = mt.fetch_data(**DATA)
+    print(data.isna().sum())
     train_dataset_raw, val_dataset_raw = train_test_split(
         data,
-        test_size=0.5,
+        test_size=0.25,
         shuffle=False,
     )
 
@@ -105,7 +106,7 @@ if __name__ == "__main__":
         commission_fixed=0.0,
         leverage=1.0,
     )
-    vb.load_data(train_dataset_raw, symbol=DATA["symbol"], interval=DATA["interval"], age_days=DATA["age_days"])
+    vb.load_data(val_dataset_raw, symbols=DATA["symbols"], interval=DATA["interval"], age_days=DATA["age_days"])
     vb.run_strategy(model_wrapper, verbose=True, model=model, device=DEVICE, seq_len=SEQ_LEN, batch_size=BATCH_SIZE)
 
     print("Backtest metrics:", vb.get_performance_metrics())
