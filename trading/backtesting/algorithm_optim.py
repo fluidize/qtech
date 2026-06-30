@@ -575,7 +575,7 @@ class QuantitativeScreener:
         self._generate_chart(print_results=True)
         if save_params:
             best = self.get_best()
-            file_name = f"{self.strategy_func.__name__}-{best["symbol"]}-{best["interval"]}-{self.metric}"
+            file_name = f"{self.strategy_func.__name__}-{best['symbol']}-{best['interval']}-{self.metric}"
             file_name = file_name.replace("**", "pow")
             file_name = file_name.replace("*", "x")
             file_name = file_name.replace("/", "div")
