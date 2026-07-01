@@ -24,3 +24,4 @@ founder = generate_genome(
     allow_logic_composition=False
 ) #the founder is very simple
 
+display_ast(founder.get_ast())

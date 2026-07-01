@@ -105,7 +105,7 @@ if __name__ == "__main__":
             keep_top_n = pass_config["keep_top_n"]
 
             progress_bar = tqdm(total=len(population), desc=f"Pass {pass_num}")
-            futures = {executor.submit(evaluate_genome, (i, unparsify(g.get_function_ast()), g.get_param_space(), vb_config, data_config, n_trials)): i
+            futures = {executor.submit(evaluate_genome, (i, unparsify(g.get_ast()), g.get_param_space(), vb_config, data_config, n_trials)): i
                        for i, g in enumerate(population)}
 
             for future in as_completed(futures):
@@ -119,7 +119,7 @@ if __name__ == "__main__":
 
     top_5 = sorted(population, key=lambda g: (m if (m := g.get_best_metric()) is not None else float("-inf")), reverse=True)[:5]
     best_genome = top_5[0]
-    display_ast(best_genome.get_function_ast())
+    display_ast(best_genome.get_ast())
 
 
     vb = VectorizedBacktest(**vb_config)
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         for i, genome in enumerate(top_5, 1):
             params, metric = genome.get_best_params(), genome.get_best_metric()
             f.write(f"=== Algorithm {i} (Metric: {metric}) ===\n")
-            f.write(unparsify(genome.get_function_ast()))
+            f.write(unparsify(genome.get_ast()))
             f.write(f"\nparams={params}")
             f.write(f"\nsearch_space={genome.get_param_space()}")
             f.write(f"\n\n")

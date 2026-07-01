@@ -584,7 +584,7 @@ class Genome:
     def get_best_metric(self) -> float | None:
         return self._best_metric
 
-    def get_function_ast(self) -> ast.AST:
+    def get_ast(self) -> ast.AST:
         return self.function_ast
     
     def get_compiled_function(self) -> callable:
