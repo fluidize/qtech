@@ -1,20 +1,15 @@
 import pandas as pd
 import ast
 import inspect
+import random
 import numpy as np
 from collections import Counter
 
 from .param_space import registered_param_specs, ParamSpec
-from .tools import (
-    unique_counter,
-    make_compare,
-    ast_to_function,
-    paramspecs_to_dict,
-    unparsify,
-    reset_counter,
-)
+from .tools import *
 
 FUNCTIONAL_ALIAS = "ta"  # module alias for technical analysis functions
+EXCLUDED_INDICATORS = ["ichimoku"]
 
 
 class IndicatorGene:
@@ -32,7 +27,7 @@ class IndicatorGene:
         sig = inspect.signature(self.function)
         keywords = []
 
-        data_keywords = {
+        data_keywords = {  # keywords are inside original TA function params
             "series": "Close",  # by default map all data to the close col
             "high": "High",
             "low": "Low",
@@ -513,6 +508,158 @@ class SignalGene:
         return hash((self.long_logic_index, self.short_logic_index))
 
 
+# Generation helpers moved into ast_builder
+_INDICATORS_CACHE = None
+
+
+def _get_indicators_cached():
+    global _INDICATORS_CACHE
+    if _INDICATORS_CACHE is None:
+        _INDICATORS_CACHE = get_indicators(exclude=EXCLUDED_INDICATORS)
+    return _INDICATORS_CACHE
+
+
+def generate_indicator_gene() -> IndicatorGene:
+    return IndicatorGene(function=random.choice(_get_indicators_cached()))
+
+
+def generate_logic_gene_sequence(
+    num_logic: int,
+    num_indicators: int,
+    allow_logic_composition: bool,
+    logic_composition_prob: float,
+) -> list[LogicGene]:
+    logic_genes = []
+    for _ in range(num_logic):
+        if (
+            allow_logic_composition
+            and len(logic_genes) >= 2
+            and random.random() < logic_composition_prob
+        ):
+            left_idx, right_idx = random.sample(range(len(logic_genes)), 2)
+            logic_genes.append(
+                LogicToLogic(
+                    left_logic_index=left_idx,
+                    right_logic_index=right_idx,
+                    operator=random_composition_operator(),
+                )
+            )
+        else:
+            logic_type = random.choice(
+                [IndicatorToPrice, IndicatorToConstant, IndicatorToIndicator]
+            )
+
+            if logic_type == IndicatorToPrice:
+                logic_genes.append(
+                    IndicatorToPrice(
+                        left_index=random.randint(0, num_indicators - 1),
+                        column_index=random.randint(0, 3),
+                        operator=random_comparison_operator(),
+                    )
+                )
+            elif logic_type == IndicatorToConstant:
+                logic_genes.append(
+                    IndicatorToConstant(
+                        left_index=random.randint(0, num_indicators - 1),
+                        operator=random_comparison_operator(),
+                    )
+                )
+            else:
+                left_idx = random.randint(0, num_indicators - 1)
+                right_idx = random.randint(0, num_indicators - 1)
+                while right_idx == left_idx and num_indicators > 1:
+                    right_idx = random.randint(0, num_indicators - 1)
+                logic_genes.append(
+                    IndicatorToIndicator(
+                        left_index=left_idx,
+                        right_index=right_idx,
+                        operator=random_comparison_operator(),
+                    )
+                )
+    return logic_genes
+
+
+def generate_signal_gene(num_logic: int) -> SignalGene:
+    long_logic_index, short_logic_index = random.sample(range(num_logic), 2)
+    return SignalGene(long_logic_index=long_logic_index, short_logic_index=short_logic_index)
+
+
+def generate_genome(
+    num_indicators=None,
+    num_logic=None,
+    min_indicators=2,
+    max_indicators=6,
+    min_logic=2,
+    max_logic=6,
+    allow_logic_composition=True,
+    logic_composition_prob=0.5,
+):
+    if num_indicators is None:
+        num_indicators = random.randint(min_indicators, max_indicators)
+    if num_logic is None:
+        num_logic = random.randint(min_logic, max_logic)
+
+    indicator_genes = [generate_indicator_gene() for _ in range(num_indicators)]
+
+    logic_genes = generate_logic_gene_sequence(
+        num_logic,
+        num_indicators,
+        allow_logic_composition,
+        logic_composition_prob,
+    )
+    signal_genes = [generate_signal_gene(num_logic)]
+    return Genome(
+        indicator_genes=indicator_genes,
+        logic_genes=logic_genes,
+        signal_genes=signal_genes,
+    )
+
+
+def generate_population(
+    size=100,
+    num_indicators=None,
+    num_logic=None,
+    min_indicators=2,
+    max_indicators=6,
+    min_logic=2,
+    max_logic=6,
+    allow_logic_composition=True,
+    logic_composition_prob=0.5,
+):
+    population = []
+    for _ in range(size):
+        genome = generate_genome(
+            num_indicators=num_indicators,
+            num_logic=num_logic,
+            min_indicators=min_indicators,
+            max_indicators=max_indicators,
+            min_logic=min_logic,
+            max_logic=max_logic,
+            allow_logic_composition=allow_logic_composition,
+            logic_composition_prob=logic_composition_prob,
+        )
+        population.append(genome)
+    return population
+
+
+def separate_genes(
+    genes_list: list,
+) -> tuple[list[IndicatorGene], list[LogicGene], list[SignalGene]]:
+    indicator_genes = []
+    logic_genes = []
+    signal_genes = []
+
+    for gene in genes_list:
+        if isinstance(gene, IndicatorGene):
+            indicator_genes.append(gene)
+        elif isinstance(gene, LogicGene):
+            logic_genes.append(gene)
+        elif isinstance(gene, SignalGene):
+            signal_genes.append(gene)
+
+    return indicator_genes, logic_genes, signal_genes
+
+
 class Genome:
     def __init__(
         self,
@@ -755,6 +902,9 @@ class Genome:
                     self.sequence_dict[name] = gene
             else:
                 self.sequence_dict[gene.get_name()] = gene
+
+    def mutate(self) -> "Genome":  # new instance, not inplace
+        raise NotImplementedError("Genome.mutate() is not implemented yet")
 
     ### OPTIMIZATION METHODS
     def set_best(self, params: dict, metric: float) -> None:

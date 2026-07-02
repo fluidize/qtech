@@ -25,7 +25,7 @@ def unique_counter() -> str:
     COUNTER += 1
     return name
 
-def unparsify(ast_node: ast.AST):
+def unparsify(ast_node: ast.AST) -> str:
     """Convert AST node to Python code string."""
     ast.fix_missing_locations(ast_node)
     return ast.unparse(ast_node)
@@ -60,7 +60,7 @@ def make_compare(left: ast.expr, operator: ast.cmpop, right: ast.expr) -> ast.Co
         comparators=[right]
     )
 
-def get_indicators(exclude: list[str] = ["hma", "percent_rank", "ichimoku"]):
+def get_indicators(exclude: list[str] = ["hma", "percent_rank", "ichimoku"]): ### excluded indicators are leaky
     """ Get indicator functions from ta module """
     exclude_set = set(exclude)
     indicators = []
@@ -69,11 +69,11 @@ def get_indicators(exclude: list[str] = ["hma", "percent_rank", "ichimoku"]):
             indicators.append(getattr(ta, name))
     return indicators
 
-def random_comparison_operator():
+def random_comparison_operator() -> ast.cmpop:
     """Get random comparison operator."""
     return random.choice([ast.Gt(), ast.Lt()])
 
-def random_composition_operator():
+def random_composition_operator() -> ast.boolop:
     """Get random composition operator."""
     return random.choice([ast.BitAnd(), ast.BitOr()])
 

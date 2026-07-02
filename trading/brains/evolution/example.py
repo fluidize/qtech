@@ -1,4 +1,4 @@
-import genetics.generation as generation
+from genetics.ast_builder import generate_genome
 from genetics.tools import display_ast
 
 for x in range(100):

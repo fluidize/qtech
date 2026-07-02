@@ -4,7 +4,7 @@ from trading.backtesting.backtesting import VectorizedBacktest
 import trading.backtesting.mc_analysis as mc
 import trading.model_tools as mt
 
-from genetics.generation import generate_population
+from genetics.ast_builder import generate_population
 from genetics.tools import display_ast, unparsify
 import ast
 
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     POPULATION_SIZE = 1024
 
     vb_config = {
-        "instance_name": "Condensation",
+        "instance_name": "Pruning",
         "initial_capital": 1,
         "slippage_pct": 0.0,
         "commission_fixed": 0.0,
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     data_config = {
         "symbols": ["SOL-USDT"],
         "days": 365,
-        "interval": "1h",
+        "interval": "30m",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": 999,
@@ -127,15 +127,20 @@ if __name__ == "__main__":
     vb.run_strategy(best_genome.get_compiled_function(), **best_genome.get_best_params())
     vb.plot_performance(mode="standard")
 
-    plot_genome_spaghetti(best_genome, vb_config, data_config, num_simulations=1000)
+    print(vb.get_performance_metrics())
+    print(best_genome.get_best_params())
 
-    complexities = [genome.get_complexity(shannon_entropy=False) for genome in population]
-    metrics = [genome.get_best_metric() for genome in population]
-    plt.scatter(complexities, metrics, alpha=0.75)
-    plt.xlabel("Complexity")
-    plt.ylabel("Metric")
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.show()
+    ### SPAGHETTI PLOT
+    # plot_genome_spaghetti(best_genome, vb_config, data_config, num_simulations=1000)
+
+    ### COMPLEXITY GRAPH
+    # complexities = [genome.get_complexity(shannon_entropy=False) for genome in population]
+    # metrics = [genome.get_best_metric() for genome in population]
+    # plt.scatter(complexities, metrics, alpha=0.75)
+    # plt.xlabel("Complexity")
+    # plt.ylabel("Metric")
+    # plt.grid(True, linestyle='--', alpha=0.5)
+    # plt.show()
 
     with open("best.txt", "w") as f:
         for i, genome in enumerate(top_5, 1):

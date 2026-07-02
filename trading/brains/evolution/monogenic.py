@@ -4,10 +4,10 @@ from trading.backtesting.backtesting import VectorizedBacktest
 import trading.backtesting.mc_analysis as mc
 import trading.model_tools as mt
 
-from trading.brains.evolution.genetics.generation import generate_population, generate_genome
+from genetics.ast_builder import generate_population, generate_genome
 from genetics.tools import display_ast, unparsify
-import ast
 
+import ast
 from tqdm import tqdm
 from rich import print
 from time import time
@@ -24,4 +24,4 @@ founder = generate_genome(
     allow_logic_composition=False
 ) #the founder is very simple
 
-display_ast(founder.get_ast())
+print(founder.mutate())
