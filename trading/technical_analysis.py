@@ -512,6 +512,27 @@ def macd(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalpe
     hist = macd - signal
     return macd, signal, hist
 
+def macd_macd(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> pd.Series:
+    """MACD line only"""
+    exp1 = ema(series, fastperiod)
+    exp2 = ema(series, slowperiod)
+    return exp1 - exp2
+
+def macd_signal(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> pd.Series:
+    """MACD signal line only"""
+    exp1 = ema(series, fastperiod)
+    exp2 = ema(series, slowperiod)
+    macd = exp1 - exp2
+    return ema(macd, signalperiod)
+
+def macd_hist(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> pd.Series:
+    """MACD histogram only"""
+    exp1 = ema(series, fastperiod)
+    exp2 = ema(series, slowperiod)
+    macd = exp1 - exp2
+    signal = ema(macd, signalperiod)
+    return macd - signal
+
 def macd_dema(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> tuple[pd.Series, pd.Series]:
     """Moving Average Convergence Divergence with DEMA"""
     exp1 = dema(series, fastperiod)
@@ -521,11 +542,50 @@ def macd_dema(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, sig
     hist = macd - signal
     return macd, signal, hist
 
+def macd_dema_macd(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> pd.Series:
+    """MACD DEMA line only"""
+    exp1 = dema(series, fastperiod)
+    exp2 = dema(series, slowperiod)
+    return exp1 - exp2
+
+def macd_dema_signal(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> pd.Series:
+    """MACD DEMA signal line only"""
+    exp1 = dema(series, fastperiod)
+    exp2 = dema(series, slowperiod)
+    macd = exp1 - exp2
+    return dema(macd, signalperiod)
+
+def macd_dema_hist(series: pd.Series, fastperiod: int = 12, slowperiod: int = 26, signalperiod: int = 9) -> pd.Series:
+    """MACD DEMA histogram only"""
+    exp1 = dema(series, fastperiod)
+    exp2 = dema(series, slowperiod)
+    macd = exp1 - exp2
+    signal = dema(macd, signalperiod)
+    return macd - signal
+
 def bbands(series: pd.Series, timeperiod: int = 20, devup: int = 2, devdn: int = 2) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Bollinger Bands"""
     values = np.asarray(series.values, dtype=np.float64)
     upper_vals, middle_vals, lower_vals = _bbands_core(values, timeperiod, float(devup), float(devdn))
     return pd.Series(upper_vals, index=series.index), pd.Series(middle_vals, index=series.index), pd.Series(lower_vals, index=series.index)
+
+def bbands_upper(series: pd.Series, timeperiod: int = 20, devup: int = 2, devdn: int = 2) -> pd.Series:
+    """Bollinger Bands upper band only"""
+    values = np.asarray(series.values, dtype=np.float64)
+    upper_vals, _, _ = _bbands_core(values, timeperiod, float(devup), float(devdn))
+    return pd.Series(upper_vals, index=series.index)
+
+def bbands_middle(series: pd.Series, timeperiod: int = 20, devup: int = 2, devdn: int = 2) -> pd.Series:
+    """Bollinger Bands middle band only"""
+    values = np.asarray(series.values, dtype=np.float64)
+    _, middle_vals, _ = _bbands_core(values, timeperiod, float(devup), float(devdn))
+    return pd.Series(middle_vals, index=series.index)
+
+def bbands_lower(series: pd.Series, timeperiod: int = 20, devup: int = 2, devdn: int = 2) -> pd.Series:
+    """Bollinger Bands lower band only"""
+    values = np.asarray(series.values, dtype=np.float64)
+    _, _, lower_vals = _bbands_core(values, timeperiod, float(devup), float(devdn))
+    return pd.Series(lower_vals, index=series.index)
 
 def stoch(high: pd.Series, low: pd.Series, close: pd.Series, fastk_period: int = 14, slowk_period: int = 3, slowd_period: int = 3) -> tuple[pd.Series, pd.Series]:
     """Stochastic Oscillator"""
@@ -536,6 +596,23 @@ def stoch(high: pd.Series, low: pd.Series, close: pd.Series, fastk_period: int =
     k = pd.Series(k_vals, index=close.index)
     d = sma(k, slowk_period)
     return k, d
+
+def stoch_k(high: pd.Series, low: pd.Series, close: pd.Series, fastk_period: int = 14, slowk_period: int = 3, slowd_period: int = 3) -> pd.Series:
+    """Stochastic Oscillator %K only"""
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    k_vals = _stoch_core(high_vals, low_vals, close_vals, fastk_period)
+    return pd.Series(k_vals, index=close.index)
+
+def stoch_d(high: pd.Series, low: pd.Series, close: pd.Series, fastk_period: int = 14, slowk_period: int = 3, slowd_period: int = 3) -> pd.Series:
+    """Stochastic Oscillator %D only"""
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    k_vals = _stoch_core(high_vals, low_vals, close_vals, fastk_period)
+    k = pd.Series(k_vals, index=close.index)
+    return sma(k, slowk_period)
 
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> pd.Series:
     """Average True Range"""
@@ -567,6 +644,30 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14)
     close_vals = np.asarray(close.values, dtype=np.float64)
     adx_vals, plus_di_vals, minus_di_vals = _adx_core(high_vals, low_vals, close_vals, timeperiod)
     return pd.Series(adx_vals, index=high.index), pd.Series(plus_di_vals, index=high.index), pd.Series(minus_di_vals, index=high.index)
+
+def adx_adx(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> pd.Series:
+    """ADX line only"""
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    adx_vals, _, _ = _adx_core(high_vals, low_vals, close_vals, timeperiod)
+    return pd.Series(adx_vals, index=high.index)
+
+def adx_plus_di(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> pd.Series:
+    """Plus DI only"""
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    _, plus_di_vals, _ = _adx_core(high_vals, low_vals, close_vals, timeperiod)
+    return pd.Series(plus_di_vals, index=high.index)
+
+def adx_minus_di(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 14) -> pd.Series:
+    """Minus DI only"""
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    _, _, minus_di_vals = _adx_core(high_vals, low_vals, close_vals, timeperiod)
+    return pd.Series(minus_di_vals, index=high.index)
 
 @njit(cache=True)
 def _log_return_core(values: np.ndarray) -> np.ndarray:
@@ -641,6 +742,30 @@ def aroon(high: pd.Series, low: pd.Series, timeperiod: int = 14) -> tuple[pd.Ser
     aroon_up_vals, aroon_down_vals = _aroon_core(high_vals, low_vals, timeperiod)
     return pd.Series(aroon_up_vals, index=high.index), pd.Series(aroon_down_vals, index=low.index)
 
+def aroon_up(high: pd.Series, low: pd.Series, timeperiod: int = 14) -> pd.Series:
+    """Aroon Up only"""
+    if timeperiod < 2:
+        raise ValueError("timeperiod must be >= 2")
+    n = len(high)
+    if n < timeperiod:
+        return pd.Series(np.nan, index=high.index)
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    aroon_up_vals, _ = _aroon_core(high_vals, low_vals, timeperiod)
+    return pd.Series(aroon_up_vals, index=high.index)
+
+def aroon_down(high: pd.Series, low: pd.Series, timeperiod: int = 14) -> pd.Series:
+    """Aroon Down only"""
+    if timeperiod < 2:
+        raise ValueError("timeperiod must be >= 2")
+    n = len(high)
+    if n < timeperiod:
+        return pd.Series(np.nan, index=high.index)
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    _, aroon_down_vals = _aroon_core(high_vals, low_vals, timeperiod)
+    return pd.Series(aroon_down_vals, index=low.index)
+
 def awesome_oscillator(high: pd.Series, low: pd.Series, fast_period: int = 5, slow_period: int = 34) -> pd.Series:
     """Awesome Oscillator (AO)"""
     median_price = (high + low) / 2
@@ -656,6 +781,22 @@ def keltner_channels(high: pd.Series, low: pd.Series, close: pd.Series, timeperi
     lower = middle - (atr_multiplier * atr_val)
     
     return upper, middle, lower
+
+def keltner_upper(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 20, atr_multiplier: int = 2) -> pd.Series:
+    """Keltner Channels upper band only"""
+    middle = ema(close, timeperiod)
+    atr_val = atr(high, low, close, timeperiod)
+    return middle + (atr_multiplier * atr_val)
+
+def keltner_middle(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 20, atr_multiplier: int = 2) -> pd.Series:
+    """Keltner Channels middle band only"""
+    return ema(close, timeperiod)
+
+def keltner_lower(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 20, atr_multiplier: int = 2) -> pd.Series:
+    """Keltner Channels lower band only"""
+    middle = ema(close, timeperiod)
+    atr_val = atr(high, low, close, timeperiod)
+    return middle - (atr_multiplier * atr_val)
 
 def pvt(close: pd.Series, volume: pd.Series) -> pd.Series:
     """Price Volume Trend"""
@@ -677,14 +818,42 @@ def vwap_bands(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Ser
     
     return upper_band, vwap_data, lower_band
 
+def vwap_bands_upper(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, timeperiod: int = 20, stdev_multiplier: int = 2) -> pd.Series:
+    """VWAP upper band only"""
+    typical_price = (high + low + close) / 3
+    vwap_data = vwap(high, low, close, volume)
+    deviation = np.sqrt(((typical_price - vwap_data) ** 2).rolling(window=timeperiod).mean())
+    return vwap_data + (deviation * stdev_multiplier)
+
+def vwap_bands_middle(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, timeperiod: int = 20, stdev_multiplier: int = 2) -> pd.Series:
+    """VWAP middle band only"""
+    return vwap(high, low, close, volume)
+
+def vwap_bands_lower(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, timeperiod: int = 20, stdev_multiplier: int = 2) -> pd.Series:
+    """VWAP lower band only"""
+    typical_price = (high + low + close) / 3
+    vwap_data = vwap(high, low, close, volume)
+    deviation = np.sqrt(((typical_price - vwap_data) ** 2).rolling(window=timeperiod).mean())
+    return vwap_data - (deviation * stdev_multiplier)
+
 def elder_ray(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 13) -> tuple[pd.Series, pd.Series]:
     """Elder Ray"""
     ema_val = ema(close, timeperiod)
-    
+
     bull_power = high - ema_val  # Buying pressure
     bear_power = low - ema_val   # Selling pressure
-    
+
     return bull_power, bear_power
+
+def elder_ray_bull(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 13) -> pd.Series:
+    """Elder Ray bull power only"""
+    ema_val = ema(close, timeperiod)
+    return high - ema_val
+
+def elder_ray_bear(high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 13) -> pd.Series:
+    """Elder Ray bear power only"""
+    ema_val = ema(close, timeperiod)
+    return low - ema_val
 
 def rvi(open_price: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series, timeperiod: int = 10) -> pd.Series:
     """Relative Vigor Index"""
@@ -919,8 +1088,22 @@ def donchian_channel(high: pd.Series, low: pd.Series, timeperiod: int = 20) -> t
     upper = high.rolling(window=timeperiod).max()
     lower = low.rolling(window=timeperiod).min()
     middle = (upper + lower) / 2
-    
+
     return upper, middle, lower
+
+def donchian_upper(high: pd.Series, low: pd.Series, timeperiod: int = 20) -> pd.Series:
+    """Donchian Channel upper band only"""
+    return high.rolling(window=timeperiod).max()
+
+def donchian_middle(high: pd.Series, low: pd.Series, timeperiod: int = 20) -> pd.Series:
+    """Donchian Channel middle band only"""
+    upper = high.rolling(window=timeperiod).max()
+    lower = low.rolling(window=timeperiod).min()
+    return (upper + lower) / 2
+
+def donchian_lower(high: pd.Series, low: pd.Series, timeperiod: int = 20) -> pd.Series:
+    """Donchian Channel lower band only"""
+    return low.rolling(window=timeperiod).min()
 
 def price_cycle(close: pd.Series, cycle_period: int = 20) -> pd.Series:
     """Price Cycle Oscillator"""
@@ -1037,24 +1220,61 @@ def supertrend(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 
     supertrend_vals, supertrend_line_vals = _supertrend_core(high_vals, low_vals, close_vals, period, float(multiplier))
     return pd.Series(supertrend_vals, index=close.index), pd.Series(supertrend_line_vals, index=close.index)
 
+def supertrend_direction(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14, multiplier: int = 3) -> pd.Series:
+    """SuperTrend direction only"""
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    supertrend_vals, _ = _supertrend_core(high_vals, low_vals, close_vals, period, float(multiplier))
+    return pd.Series(supertrend_vals, index=close.index)
+
+def supertrend_line(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14, multiplier: int = 3) -> pd.Series:
+    """SuperTrend line only"""
+    high_vals = np.asarray(high.values, dtype=np.float64)
+    low_vals = np.asarray(low.values, dtype=np.float64)
+    close_vals = np.asarray(close.values, dtype=np.float64)
+    _, supertrend_line_vals = _supertrend_core(high_vals, low_vals, close_vals, period, float(multiplier))
+    return pd.Series(supertrend_line_vals, index=close.index)
+
 def tsi(close: pd.Series, long_period: int = 25, short_period: int = 13, signal_period: int = 13) -> tuple[pd.Series, pd.Series]:
     """True Strength Index"""
     momentum = close.diff()  # 1-period price change
-    
+
     # Double smoothed momentum
     smooth1 = momentum.ewm(span=long_period, adjust=False).mean()
     smooth2 = smooth1.ewm(span=short_period, adjust=False).mean()
-    
+
     # Double smoothed absolute momentum
     abs_momentum = momentum.abs()
     abs_smooth1 = abs_momentum.ewm(span=long_period, adjust=False).mean()
     abs_smooth2 = abs_smooth1.ewm(span=short_period, adjust=False).mean()
-    
+
     # TSI indicator and signal line
     tsi = 100 * (smooth2 / abs_smooth2)
     signal = tsi.ewm(span=signal_period, adjust=False).mean()
-    
+
     return tsi, signal
+
+def tsi_tsi(close: pd.Series, long_period: int = 25, short_period: int = 13, signal_period: int = 13) -> pd.Series:
+    """TSI line only"""
+    momentum = close.diff()
+    smooth1 = momentum.ewm(span=long_period, adjust=False).mean()
+    smooth2 = smooth1.ewm(span=short_period, adjust=False).mean()
+    abs_momentum = momentum.abs()
+    abs_smooth1 = abs_momentum.ewm(span=long_period, adjust=False).mean()
+    abs_smooth2 = abs_smooth1.ewm(span=short_period, adjust=False).mean()
+    return 100 * (smooth2 / abs_smooth2)
+
+def tsi_signal(close: pd.Series, long_period: int = 25, short_period: int = 13, signal_period: int = 13) -> pd.Series:
+    """TSI signal line only"""
+    momentum = close.diff()
+    smooth1 = momentum.ewm(span=long_period, adjust=False).mean()
+    smooth2 = smooth1.ewm(span=short_period, adjust=False).mean()
+    abs_momentum = momentum.abs()
+    abs_smooth1 = abs_momentum.ewm(span=long_period, adjust=False).mean()
+    abs_smooth2 = abs_smooth1.ewm(span=short_period, adjust=False).mean()
+    tsi = 100 * (smooth2 / abs_smooth2)
+    return tsi.ewm(span=signal_period, adjust=False).mean()
 
 def cmf(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, timeperiod: int = 20) -> pd.Series:
     """Chaikin Money Flow"""
@@ -1083,41 +1303,95 @@ def wma(series: pd.Series, timeperiod: int = 20) -> pd.Series:
 def ichimoku(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
     """Ichimoku Cloud"""
     tenkan_sen = (high.rolling(window=tenkan_period).max() + low.rolling(window=tenkan_period).min()) / 2
-    
+
     kijun_sen = (high.rolling(window=kijun_period).max() + low.rolling(window=kijun_period).min()) / 2
-    
+
     senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(kijun_period)
-    
+
     senkou_span_b = ((high.rolling(window=senkou_period).max() + low.rolling(window=senkou_period).min()) / 2).shift(kijun_period)
-    
+
     chikou_span = close.shift(-chikou_period)
-    
+
     return tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b, chikou_span
+
+def ichimoku_tenkan(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> pd.Series:
+    """Ichimoku Tenkan-sen only"""
+    return (high.rolling(window=tenkan_period).max() + low.rolling(window=tenkan_period).min()) / 2
+
+def ichimoku_kijun(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> pd.Series:
+    """Ichimoku Kijun-sen only"""
+    return (high.rolling(window=kijun_period).max() + low.rolling(window=kijun_period).min()) / 2
+
+def ichimoku_senkou_a(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> pd.Series:
+    """Ichimoku Senkou Span A only"""
+    tenkan_sen = (high.rolling(window=tenkan_period).max() + low.rolling(window=tenkan_period).min()) / 2
+    kijun_sen = (high.rolling(window=kijun_period).max() + low.rolling(window=kijun_period).min()) / 2
+    return ((tenkan_sen + kijun_sen) / 2).shift(kijun_period)
+
+def ichimoku_senkou_b(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> pd.Series:
+    """Ichimoku Senkou Span B only"""
+    return ((high.rolling(window=senkou_period).max() + low.rolling(window=senkou_period).min()) / 2).shift(kijun_period)
+
+def ichimoku_chikou(high: pd.Series, low: pd.Series, close: pd.Series, tenkan_period: int = 9, kijun_period: int = 26, senkou_period: int = 52, chikou_period: int = 26) -> pd.Series:
+    """Ichimoku Chikou Span only"""
+    return close.shift(-chikou_period)
 
 def ppo(series: pd.Series, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> tuple[pd.Series, pd.Series, pd.Series]:
     """Percentage Price Oscillator"""
     fast_ema = ema(series, timeperiod=fast_period)
     slow_ema = ema(series, timeperiod=slow_period)
-    
+
     ppo = ((fast_ema - slow_ema) / slow_ema) * 100
     signal = ema(ppo, timeperiod=signal_period)
     histogram = ppo - signal
-    
+
     return ppo, signal, histogram
+
+def ppo_ppo(series: pd.Series, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
+    """PPO line only"""
+    fast_ema = ema(series, timeperiod=fast_period)
+    slow_ema = ema(series, timeperiod=slow_period)
+    return ((fast_ema - slow_ema) / slow_ema) * 100
+
+def ppo_signal(series: pd.Series, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
+    """PPO signal line only"""
+    fast_ema = ema(series, timeperiod=fast_period)
+    slow_ema = ema(series, timeperiod=slow_period)
+    ppo = ((fast_ema - slow_ema) / slow_ema) * 100
+    return ema(ppo, timeperiod=signal_period)
+
+def ppo_hist(series: pd.Series, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
+    """PPO histogram only"""
+    fast_ema = ema(series, timeperiod=fast_period)
+    slow_ema = ema(series, timeperiod=slow_period)
+    ppo = ((fast_ema - slow_ema) / slow_ema) * 100
+    signal = ema(ppo, timeperiod=signal_period)
+    return ppo - signal
 
 def aobv(close: pd.Series, volume: pd.Series, fast_period: int = 5, slow_period: int = 10) -> tuple[pd.Series, pd.Series]:
     """Adaptive On Balance Volume - OBV with smoothing and signal line"""
     # Calculate OBV
     on_balance_volume = obv(close, volume)
-    
+
     # Generate fast and slow EMAs of OBV
     fast_obv = ema(on_balance_volume, timeperiod=fast_period)
     slow_obv = ema(on_balance_volume, timeperiod=slow_period)
-    
+
     # Signal: fast OBV - slow OBV (like MACD with OBV)
     signal = fast_obv - slow_obv
-    
+
     return on_balance_volume, signal
+
+def aobv_obv(close: pd.Series, volume: pd.Series, fast_period: int = 5, slow_period: int = 10) -> pd.Series:
+    """AOBV OBV only"""
+    return obv(close, volume)
+
+def aobv_signal(close: pd.Series, volume: pd.Series, fast_period: int = 5, slow_period: int = 10) -> pd.Series:
+    """AOBV signal only"""
+    on_balance_volume = obv(close, volume)
+    fast_obv = ema(on_balance_volume, timeperiod=fast_period)
+    slow_obv = ema(on_balance_volume, timeperiod=slow_period)
+    return fast_obv - slow_obv
 
 def psar(high: np.ndarray, low: np.ndarray, acceleration_start: float = 0.02, acceleration_step: float = 0.02, max_acceleration: float = 0.2) -> np.ndarray:
     """Parabolic SAR"""
