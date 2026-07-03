@@ -141,8 +141,34 @@ class GridSearch:
         return self.engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class BayesianOptimizer:
-    def __init__(self, engine: VectorizedBacktest):
+    def __init__(
+        self,
+        engine: VectorizedBacktest,
+        strategy_func: Callable,
+        param_space: Dict[str, tuple],
+        metric: str = "Total_Return",
+        n_trials: int = 100,
+        direction: str = "maximize",
+        callbacks: List[Callable] = None,
+    ):
         self.engine = engine
+        self.strategy_func = strategy_func
+        self.param_space = param_space
+        self.metric = metric
+        self.n_trials = n_trials
+        self.direction = direction
+        self.callbacks = callbacks
+        
+        float_exceptions = []
+        fixed_exceptions = []
+        for param in param_space.keys():
+            if len(param_space[param]) == 1:
+                fixed_exceptions.append(param)
+                continue
+            if isinstance(param_space[param][0], float):
+                float_exceptions.append(param)
+        self.float_exceptions = float_exceptions
+        self.fixed_exceptions = fixed_exceptions
 
     def _suggest_params(self, trial):
         params = {}
@@ -156,34 +182,7 @@ class BayesianOptimizer:
                 params[k] = trial.suggest_int(k, v[0], v[1])
         return params
 
-    def optimize(
-        self,
-        strategy_func: Callable,
-        param_space: Dict[str, tuple],
-        metric: str = "Total_Return",
-        n_trials: int = 100,
-        direction: str = "maximize",
-        callbacks: List[Callable] = None,
-        show_progress_bar: bool = True
-    ):
-        self.strategy_func = strategy_func
-        self.param_space = param_space
-        self.metric = metric
-        self.n_trials = n_trials
-        self.direction = direction
-        self.callbacks = callbacks
-
-        float_exceptions = []
-        fixed_exceptions = []
-        for param in param_space.keys():
-            if len(param_space[param]) == 1:
-                fixed_exceptions.append(param)
-                continue
-            if isinstance(param_space[param][0], float):
-                float_exceptions.append(param)
-        self.float_exceptions = float_exceptions
-        self.fixed_exceptions = fixed_exceptions
-        
+    def optimize(self, show_progress_bar: bool = True):
         invalid = float('-inf') if self.direction == "maximize" else float('inf')
 
         def objective(trial):
@@ -341,16 +340,17 @@ class MultiAssetBayesianOptimizer:
                 verbose=False
             )
             
-            bo = BayesianOptimizer(engine=self.engine)
-            
-            # Run optimization
-            bo.optimize(
+            bo = BayesianOptimizer(
+                engine=self.engine,
                 strategy_func=strategy_func,
                 param_space=param_space,
                 metric=metric,
                 n_trials=n_trials,
                 direction=direction
             )
+            
+            # Run optimization
+            bo.optimize()
             best_params, best_metric = bo.get_best()
             study = bo.get_study()
             
@@ -550,15 +550,16 @@ class QuantitativeScreener:
                     verbose=False
                 )
 
-                BO = BayesianOptimizer(engine=self.engine)
-
-                BO.optimize(
+                BO = BayesianOptimizer(
+                    engine=self.engine,
                     strategy_func=strategy_func,
                     param_space=param_space,
                     metric=metric,
                     n_trials=n_trials,
                     direction=direction
                 )
+
+                BO.optimize()
                 best_params, best_metric = BO.get_best()
                 study = BO.get_study()
 
