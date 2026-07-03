@@ -111,8 +111,8 @@ def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, risk_fre
     """Calculate annualized Sharpe ratio using actual strategy returns that include costs."""
     excess_returns = strategy_returns - risk_free_rate
     if excess_returns.std(ddof=1) == 0:
-        return float('nan'), float('nan')
-    
+        return 0.0, 0.0
+
     sharpe_per_period = excess_returns.mean() / excess_returns.std(ddof=1)
 
     periods_per_year = {
@@ -128,7 +128,7 @@ def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, risk_fre
 
     sharpe_annualized = sharpe_per_period * np.sqrt(periods_per_year)
     sharpe_t_stat = sharpe_per_period * np.sqrt(len(strategy_returns))
-    
+
     return sharpe_annualized, sharpe_t_stat
 
 def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days: int, risk_free_rate: float = 0.00) -> float:
@@ -136,8 +136,8 @@ def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days:
     excess_returns = strategy_returns - risk_free_rate
     downside_returns = excess_returns[excess_returns < 0]
     if len(downside_returns) == 0 or downside_returns.std(ddof=1) == 0:
-        return float('nan')
-    
+        return 0.0
+
     # Calculate per-period Sortino ratio
     sortino_per_period = excess_returns.mean() / downside_returns.std(ddof=1)
 
@@ -163,7 +163,7 @@ def get_sortino_ratio(strategy_returns: pd.Series, return_interval: str, n_days:
 
     # Annualize Sortino ratio: sortino_annual = sortino_per_period * sqrt(periods_per_year)
     sortino_annualized = sortino_per_period * np.sqrt(periods_per_year)
-    
+
     return sortino_annualized
 
 def get_trade_pnls(position: pd.Series, open_prices: pd.Series, initial_capital: float) -> List[float]:
