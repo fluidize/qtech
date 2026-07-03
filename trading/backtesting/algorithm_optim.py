@@ -1,7 +1,7 @@
 import itertools
 import json
 import pandas as pd
-from typing import Dict, List, Any, Callable
+from typing import Dict, List, Any, Callable, Optional, Tuple
 
 from rich import print
 from rich.table import Table
@@ -17,46 +17,34 @@ optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
 from trading.backtesting.backtesting import VectorizedBacktest
 
 class GridSearch:
-    def __init__(
-        self,
-        engine: VectorizedBacktest,
-        strategy_func: Callable,
-        param_grid: Dict[str, List[Any]],
-        metric: str = "Total_Return",
-    ):
+    def __init__(self, metric: str = "Total_Return") -> None:
         """
         Initialize the grid search framework.
         
         Args:
-            backtest: VectorizedBacktest instance with data loaded
-            strategy_func: The strategy function to optimize
-            param_grid: Dictionary of parameters to search
             metric: Performance metric to optimize (default: Total Return)
         """
-        self.engine = engine
-        self.strategy_func = strategy_func
-        self.param_grid = param_grid
         self.metric = metric
         self.results = []
         self.console = Console()
 
-    def _generate_param_combinations(self) -> List[Dict[str, Any]]:
+    def _generate_param_combinations(self, strategy_func: Callable, param_grid: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
         """Generate all possible combinations of parameters. Function constraints are applied here."""
-        keys = self.param_grid.keys()
-        values = self.param_grid.values()
+        keys = param_grid.keys()
+        values = param_grid.values()
         combinations = [dict(zip(keys, combo)) for combo in itertools.product(*values)]
         
-        if self.strategy_func.__name__ == "rsi_strategy":
+        if strategy_func.__name__ == "rsi_strategy":
             valid_combinations = [
                 param for param in combinations 
                 if param["oversold"] < param["overbought"]
             ]
-        if self.strategy_func.__name__ == "macd_strategy":
+        if strategy_func.__name__ == "macd_strategy":
             valid_combinations = [
                 param for param in combinations 
                 if param["fastperiod"] < param["slowperiod"]
             ]
-        elif self.strategy_func.__name__ == "ema_cross_strategy":
+        elif strategy_func.__name__ == "ema_cross_strategy":
             valid_combinations = [
                 param for param in combinations 
                 if param["fast_period"] < param["slow_period"]
@@ -66,18 +54,23 @@ class GridSearch:
         
         return valid_combinations
 
-    def _run_single_combination(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _run_single_combination(self, engine: VectorizedBacktest, strategy_func: Callable, params: Dict[str, Any]) -> Dict[str, Any]:
         """Run a single parameter combination and return the results."""
-        self.engine.run_strategy(self.strategy_func, **params) #previous data gets overwritten
-        metrics = self.engine.get_performance_metrics()
+        engine.run_strategy(strategy_func, **params) #previous data gets overwritten
+        metrics = engine.get_performance_metrics()
         return {
             "parameters": params,
             "metrics": metrics
         }
 
-    def run(self) -> pd.DataFrame:
+    def run(
+        self,
+        engine: VectorizedBacktest,
+        strategy_func: Callable,
+        param_grid: Dict[str, List[Any]]
+    ) -> pd.DataFrame:
         """Run the grid search sequentially and return results sorted by the specified metric."""
-        param_combinations = self._generate_param_combinations()
+        param_combinations = self._generate_param_combinations(strategy_func, param_grid)
         total_combinations = len(param_combinations)
         
         table = Table(title="Grid Search Results")
@@ -91,7 +84,7 @@ class GridSearch:
         
         with tqdm(total=total_combinations, desc="Grid Search Progress") as progress_bar:
             for count, params in enumerate(param_combinations):
-                result = self._run_single_combination(params)
+                result = self._run_single_combination(engine, strategy_func, params)
                 self.results.append(result)
                 progress_bar.update(1)
 
@@ -134,31 +127,44 @@ class GridSearch:
         best_result = max(self.results, key=lambda x: x["metrics"][self.metric])
         return best_result["metrics"]
 
-    def plot_best_performance(self, show_graph: bool = True, extended: bool = False):
+    def plot_best_performance(self, engine: VectorizedBacktest, strategy_func: Callable, show_graph: bool = True, extended: bool = False) -> Any:
         """Plot the performance of the best parameter combination."""
         best_params = self.get_best_params()
-        self.engine.run_strategy(self.strategy_func, **best_params)
-        return self.engine.plot_performance(show_graph=show_graph, extended=extended)
+        engine.run_strategy(strategy_func, **best_params)
+        return engine.plot_performance(show_graph=show_graph, extended=extended)
 
 class BayesianOptimizer:
     def __init__(
         self,
-        engine: VectorizedBacktest,
-        strategy_func: Callable,
-        param_space: Dict[str, tuple],
         metric: str = "Total_Return",
         n_trials: int = 100,
         direction: str = "maximize",
-        callbacks: List[Callable] = None,
-    ):
-        self.engine = engine
-        self.strategy_func = strategy_func
-        self.param_space = param_space
+        callbacks: Optional[List[Callable]] = None,
+    ) -> None:
         self.metric = metric
         self.n_trials = n_trials
         self.direction = direction
         self.callbacks = callbacks
+
+    def _suggest_params(self, trial: optuna.Trial, param_space: Dict[str, tuple], float_exceptions: List[str], fixed_exceptions: List[str]) -> Dict[str, Any]:
+        params = {}
         
+        for k, v in param_space.items():
+            if k in fixed_exceptions:
+                params[k] = v[0] if isinstance(v, (tuple, list)) else v # For fixed parameters, just use the first value if it's a tuple/list, otherwise use the value directly
+            elif k in float_exceptions:
+                params[k] = trial.suggest_float(k, v[0], v[1])
+            else:
+                params[k] = trial.suggest_int(k, v[0], v[1])
+        return params
+
+    def optimize(
+        self,
+        engine: VectorizedBacktest,
+        strategy_func: Callable,
+        param_space: Dict[str, tuple],
+        show_progress_bar: bool = True
+    ) -> None:
         float_exceptions = []
         fixed_exceptions = []
         for param in param_space.keys():
@@ -167,30 +173,15 @@ class BayesianOptimizer:
                 continue
             if isinstance(param_space[param][0], float):
                 float_exceptions.append(param)
-        self.float_exceptions = float_exceptions
-        self.fixed_exceptions = fixed_exceptions
-
-    def _suggest_params(self, trial):
-        params = {}
         
-        for k, v in self.param_space.items():
-            if k in self.fixed_exceptions:
-                params[k] = v[0] if isinstance(v, (tuple, list)) else v # For fixed parameters, just use the first value if it's a tuple/list, otherwise use the value directly
-            elif k in self.float_exceptions:
-                params[k] = trial.suggest_float(k, v[0], v[1])
-            else:
-                params[k] = trial.suggest_int(k, v[0], v[1])
-        return params
-
-    def optimize(self, show_progress_bar: bool = True):
         invalid = float('-inf') if self.direction == "maximize" else float('inf')
 
-        def objective(trial):
+        def objective(trial: optuna.Trial) -> float:
             try:
-                param_dict = self._suggest_params(trial)
+                param_dict = self._suggest_params(trial, param_space, float_exceptions, fixed_exceptions)
 
-                self.engine.run_strategy(self.strategy_func, **param_dict)
-                metrics = self.engine.get_performance_metrics()
+                engine.run_strategy(strategy_func, **param_dict)
+                metrics = engine.get_performance_metrics()
                 safe_dict = {"__builtins__": None, "abs": abs, "max": max, "min": min, "np": np}
                 eval_metric = eval(self.metric, safe_dict, metrics)
 
@@ -213,10 +204,10 @@ class BayesianOptimizer:
         self.best_params = self.study.best_params
         self.best_metric = self.study.best_value
 
-    def get_best(self):
+    def get_best(self) -> Tuple[Dict[str, Any], float]:
         return self.best_params, self.best_metric
 
-    def get_study(self):
+    def get_study(self) -> optuna.Study:
         return self.study
 
 class QuantitativeScreener:
@@ -225,8 +216,6 @@ class QuantitativeScreener:
     """
     def __init__(
         self,
-        strategy_func: Callable,
-        param_space: Dict[str, tuple],
         symbols: List[str],
         days: int,
         intervals: List[str],
@@ -239,25 +228,16 @@ class QuantitativeScreener:
         slippage_pct: float = 0.005,
         commission_fixed: float = 0.00,
         cache_expiry_hours: int = 24
-    ):
-        self.engine = VectorizedBacktest(
-            instance_name="QuantitativeScreener",
-            initial_capital=initial_capital,
-            slippage_pct=slippage_pct,
-            commission_fixed=commission_fixed
-        )
-
+    ) -> None:
         self.symbols = symbols
         self.days = days
         self.intervals = intervals
         self.age_days = age_days
         self.data_source = data_source
+        self.initial_capital = initial_capital
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
         self.cache_expiry_hours = cache_expiry_hours
-        
-        self.strategy_func = strategy_func
-        self.param_space = param_space
         self.metric = metric
         self.n_trials = n_trials
         self.direction = direction
@@ -265,7 +245,12 @@ class QuantitativeScreener:
         self.results = pd.DataFrame(columns=["symbol", "interval", "metric", "params", "study"])
         self.console = Console()
 
-    def optimize(self, save_params: bool = False):
+    def optimize(
+        self,
+        strategy_func: Callable,
+        param_space: Dict[str, tuple],
+        save_params: bool = False
+    ) -> None:
         total = len(self.symbols) * len(self.intervals)
         progress_count = 1
 
@@ -273,7 +258,14 @@ class QuantitativeScreener:
             for interval in self.intervals:
                 print(f"{symbol} {interval} {progress_count}/{total} ({progress_count/total:.2%})")
 
-                self.engine.fetch_data(
+                engine = VectorizedBacktest(
+                    instance_name="QuantitativeScreener",
+                    initial_capital=self.initial_capital,
+                    slippage_pct=self.slippage_pct,
+                    commission_fixed=self.commission_fixed
+                )
+                
+                engine.fetch_data(
                     symbol=symbol,
                     interval=interval,
                     days=self.days,
@@ -284,15 +276,16 @@ class QuantitativeScreener:
                 )
 
                 BO = BayesianOptimizer(
-                    engine=self.engine,
-                    strategy_func=self.strategy_func,
-                    param_space=self.param_space,
                     metric=self.metric,
                     n_trials=self.n_trials,
                     direction=self.direction
                 )
 
-                BO.optimize()
+                BO.optimize(
+                    engine=engine,
+                    strategy_func=strategy_func,
+                    param_space=param_space
+                )
                 best_params, best_metric = BO.get_best()
                 study = BO.get_study()
 
@@ -309,7 +302,7 @@ class QuantitativeScreener:
         self._generate_chart(print_results=True)
         if save_params:
             best = self.get_best()
-            file_name = f"{self.strategy_func.__name__}-{best['symbol']}-{best['interval']}-{self.metric}"
+            file_name = f"strategy-{best['symbol']}-{best['interval']}-{self.metric}"
             file_name = file_name.replace("**", "pow")
             file_name = file_name.replace("*", "x")
             file_name = file_name.replace("/", "div")
@@ -317,14 +310,13 @@ class QuantitativeScreener:
             with open(file_name, "w") as f:
                 json.dump(best["params"], f)
 
-    def get_best(self):
+    def get_best(self) -> Dict[str, Any]:
         """Get the best performing symbol, interval, and parameters based on the specified metric."""
         if self.results.empty:
             raise ValueError("No results available. Run the optimization first.")
         
         best_row = self.results.loc[self.results['metric'].idxmax() if self.direction == "maximize" else self.results['metric'].idxmin()]
         return {
-            "strategy": self.strategy_func.__name__,
             "symbol": best_row["symbol"],
             "interval": best_row["interval"],
             "metric": best_row["metric"],
@@ -332,43 +324,55 @@ class QuantitativeScreener:
             "study": best_row["study"]
         }
     
-    def get_best_metrics(self):
+    def get_best_metrics(self, strategy_func: Callable) -> Dict[str, float]:
         best = self.get_best()
-        if (self.engine.symbol != best["symbol"] or 
-            self.engine.interval != best["interval"]):
-            self.engine.fetch_data(
-                symbol=best["symbol"],
-                interval=best["interval"],
-                days=self.days,
-                age_days=self.age_days,
-                data_source=self.data_source,
-                cache_expiry_hours=self.cache_expiry_hours
-            )
-        self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
+        
+        engine = VectorizedBacktest(
+            instance_name="QuantitativeScreener",
+            initial_capital=self.initial_capital,
+            slippage_pct=self.slippage_pct,
+            commission_fixed=self.commission_fixed
+        )
+        
+        engine.fetch_data(
+            symbol=best["symbol"],
+            interval=best["interval"],
+            days=self.days,
+            age_days=self.age_days,
+            data_source=self.data_source,
+            cache_expiry_hours=self.cache_expiry_hours
+        )
+        engine.run_strategy(strategy_func=strategy_func, **best["params"])
 
-        return self.engine.get_performance_metrics()
+        return engine.get_performance_metrics()
     
-    def get_best_study(self):
+    def get_best_study(self) -> optuna.Study:
         best = self.get_best()
         return best["study"]
     
-    def plot_best_performance(self, mode: str = "basic"):
+    def plot_best_performance(self, strategy_func: Callable, mode: str = "basic") -> Any:
         """Plot the performance of the best parameter combination."""
         best = self.get_best()
-        if (self.engine.symbol != best["symbol"] or 
-            self.engine.interval != best["interval"]):
-            self.engine.fetch_data(
-                symbol=best["symbol"],
-                interval=best["interval"],
-                days=self.days,
-                age_days=self.age_days,
-                data_source=self.data_source,
-                cache_expiry_hours=self.cache_expiry_hours
-            )
-        self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
-        return self.engine.plot_performance(mode=mode)
+        
+        engine = VectorizedBacktest(
+            instance_name="QuantitativeScreener",
+            initial_capital=self.initial_capital,
+            slippage_pct=self.slippage_pct,
+            commission_fixed=self.commission_fixed
+        )
+        
+        engine.fetch_data(
+            symbol=best["symbol"],
+            interval=best["interval"],
+            days=self.days,
+            age_days=self.age_days,
+            data_source=self.data_source,
+            cache_expiry_hours=self.cache_expiry_hours
+        )
+        engine.run_strategy(strategy_func=strategy_func, **best["params"])
+        return engine.plot_performance(mode=mode)
     
-    def _generate_chart(self, print_results: bool = True):
+    def _generate_chart(self, print_results: bool = True) -> Table:
         """Show the performance chart of all strategies."""
         results_table = Table(title="Quantitative Screener Results")
         results_table.add_column("Symbol", style="cyan")
