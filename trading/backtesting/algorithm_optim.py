@@ -14,7 +14,7 @@ import optuna
 import optunahub
 optuna.logging.set_verbosity(optuna.logging.ERROR) #disable optuna printing
 
-from trading.backtesting.backtesting import VectorizedBacktest, MultiAssetBacktest
+from trading.backtesting.backtesting import VectorizedBacktest
 
 class GridSearch:
     def __init__(
@@ -219,279 +219,27 @@ class BayesianOptimizer:
     def get_study(self):
         return self.study
 
-class MultiAssetBayesianOptimizer:
-    """
-    Multi-Asset Bayesian Optimizer using MultiAssetBacktesting as the engine.
-    Optimizes strategy parameters across multiple assets simultaneously.
-    """
-    def __init__(
-        self,
-        symbols: List[str],
-        initial_capitals: List[float],
-        days: int,
-        intervals: List[str],
-        age_days: int,
-        data_source: str = "binance",
-        slippage_pct: float = 0.001,
-        commission_fixed: float = 0.0,
-        leverage: float = 1.0,
-        cache_expiry_hours: int = 24,
-        n_trials: int = 100,
-        direction: str = "maximize",
-        float_exceptions: List[str] = None,
-        fixed_exceptions: List[str] = None
-    ):
-        """
-        Initialize the Multi-Asset Bayesian Optimizer.
-        
-        Args:
-            symbols: List of trading symbols
-            initial_capitals: List of initial capital amounts for each symbol
-            days: Number of days of data to fetch
-            intervals: List of time intervals to test
-            age_days: Age of data in days
-            data_source: Data source (e.g., "binance", "yfinance")
-            slippage_pct: Slippage percentage per trade
-            commission_fixed: Fixed commission per trade
-            leverage: Leverage multiplier
-            cache_expiry_hours: Cache expiry time in hours
-            n_trials: Number of optimization trials
-            direction: Optimization direction ("maximize" or "minimize")
-            float_exceptions: Parameters to treat as float
-            fixed_exceptions: Parameters to treat as fixed
-        """
-        self.symbols = symbols
-        self.initial_capitals = initial_capitals
-        self.days = days
-        self.intervals = intervals
-        self.age_days = age_days
-        self.data_source = data_source
-        self.slippage_pct = slippage_pct
-        self.commission_fixed = commission_fixed
-        self.leverage = leverage
-        self.cache_expiry_hours = cache_expiry_hours
-        
-        # Initialize MultiAssetBacktesting engine
-        self.engine = MultiAssetBacktesting(
-            initial_capitals=initial_capitals,
-            slippage_pct=slippage_pct,
-            commission_fixed=commission_fixed,
-            leverage=leverage
-        )
-        
-        self.strategy_func = None
-        self.param_space = None
-        self.metric = None
-        self.best_params = None
-        self.best_metric = None
-        self.study = None
-        self.results = pd.DataFrame(columns=["interval", "metric", "params", "study"])
-        
-        self.console = Console()
-
-    def optimize(
-        self,
-        strategy_func: Callable,
-        param_space: Dict[str, tuple],
-        metric: str = "Total_Return",
-        n_trials: int = 100,
-        direction: str = "maximize",
-        float_exceptions: List[str] = None,
-        fixed_exceptions: List[str] = None,
-        save_params: bool = False
-    ):
-        """
-        Optimize strategy parameters across multiple assets and intervals.
-        
-        Args:
-            strategy_func: The strategy function to optimize
-            param_space: Dictionary of parameter ranges
-            metric: Performance metric to optimize
-            save_params: Whether to save best parameters to file
-        """
-        self.strategy_func = strategy_func
-        self.param_space = param_space
-        self.metric = metric
-        self.n_trials = n_trials
-        self.direction = direction
-        
-        float_exceptions = []
-        fixed_exceptions = []
-        for param in param_space.keys():
-            if len(param_space[param]) == 1:
-                fixed_exceptions.append(param)
-                continue
-            if isinstance(param_space[param][0], float):
-                float_exceptions.append(param)
-        
-        total = len(self.intervals)
-        progress_count = 1
-        
-        for interval in self.intervals:
-            print(f"Optimizing {interval} {progress_count}/{total} ({progress_count/total:.2%})")
-            
-            self.engine.fetch_data(
-                symbols=self.symbols,
-                days=self.days,
-                interval=interval,
-                age_days=self.age_days,
-                data_source=self.data_source,
-                cache_expiry_hours=self.cache_expiry_hours,
-                verbose=False
-            )
-            
-            bo = BayesianOptimizer(
-                engine=self.engine,
-                strategy_func=strategy_func,
-                param_space=param_space,
-                metric=metric,
-                n_trials=n_trials,
-                direction=direction
-            )
-            
-            # Run optimization
-            bo.optimize()
-            best_params, best_metric = bo.get_best()
-            study = bo.get_study()
-            
-            self.results.loc[len(self.results)] = {
-                "interval": interval,
-                "metric": best_metric,
-                "params": best_params,
-                "study": study
-            }
-            
-            progress_count += 1
-        
-        # Find overall best result
-        best_idx = self.results['metric'].idxmax() if self.direction == "maximize" else self.results['metric'].idxmin()
-        self.best_params = self.results.loc[best_idx, 'params']
-        self.best_metric = self.results.loc[best_idx, 'metric']
-        self.study = self.results.loc[best_idx, 'study']
-        
-        self._generate_chart(print_results=True)
-        
-        if save_params:
-            best = self.get_best()
-            with open(f"{self.strategy_func.__name__}-{best['interval']}-{self.metric}.json", "w") as f:
-                json.dump(best["params"], f)
-
-    def get_best(self):
-        """Get the best performing interval and parameters."""
-        if self.results.empty:
-            raise ValueError("No results available. Run optimization first.")
-        
-        best_idx = self.results['metric'].idxmax() if self.direction == "maximize" else self.results['metric'].idxmin()
-        best_row = self.results.loc[best_idx]
-        
-        return {
-            "strategy": self.strategy_func.__name__,
-            "interval": best_row["interval"],
-            "metric": best_row["metric"],
-            "params": best_row["params"],
-            "study": best_row["study"]
-        }
-    
-    def get_best_metrics(self):
-        """Get performance metrics for the best parameter combination."""
-        best = self.get_best()
-        
-        self.engine.fetch_data(
-            symbols=self.symbols,
-            days=self.days,
-            interval=best["interval"],
-            age_days=self.age_days,
-            data_source=self.data_source,
-            cache_expiry_hours=self.cache_expiry_hours
-        )
-        
-        self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
-        
-        return self.engine.get_performance_metrics()
-    
-    def get_best_study(self):
-        """Get the Optuna study for the best result."""
-        best = self.get_best()
-        return best["study"]
-    
-    def plot_best_performance(self):
-        """Plot the performance of the best parameter combination."""
-        best = self.get_best()
-        
-        self.engine.fetch_data(
-            symbols=self.symbols,
-            days=self.days,
-            interval=best["interval"],
-            age_days=self.age_days,
-            data_source=self.data_source,
-            cache_expiry_hours=self.cache_expiry_hours
-        )
-        
-        self.engine.run_strategy(strategy_func=self.strategy_func, **best["params"])
-        
-        return self.engine.plot_performance()
-    
-    def plot_optimization_history(self):
-        """Plot optimization history for the best result."""
-        if self.study is None:
-            raise ValueError("No optimization results available. Run optimization first.")
-        
-        fig = self.study.plot_optimization_history()
-        fig.show()
-    
-    def plot_hyperparameter_importance(self):
-        """Plot hyperparameter importance for the best result."""
-        if self.study is None:
-            raise ValueError("No optimization results available. Run optimization first.")
-        
-        fig = self.study.plot_hyperparameter_importance()
-        fig.show()
-    
-    def _generate_chart(self, print_results: bool = True):
-        """Display optimization results in a table."""
-        results_table = Table(title="Multi-Asset Bayesian Optimization Results")
-        results_table.add_column("Interval", style="cyan")
-        results_table.add_column("Metric", style="green")
-        results_table.add_column("Parameters", style="blue")
-
-        sorted_results = self.results.sort_values(
-            by="metric", 
-            ascending=False if self.direction == "maximize" else True
-        )
-
-        percent_metrics = ["Total_Return", "Alpha", "Active_Return", "Max_Drawdown", "Win_Rate", "PT_Ratio"]
-        if self.metric in percent_metrics:
-            sorted_results["metric"] = sorted_results["metric"].apply(lambda x: f"{x:.2%}")
-        
-        for idx, result in sorted_results.iterrows():
-            results_table.add_row(
-                result["interval"],
-                str(result["metric"]),
-                str(result["params"])
-            )
-        
-        if print_results:
-            self.console.print(results_table)
-
-        return results_table
-
 class QuantitativeScreener:
     """
     Optimize on all symbols and intervals for a given strategy to find the highest performing pairs and timeframes.
-    Float and fixed exceptions are done by using (float , float) or (n,) respectively.
     """
-    def __init__(self,
-                symbols: List[str],
-                days: int,
-                intervals: List[str],
-                age_days: int,
-                data_source: str = "binance",
-                initial_capital: float = 10000,
-                slippage_pct: float = 0.005,
-                commission_fixed: float = 0.00,
-                cache_expiry_hours: int = 24
-            ):
-        
+    def __init__(
+        self,
+        strategy_func: Callable,
+        param_space: Dict[str, tuple],
+        symbols: List[str],
+        days: int,
+        intervals: List[str],
+        age_days: int,
+        metric: str = "Total_Return",
+        n_trials: int = 100,
+        direction: str = "maximize",
+        data_source: str = "binance",
+        initial_capital: float = 10000,
+        slippage_pct: float = 0.005,
+        commission_fixed: float = 0.00,
+        cache_expiry_hours: int = 24
+    ):
         self.engine = VectorizedBacktest(
             instance_name="QuantitativeScreener",
             initial_capital=initial_capital,
@@ -507,34 +255,19 @@ class QuantitativeScreener:
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
         self.cache_expiry_hours = cache_expiry_hours
+        
+        self.strategy_func = strategy_func
+        self.param_space = param_space
+        self.metric = metric
+        self.n_trials = n_trials
+        self.direction = direction
+        
         self.results = pd.DataFrame(columns=["symbol", "interval", "metric", "params", "study"])
-
         self.console = Console()
 
-    def optimize(
-        self,
-        strategy_func: Callable, 
-        param_space: Dict[str, tuple], 
-        metric: str = "Total_Return", 
-        n_trials: int = 100, 
-        direction: str = "maximize", 
-        save_params: bool = False,
-    ):
-        self.strategy_func = strategy_func
-        self.metric = metric
-        self.direction = direction
-
+    def optimize(self, save_params: bool = False):
         total = len(self.symbols) * len(self.intervals)
         progress_count = 1
-
-        float_exceptions = [] #auto add exceptions
-        fixed_exceptions = []
-        for param in param_space.keys():
-            if len(param_space[param]) == 1:
-                fixed_exceptions.append(param)
-                continue
-            if isinstance(param_space[param][0], float):
-                float_exceptions.append(param)
 
         for symbol in self.symbols:
             for interval in self.intervals:
@@ -552,11 +285,11 @@ class QuantitativeScreener:
 
                 BO = BayesianOptimizer(
                     engine=self.engine,
-                    strategy_func=strategy_func,
-                    param_space=param_space,
-                    metric=metric,
-                    n_trials=n_trials,
-                    direction=direction
+                    strategy_func=self.strategy_func,
+                    param_space=self.param_space,
+                    metric=self.metric,
+                    n_trials=self.n_trials,
+                    direction=self.direction
                 )
 
                 BO.optimize()
