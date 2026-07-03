@@ -9,7 +9,8 @@ from .param_space import registered_param_specs, ParamSpec
 from .tools import *
 
 FUNCTIONAL_ALIAS = "ta"  # module alias for technical analysis functions
-EXCLUDED_INDICATORS = ["ichimoku"]
+EXCLUDED_INDICATORS = ()
+_INDICATORS_CACHE = None
 
 
 class IndicatorGene:
@@ -18,10 +19,7 @@ class IndicatorGene:
         self.function_spec = registered_param_specs[self.function.__name__]
         self.parameter_specs = self.function_spec.parameters
         self.unique_parameter_specs = []
-        self.variable_names = [
-            f"{self.function.__name__}{unique_counter()}"
-            for _ in range(self.function_spec.return_count)
-        ]  # len = return_count
+        self.variable_name = f"{self.function.__name__}{unique_counter()}"
 
     def _get_keywords(self) -> list[ast.expr]:
         sig = inspect.signature(self.function)
@@ -54,7 +52,7 @@ class IndicatorGene:
                     )
                 )
             else:
-                unique_param_name = f"{self.variable_names[0]}_{param_name}"
+                unique_param_name = f"{self.variable_name}_{param_name}"
                 keywords.append(
                     ast.keyword(
                         arg=param_name,
@@ -81,29 +79,15 @@ class IndicatorGene:
                         )
         return keywords
 
-    def get_names(self):
-        return self.variable_names
-
-    def get_names_flattened(self):
-        for name in self.get_names():
-            yield from name
+    def get_name(self):
+        return self.variable_name
 
     def get_parameter_specs(self):
         return self.unique_parameter_specs
 
     def to_ast(self):
-        if self.function_spec.return_count > 1:
-            targets = ast.Tuple(
-                elts=[
-                    ast.Name(id=variable_name, ctx=ast.Store())
-                    for variable_name in self.variable_names
-                ],
-                ctx=ast.Store(),
-            )
-        else:
-            targets = ast.Name(id=self.variable_names[0], ctx=ast.Store())
         return ast.Assign(
-            targets=[targets],
+            targets=[ast.Name(id=self.variable_name, ctx=ast.Store())],
             value=ast.Call(
                 func=ast.Attribute(
                     value=ast.Name(id=FUNCTIONAL_ALIAS, ctx=ast.Load()),  # module alias
@@ -140,17 +124,22 @@ class LogicGene:
 
 # i2i
 class IndicatorToIndicator(LogicGene):
-    def __init__(self, left_index: int, right_index: int, operator: ast.cmpop):
-        self.left_index = left_index
-        self.right_index = right_index
+    def __init__(
+        self,
+        left_indicator: IndicatorGene,
+        right_indicator: IndicatorGene,
+        operator: ast.cmpop,
+    ):
+        self.left_indicator = left_indicator
+        self.right_indicator = right_indicator
         self.operator = operator
         self.variable_name = None
         self.left_indicator_variable_name = None
         self.right_indicator_variable_name = None
 
     def load_indicators(self, indicator_variable_names: list[str]):
-        self.left_indicator_variable_name = indicator_variable_names[self.left_index]
-        self.right_indicator_variable_name = indicator_variable_names[self.right_index]
+        self.left_indicator_variable_name = self.left_indicator.get_name()
+        self.right_indicator_variable_name = self.right_indicator.get_name()
         self.variable_name = (
             f"LOGIC_{self.left_indicator_variable_name}_{type(self.operator).__name__}_{self.right_indicator_variable_name}"
             if self.variable_name is None
@@ -172,17 +161,7 @@ class IndicatorToIndicator(LogicGene):
         return [self.left_indicator_variable_name, self.right_indicator_variable_name]
 
     def get_referenced_indicators(self, sequence_dict: dict):
-        return [
-            sequence_dict[name]
-            for name in self.get_referenced_indicator_names()
-            if name in sequence_dict
-        ]
-
-    def set_index(self, left_index: int, right_index: int):
-        self.left_index = left_index
-        self.right_index = right_index
-        self.left_indicator_variable_name = None
-        self.right_indicator_variable_name = None
+        return [self.left_indicator, self.right_indicator]
 
     def to_ast(self):
         if (
@@ -204,28 +183,30 @@ class IndicatorToIndicator(LogicGene):
         if not isinstance(other, IndicatorToIndicator):
             return False
         return (
-            self.left_index == other.left_index
-            and self.right_index == other.right_index
+            self.left_indicator == other.left_indicator
+            and self.right_indicator == other.right_indicator
             and type(self.operator) == type(other.operator)
         )
 
     def __hash__(self):
-        return hash((self.left_index, self.right_index, type(self.operator)))
+        return hash((self.left_indicator, self.right_indicator, type(self.operator)))
 
 
 # i2p
 class IndicatorToPrice(LogicGene):
     columns = ["Open", "High", "Low", "Close"]
 
-    def __init__(self, left_index: int, column_index: int, operator: ast.cmpop):
-        self.left_index = left_index
+    def __init__(
+        self, left_indicator: IndicatorGene, column_index: int, operator: ast.cmpop
+    ):
+        self.left_indicator = left_indicator
         self.column_index = column_index
         self.operator = operator
         self.variable_name = None
         self.left_indicator_variable_name = None
 
     def load_indicators(self, indicator_variable_names: list[str]):
-        self.left_indicator_variable_name = indicator_variable_names[self.left_index]
+        self.left_indicator_variable_name = self.left_indicator.get_name()
         self.variable_name = (
             f"LOGIC_{self.left_indicator_variable_name}_{type(self.operator).__name__}_{self.columns[self.column_index]}"
             if self.variable_name is None
@@ -244,11 +225,7 @@ class IndicatorToPrice(LogicGene):
         return self.left_indicator_variable_name
 
     def get_referenced_indicator(self, sequence_dict: dict):
-        return sequence_dict[self.get_referenced_indicator_name()]
-
-    def set_index(self, left_index: int):
-        self.left_index = left_index
-        self.left_indicator_variable_name = None
+        return self.left_indicator
 
     def to_ast(self):
         if self.left_indicator_variable_name is None:
@@ -271,26 +248,26 @@ class IndicatorToPrice(LogicGene):
         if not isinstance(other, IndicatorToPrice):
             return False
         return (
-            self.left_index == other.left_index
+            self.left_indicator == other.left_indicator
             and self.column_index == other.column_index
             and type(self.operator) == type(other.operator)
         )
 
     def __hash__(self):
-        return hash((self.left_index, self.column_index, type(self.operator)))
+        return hash((self.left_indicator, self.column_index, type(self.operator)))
 
 
 # i2c
 class IndicatorToConstant(LogicGene):
-    def __init__(self, left_index: int, operator: ast.cmpop):
-        self.left_index = left_index
+    def __init__(self, left_indicator: IndicatorGene, operator: ast.cmpop):
+        self.left_indicator = left_indicator
         self.operator = operator
         self.variable_name = None
         self.left_indicator_variable_name = None
         self.parameter_specs = None
 
     def load_indicators(self, indicator_variable_names: list[str]):
-        self.left_indicator_variable_name = indicator_variable_names[self.left_index]
+        self.left_indicator_variable_name = self.left_indicator.get_name()
         self.variable_name = (
             f"LOGIC_{self.left_indicator_variable_name}_{type(self.operator).__name__}_const_{unique_counter()}"
             if self.variable_name is None
@@ -315,12 +292,7 @@ class IndicatorToConstant(LogicGene):
         return self.left_indicator_variable_name
 
     def get_referenced_indicator(self, sequence_dict: dict):
-        return sequence_dict[self.get_referenced_indicator_name()]
-
-    def set_index(self, left_index: int, right_index: int = None):
-        self.left_index = left_index
-        self.left_indicator_variable_name = None
-        # Note: parameter_specs will be regenerated in load_indicators() if needed
+        return self.left_indicator
 
     def to_ast(self):
         if self.left_indicator_variable_name is None:
@@ -338,33 +310,29 @@ class IndicatorToConstant(LogicGene):
     def __eq__(self, other):
         if not isinstance(other, IndicatorToConstant):
             return False
-        return self.left_index == other.left_index and type(self.operator) == type(
-            other.operator
-        )
+        return self.left_indicator == other.left_indicator and type(
+            self.operator
+        ) == type(other.operator)
 
     def __hash__(self):
-        return hash((self.left_index, type(self.operator)))
+        return hash((self.left_indicator, type(self.operator)))
 
 
 # l2l
 class LogicToLogic(LogicGene):
     def __init__(
-        self, left_logic_index: int, right_logic_index: int, operator: ast.cmpop
+        self, left_logic: LogicGene, right_logic: LogicGene, operator: ast.cmpop
     ):
-        self.left_logic_index = left_logic_index
-        self.right_logic_index = right_logic_index
+        self.left_logic = left_logic
+        self.right_logic = right_logic
         self.operator = operator
         self.variable_name = None
         self.left_logic_variable_name = None
         self.right_logic_variable_name = None
-        self.logic_variable_names = None
 
     def load_logic(self, logic_variable_names: list[str]):
-        self.logic_variable_names = logic_variable_names
-        self.left_logic_variable_name = self.logic_variable_names[self.left_logic_index]
-        self.right_logic_variable_name = self.logic_variable_names[
-            self.right_logic_index
-        ]
+        self.left_logic_variable_name = self.left_logic.get_name()
+        self.right_logic_variable_name = self.right_logic.get_name()
 
         self.variable_name = (
             f"LOGIC_COMPOSITE_{unique_counter()}"
@@ -387,15 +355,7 @@ class LogicToLogic(LogicGene):
         return [self.left_logic_variable_name, self.right_logic_variable_name]
 
     def get_referenced_logic(self, sequence_dict: dict):
-        return [
-            sequence_dict[name]
-            for name in self.get_referenced_logic_names()
-            if name in sequence_dict
-        ]
-
-    def set_index(self, left_logic_index: int, right_logic_index: int):
-        self.left_logic_index = left_logic_index
-        self.right_logic_index = right_logic_index
+        return [self.left_logic, self.right_logic]
 
     def to_ast(self):
         if (
@@ -415,29 +375,26 @@ class LogicToLogic(LogicGene):
         if not isinstance(other, LogicToLogic):
             return False
         return (
-            self.left_logic_index == other.left_logic_index
-            and self.right_logic_index == other.right_logic_index
+            self.left_logic == other.left_logic
+            and self.right_logic == other.right_logic
             and type(self.operator) == type(other.operator)
         )
 
     def __hash__(self):
-        return hash(
-            (self.left_logic_index, self.right_logic_index, type(self.operator))
-        )
+        return hash((self.left_logic, self.right_logic, type(self.operator)))
 
 
 class SignalGene:
-    def __init__(self, long_logic_index: int, short_logic_index: int):
-        self.long_logic_index = long_logic_index
-        self.short_logic_index = short_logic_index
+    def __init__(self, long_logic: LogicGene, short_logic: LogicGene):
+        self.long_logic = long_logic
+        self.short_logic = short_logic
         self.variable_name = None
         self.long_logic_variable_name = None
         self.short_logic_variable_name = None
 
     def load_logic(self, logic_variable_names: list[str]):
-        self.logic_variable_names = logic_variable_names
-        self.long_logic_variable_name = logic_variable_names[self.long_logic_index]
-        self.short_logic_variable_name = logic_variable_names[self.short_logic_index]
+        self.long_logic_variable_name = self.long_logic.get_name()
+        self.short_logic_variable_name = self.short_logic.get_name()
         self.variable_name = (
             f"SIGNAL_{self.long_logic_variable_name}_{self.short_logic_variable_name}"
             if self.variable_name is None
@@ -456,17 +413,7 @@ class SignalGene:
         return [self.long_logic_variable_name, self.short_logic_variable_name]
 
     def get_referenced_logic(self, sequence_dict: dict):
-        return [
-            sequence_dict[name]
-            for name in self.get_referenced_logic_names()
-            if name in sequence_dict
-        ]
-
-    def set_index(self, long_logic_index: int, short_logic_index: int):
-        self.long_logic_index = long_logic_index
-        self.short_logic_index = short_logic_index
-        self.long_logic_variable_name = None
-        self.short_logic_variable_name = None
+        return [self.long_logic, self.short_logic]
 
     def to_ast(self):
         if (
@@ -500,16 +447,12 @@ class SignalGene:
         if not isinstance(other, SignalGene):
             return False
         return (
-            self.long_logic_index == other.long_logic_index
-            and self.short_logic_index == other.short_logic_index
+            self.long_logic == other.long_logic
+            and self.short_logic == other.short_logic
         )
 
     def __hash__(self):
-        return hash((self.long_logic_index, self.short_logic_index))
-
-
-# Generation helpers moved into ast_builder
-_INDICATORS_CACHE = None
+        return hash((self.long_logic, self.short_logic))
 
 
 def _get_indicators_cached():
@@ -525,22 +468,24 @@ def generate_indicator_gene() -> IndicatorGene:
 
 def generate_logic_gene_sequence(
     num_logic: int,
-    num_indicators: int,
+    indicator_genes: list[IndicatorGene],
     allow_logic_composition: bool,
     logic_composition_prob: float,
+    existing_logic_genes: list[LogicGene] = None,
 ) -> list[LogicGene]:
     logic_genes = []
     for _ in range(num_logic):
         if (
             allow_logic_composition
-            and len(logic_genes) >= 2
+            and existing_logic_genes is not None
+            and len(existing_logic_genes) >= 2
             and random.random() < logic_composition_prob
         ):
-            left_idx, right_idx = random.sample(range(len(logic_genes)), 2)
+            left_logic, right_logic = random.sample(existing_logic_genes, 2)
             logic_genes.append(
                 LogicToLogic(
-                    left_logic_index=left_idx,
-                    right_logic_index=right_idx,
+                    left_logic=left_logic,
+                    right_logic=right_logic,
                     operator=random_composition_operator(),
                 )
             )
@@ -552,7 +497,7 @@ def generate_logic_gene_sequence(
             if logic_type == IndicatorToPrice:
                 logic_genes.append(
                     IndicatorToPrice(
-                        left_index=random.randint(0, num_indicators - 1),
+                        left_indicator=random.choice(indicator_genes),
                         column_index=random.randint(0, 3),
                         operator=random_comparison_operator(),
                     )
@@ -560,28 +505,28 @@ def generate_logic_gene_sequence(
             elif logic_type == IndicatorToConstant:
                 logic_genes.append(
                     IndicatorToConstant(
-                        left_index=random.randint(0, num_indicators - 1),
+                        left_indicator=random.choice(indicator_genes),
                         operator=random_comparison_operator(),
                     )
                 )
             else:
-                left_idx = random.randint(0, num_indicators - 1)
-                right_idx = random.randint(0, num_indicators - 1)
-                while right_idx == left_idx and num_indicators > 1:
-                    right_idx = random.randint(0, num_indicators - 1)
+                left_indicator = random.choice(indicator_genes)
+                right_indicator = random.choice(indicator_genes)
+                while right_indicator == left_indicator and len(indicator_genes) > 1:
+                    right_indicator = random.choice(indicator_genes)
                 logic_genes.append(
                     IndicatorToIndicator(
-                        left_index=left_idx,
-                        right_index=right_idx,
+                        left_indicator=left_indicator,
+                        right_indicator=right_indicator,
                         operator=random_comparison_operator(),
                     )
                 )
     return logic_genes
 
 
-def generate_signal_gene(num_logic: int) -> SignalGene:
-    long_logic_index, short_logic_index = random.sample(range(num_logic), 2)
-    return SignalGene(long_logic_index=long_logic_index, short_logic_index=short_logic_index)
+def generate_signal_gene(logic_genes: list[LogicGene]) -> SignalGene:
+    long_logic, short_logic = random.sample(logic_genes, 2)
+    return SignalGene(long_logic=long_logic, short_logic=short_logic)
 
 
 def generate_genome(
@@ -603,11 +548,11 @@ def generate_genome(
 
     logic_genes = generate_logic_gene_sequence(
         num_logic,
-        num_indicators,
+        indicator_genes,
         allow_logic_composition,
         logic_composition_prob,
     )
-    signal_genes = [generate_signal_gene(num_logic)]
+    signal_genes = [generate_signal_gene(logic_genes)]
     return Genome(
         indicator_genes=indicator_genes,
         logic_genes=logic_genes,
@@ -687,8 +632,7 @@ class Genome:
         self.sequence_dict = {}
         for gene in self.indicator_genes + self.logic_genes + self.signal_genes:
             if isinstance(gene, IndicatorGene):
-                for name in gene.get_names():
-                    self.sequence_dict[name] = gene
+                self.sequence_dict[gene.get_name()] = gene  # Now single string
             else:
                 self.sequence_dict[gene.get_name()] = gene
 
@@ -705,7 +649,9 @@ class Genome:
         indicator_variable_names = []
         for gene in self.indicator_genes:
             indicator_ast_list.append(gene.to_ast())
-            indicator_variable_names.extend(gene.get_names())
+            indicator_variable_names.append(
+                gene.get_name()
+            )  # Now single string, not list
             algorithm_parameter_specs.extend(gene.get_parameter_specs())
 
         logic_ast_list = []
@@ -820,71 +766,10 @@ class Genome:
             g for g in self.indicator_genes if g in used_indicator_genes
         ]
 
-        indicator_variable_names = []
-        for gene in self.indicator_genes:
-            indicator_variable_names.extend(gene.get_names())
-
-        logic_variable_names = []
-        for gene in self.logic_genes:
-            logic_variable_names.append(gene.get_name())
-
-        for gene in self.logic_genes:
-            if isinstance(gene, LogicToLogic):
-                gene.set_index(
-                    logic_variable_names.index(gene.left_logic_variable_name),
-                    logic_variable_names.index(gene.right_logic_variable_name),
-                )
-            elif isinstance(gene, IndicatorToIndicator):
-                gene.set_index(
-                    indicator_variable_names.index(gene.left_indicator_variable_name),
-                    indicator_variable_names.index(gene.right_indicator_variable_name),
-                )
-            elif isinstance(gene, IndicatorToPrice) or isinstance(
-                gene, IndicatorToConstant
-            ):
-                gene.set_index(
-                    indicator_variable_names.index(gene.left_indicator_variable_name)
-                )
-
-        for gene in self.logic_genes:
-            if isinstance(gene, LogicToLogic):
-                gene.load_logic(logic_variable_names)
-            elif (
-                isinstance(gene, IndicatorToIndicator)
-                or isinstance(gene, IndicatorToPrice)
-                or isinstance(gene, IndicatorToConstant)
-            ):
-                gene.load_indicators(indicator_variable_names)
-
-        for gene in self.signal_genes:
-            gene.set_index(
-                logic_variable_names.index(gene.long_logic_variable_name),
-                logic_variable_names.index(gene.short_logic_variable_name),
-            )
-
-        # prepare genes differently
-        algorithm_parameter_specs = []
-
-        indicator_ast_list = []
-        indicator_variable_names = []
-        for gene in self.indicator_genes:
-            indicator_ast_list.append(gene.to_ast())
-            indicator_variable_names.extend(gene.get_names())
-            algorithm_parameter_specs.extend(gene.get_parameter_specs())
-
-        logic_ast_list = []
-
-        for logic_gene in self.logic_genes:
-            if isinstance(logic_gene, LogicToLogic):
-                logic_gene.load_logic(logic_variable_names)
-            else:
-                logic_gene.load_indicators(indicator_variable_names)
-            logic_variable_names.append(logic_gene.get_name())
-            logic_ast_list.append(logic_gene.to_ast())
-            algorithm_parameter_specs.extend(logic_gene.get_parameter_specs())
-
-        for signal_gene in self.signal_genes:
-            signal_gene.load_logic(logic_variable_names)
+        # Rebuild the genome with the filtered genes
+        indicator_ast_list, logic_ast_list, algorithm_parameter_specs = (
+            self._prepare_genes()
+        )
 
         self.function_ast, self.param_space = self._construct_algorithm(
             indicator_ast_list=indicator_ast_list,
@@ -898,13 +783,38 @@ class Genome:
         self.sequence_dict = {}
         for gene in self.indicator_genes + self.logic_genes + self.signal_genes:
             if isinstance(gene, IndicatorGene):
-                for name in gene.get_names():
-                    self.sequence_dict[name] = gene
+                self.sequence_dict[gene.get_name()] = gene  # Now single string
             else:
                 self.sequence_dict[gene.get_name()] = gene
 
-    def mutate(self) -> "Genome":  # new instance, not inplace
-        raise NotImplementedError("Genome.mutate() is not implemented yet")
+    def mutate(self) -> "Genome":
+        current_genes = self.get_genes()
+        selected_gene_idx = random.randint(0, len(current_genes) - 1)
+        selected_gene = current_genes.pop(selected_gene_idx)
+
+        if isinstance(selected_gene, IndicatorGene):
+            mutated_gene = generate_indicator_gene()
+        elif isinstance(selected_gene, LogicGene):
+            current_logic_genes = [g for g in current_genes if isinstance(g, LogicGene)]
+            mutated_gene = generate_logic_gene_sequence(
+                num_logic=1,
+                indicator_genes=self.indicator_genes,
+                allow_logic_composition=True,
+                logic_composition_prob=0.5,
+                existing_logic_genes=(
+                    current_logic_genes if current_logic_genes else None
+                ),
+            )[0]
+        elif isinstance(selected_gene, SignalGene):
+            mutated_gene = generate_signal_gene(self.logic_genes)
+
+        current_genes[selected_gene_idx] = mutated_gene
+        indicator_genes, logic_genes, signal_genes = separate_genes(current_genes)
+        return Genome(
+            indicator_genes=indicator_genes,
+            logic_genes=logic_genes,
+            signal_genes=signal_genes,
+        )
 
     ### OPTIMIZATION METHODS
     def set_best(self, params: dict, metric: float) -> None:
@@ -952,7 +862,6 @@ class Genome:
             for count in counts.values():
                 p = count / total
                 entropy += p * np.log2(p)
-            return -entropy
         else:
             return (
                 len(self.indicator_genes)
