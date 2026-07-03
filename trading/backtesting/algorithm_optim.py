@@ -204,8 +204,11 @@ class BayesianOptimizer:
         self.best_params = self.study.best_params
         self.best_metric = self.study.best_value
 
-    def get_best(self) -> Tuple[Dict[str, Any], float]:
-        return self.best_params, self.best_metric
+    def get_best_params(self) -> Dict[str, Any]:
+        return self.best_params
+
+    def get_best_metric(self) -> float:
+        return self.best_metric
 
     def get_study(self) -> optuna.Study:
         return self.study
@@ -286,7 +289,8 @@ class QuantitativeScreener:
                     strategy_func=strategy_func,
                     param_space=param_space
                 )
-                best_params, best_metric = BO.get_best()
+                best_params = BO.get_best_params()
+                best_metric = BO.get_best_metric()
                 study = BO.get_study()
 
                 self.results.loc[len(self.results)] = {

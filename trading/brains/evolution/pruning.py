@@ -1,5 +1,6 @@
 ### Search a population of genomes for the optimal individual
 
+from typing import Dict, Any, Tuple
 from trading.backtesting.backtesting import VectorizedBacktest
 import trading.backtesting.mc_analysis as mc
 import trading.model_tools as mt
@@ -42,17 +43,19 @@ def evaluate_genome(args):
     vb = VectorizedBacktest(**vb_config)
     vb.fetch_data(**data_config)
     
-    bo = BayesianOptimizer(engine=vb)
-    bo.optimize(
-        strategy_func=strategy_func, 
-        param_space=param_space, 
+    bo = BayesianOptimizer(
         metric="Sortino_Ratio * (Sortino_Ratio *Sharpe_Ratio)**2 * max(0, 1 + Max_Drawdown) * min(500,Total_Trades) * R2",
         n_trials=n_trials,
         direction="maximize",
-        callbacks=[quickstop_callback],
+        callbacks=[quickstop_callback]
+    )
+    bo.optimize(
+        engine=vb,
+        strategy_func=strategy_func,
+        param_space=param_space,
         show_progress_bar=False
     )
-    return genome_index, bo.get_best()
+    return genome_index, (bo.get_best_params(), bo.get_best_metric())
 
 def plot_genome_spaghetti(best_genome, vb_config, data_config, num_simulations=1000):
     vb = VectorizedBacktest(**vb_config)
@@ -64,7 +67,7 @@ def plot_genome_spaghetti(best_genome, vb_config, data_config, num_simulations=1
     mc_analysis.spaghetti_plot(num_simulations, num_trades)
 
 if __name__ == "__main__":
-    POPULATION_SIZE = 1024
+    POPULATION_SIZE = 256
 
     vb_config = {
         "instance_name": "Pruning",
@@ -89,7 +92,7 @@ if __name__ == "__main__":
         {"n_trials": 1, "keep_top_n": POPULATION_SIZE//2},
         {"n_trials": 5, "keep_top_n": POPULATION_SIZE//8},
         {"n_trials": 15, "keep_top_n": POPULATION_SIZE//16},
-        {"n_trials": 50, "keep_top_n": 10}
+        {"n_trials": 50, "keep_top_n": POPULATION_SIZE//32},
     ]
 
     start_time = time()
