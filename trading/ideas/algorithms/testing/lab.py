@@ -29,6 +29,9 @@ qs = QuantitativeScreener(
     days=1000,
     intervals=["30m"],
     age_days=0,
+    metric="Sharpe_Ratio",
+    n_trials=100,
+    direction="maximize",
     data_source="binance",
     initial_capital=10000,
     slippage_pct=0.05,
@@ -39,12 +42,9 @@ qs = QuantitativeScreener(
 qs.optimize(
     strategy_func=strategy,
     param_space=search_space,
-    metric="Sharpe_Ratio",
-    n_trials=100,
-    direction="maximize",
     save_params=False
 )
-# qs.plot_best_performance(mode="standard")
+# qs.plot_best_performance(strategy_func=strategy, mode="standard")
 best_set = qs.get_best()
 
 vb = VectorizedBacktest(
