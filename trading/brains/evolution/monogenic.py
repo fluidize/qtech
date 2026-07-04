@@ -23,6 +23,9 @@ from genetics.ast_builder import Genome
 import faulthandler
 faulthandler.enable()
 
+###
+EPOCHS = 10000
+
 VB_CONFIG = {
     "instance_name": "Monogenic",
     "initial_capital": 1,
@@ -34,7 +37,7 @@ VB_CONFIG = {
 DATA_CONFIG = {
     "symbols": ["SOL-USDT"],
     "days": 365,
-    "interval": "30m",
+    "interval": "1h",
     "age_days": 0,
     "data_source": "binance",
     "cache_expiry_hours": 999,
@@ -42,8 +45,9 @@ DATA_CONFIG = {
 }
 
 BO_CONFIG = {
-    "metric": "Sortino_Ratio * (Sortino_Ratio *Sharpe_Ratio)**2 * max(0, 1 + Max_Drawdown) * min(500,Total_Trades) * R2",
-    "n_trials": 10,
+    # "metric": "Sortino_Ratio * (Sortino_Ratio *Sharpe_Ratio)**2 * max(0, 1 + Max_Drawdown) * min(500,Total_Trades) * R2",
+    "metric": "Total_Return + max(Sortino_Ratio, 0)",
+    "n_trials": 3,
     "direction": "maximize",
     "callbacks": [
         # lambda trial: print(f"Trial {trial.number} completed with metric {trial.metric}")
@@ -59,13 +63,10 @@ def evaluate_genome(genome: Genome, vb: VectorizedBacktest, bo: BayesianOptimize
     )
     best_params = bo.get_best_params()
     best_metric = bo.get_best_metric()
-    return best_params, best_metric
 
-founder = generate_genome(
-    num_indicators=2,
-    num_logic=2,
-    allow_logic_composition=False
-) #the founder is very simple
+    genome.set_best(best_params, best_metric)
+
+    return best_params, best_metric
 
 vb = VectorizedBacktest(**VB_CONFIG)
 vb.fetch_data(**DATA_CONFIG)
@@ -77,4 +78,22 @@ bo = BayesianOptimizer(
     callbacks=BO_CONFIG["callbacks"]
 )
 
-print(evaluate_genome(founder, vb, bo))
+founder = generate_genome(
+    num_indicators=2,
+    num_logic=2,
+    allow_logic_composition=False
+) #the founder is very simple
+
+metrics = []
+previous_genome = founder
+for epoch in tqdm(range(EPOCHS), desc="Epoch"):
+    try:
+        evaluate_genome(previous_genome, vb, bo)
+        metrics.append(previous_genome.get_best_metric())
+        previous_genome = previous_genome.mutate()
+    except Exception as e:
+        print(e)
+
+print(metrics)
+plt.plot(metrics)
+plt.show()
