@@ -464,13 +464,49 @@ def _pvt_core(close: np.ndarray, volume: np.ndarray) -> np.ndarray:
 
 # wrappers
 
+@njit(cache=True)
+def _heikin_ashi_core(open_vals, high_vals, low_vals, close_vals):
+    """Core Heikin Ashi calculation"""
+    n = len(open_vals)
+    ha_open = np.zeros(n)
+    ha_high = np.zeros(n)
+    ha_low = np.zeros(n)
+    ha_close = np.zeros(n)
+    
+    # HA_Close = (Open + High + Low + Close) / 4
+    for i in range(n):
+        ha_close[i] = (open_vals[i] + high_vals[i] + low_vals[i] + close_vals[i]) / 4.0
+    
+    # HA_Open = (HA_Open_prev + HA_Close_prev) / 2
+    ha_open[0] = open_vals[0]
+    for i in range(1, n):
+        ha_open[i] = (ha_open[i-1] + ha_close[i-1]) / 2.0
+    
+    # HA_High = max(HA_Open, HA_Close, High)
+    # HA_Low = min(HA_Open, HA_Close, Low)
+    for i in range(n):
+        ha_high[i] = max(ha_open[i], ha_close[i], high_vals[i])
+        ha_low[i] = min(ha_open[i], ha_close[i], low_vals[i])
+    
+    return ha_open, ha_high, ha_low, ha_close
+
 def heikin_ashi_transform(data: pd.DataFrame) -> pd.DataFrame:
     """Heikin Ashi Transform"""
+    
     ha_data = data.copy()
-    ha_data['Open'] = (ha_data['Open'] + ha_data['Close'].shift(1)) / 2
-    ha_data['Close'] = (ha_data['Open'] + ha_data['High'] + ha_data['Low'] + ha_data['Close']) / 4
-    ha_data['High'] = ha_data[['Open', 'Close', 'High']].max(axis=1)
-    ha_data['Low'] = ha_data[['Open', 'Close', 'Low']].min(axis=1)
+    
+    open_vals = np.asarray(data['Open'].values, dtype=np.float64)
+    high_vals = np.asarray(data['High'].values, dtype=np.float64)
+    low_vals = np.asarray(data['Low'].values, dtype=np.float64)
+    close_vals = np.asarray(data['Close'].values, dtype=np.float64)
+    
+    ha_open, ha_high, ha_low, ha_close = _heikin_ashi_core(open_vals, high_vals, low_vals, close_vals)
+    
+    ha_data['Open'] = ha_open
+    ha_data['High'] = ha_high
+    ha_data['Low'] = ha_low
+    ha_data['Close'] = ha_close
+    
     return ha_data
 
 def sma(series: pd.Series, timeperiod: int = 20) -> pd.Series:
