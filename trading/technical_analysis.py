@@ -506,6 +506,7 @@ def heikin_ashi_transform(data: pd.DataFrame) -> pd.DataFrame:
     ha_data['High'] = ha_high
     ha_data['Low'] = ha_low
     ha_data['Close'] = ha_close
+    ha_data['Volume'] = np.asarray(data['Volume'].values, dtype=np.float64)
     
     return ha_data
 
@@ -1247,6 +1248,11 @@ def vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -
     volume_vals = np.asarray(volume.values, dtype=np.float64)
     result = _vwap_core(high_vals, low_vals, close_vals, volume_vals)
     return pd.Series(result, index=close.index)
+
+def vol_ratio(volume: pd.Series, timeperiod: int = 20) -> pd.Series:
+    """Volume Ratio"""
+    vol_avg = volume.rolling(window=timeperiod).mean()
+    return volume / vol_avg
 
 def supertrend(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14, multiplier: int = 3) -> tuple[pd.Series, pd.Series]:
     """SuperTrend indicator"""
