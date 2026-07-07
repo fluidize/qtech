@@ -10,70 +10,66 @@ from scipy.signal import savgol_filter
 
 import trading.technical_analysis as ta
 
-DROPOUT = 0.15
+DROPOUT = 1/8
 
 
 def ta_transform(data: pd.DataFrame, add_ticker: str):
+    data = ta.heikin_ashi_transform(data)
     close = data["Close"]
     high = data["High"]
     low = data["Low"]
+    volume = data["Volume"]
 
-    macd_hist = ta.macd(close)[2]
     aroon_up, aroon_down = ta.aroon(high, low, timeperiod=14)
     stoch_k, stoch_d = ta.stoch(high, low, close)
 
-    ret_1 = close.pct_change(1)
-    ret_5 = close.pct_change(5)
-    ret_20 = close.pct_change(20)
-    log_ret = ta.log_return(close)
+    ### add data
+    add_data = data[[f"add_{add_ticker}_Open", f"add_{add_ticker}_High", f"add_{add_ticker}_Low", f"add_{add_ticker}_Close", f"add_{add_ticker}_Volume"]].copy()
+    add_data.columns = ["Open", "High", "Low", "Close", "Volume"]
+    add_data = ta.heikin_ashi_transform(add_data)
+    
+    add_close = add_data["Close"]
+    add_high = add_data["High"]
+    add_low = add_data["Low"]
+    add_volume = add_data["Volume"]
 
-    add_close = data[f"add_{add_ticker}_Close"]
-    add_high = data[f"add_{add_ticker}_High"]
-    add_low = data[f"add_{add_ticker}_Low"]
-
-    add_macd_hist = ta.macd(add_close)[2]
     add_aroon_up, add_aroon_down = ta.aroon(add_high, add_low, timeperiod=14)
     add_stoch_k, add_stoch_d = ta.stoch(add_high, add_low, add_close)
 
-    add_ret_1 = add_close.pct_change(1)
-    add_ret_5 = add_close.pct_change(5)
-    add_ret_20 = add_close.pct_change(20)
-    add_log_ret = ta.log_return(add_close)
-
-
     return pd.DataFrame(
         {
-            "ret_1": ret_1,
-            "ret_5": ret_5,
-            "ret_20": ret_20,
-            "log_ret": log_ret,
-            "roc_10": ta.roc(close, timeperiod=10),
-            "mom_10": ta.mom(close, timeperiod=10),
+            "ret_5": close.pct_change(5),
+            "ret_20": close.pct_change(20),
+            "log_ret": ta.log_return(close),
             "stoch_k": stoch_k,
             "stoch_d": stoch_d,
-            "macd_hist": macd_hist,
+            "macd_hist": ta.macd_hist(close),
             "aroon_osc": aroon_up - aroon_down,
+            "rsi": ta.rsi(close, timeperiod=14),
+            "vol_ratio": ta.vol_ratio(volume),
+            "atr": ta.atr(high, low, close, timeperiod=14),
+            "future": close.pct_change().shift(-10),
 
-            "add_ret_1": add_ret_1,
-            "add_ret_5": add_ret_5,
-            "add_ret_20": add_ret_20,
-            "add_log_ret": add_log_ret,
-            "add_roc_10": ta.roc(add_close, timeperiod=10),
-            "add_mom_10": ta.mom(add_close, timeperiod=10),
+            "add_ret_5": add_close.pct_change(5),
+            "add_ret_20": add_close.pct_change(20),
+            "add_log_ret": ta.log_return(add_close),
             "add_stoch_k": add_stoch_k,
             "add_stoch_d": add_stoch_d,
-            "add_macd_hist": add_macd_hist,
+            "add_macd_hist": ta.macd_hist(add_close),
             "add_aroon_osc": add_aroon_up - add_aroon_down,
+            "add_rsi": ta.rsi(add_close, timeperiod=14),
+            "add_vol_ratio": ta.vol_ratio(add_volume),
+            "add_atr": ta.atr(add_high, add_low, add_close, timeperiod=14),
         }
     ).dropna(axis=0)
 
 
 class PriceDataset(Dataset):
-    def __init__(self, data: pd.DataFrame, seq_len: int = 10):
+    def __init__(self, data: pd.DataFrame, add_ticker: str, seq_len: int = 10):
         self.seq_len = seq_len
         self.data = data
 
-        self.X = ta_transform(self.data, add_ticker="BTC-USDT")
+        self.X = ta_transform(self.data, add_ticker=add_ticker)
         self.valid_indices = self.X.index[self.seq_len - 1 :]
 
         feat_arr = self.X.values.astype(np.float32)
@@ -149,7 +145,9 @@ class ConvolutionEncoder(nn.Module):
         )
 
         self.encoder = nn.Sequential(
-            nn.Linear(hidden_channel_size * self.width, hidden_linear_size),
+            nn.AdaptiveAvgPool1d(1),
+            # nn.Linear(hidden_channel_size * self.width, hidden_linear_size),
+            nn.Linear(1, hidden_linear_size),
             nn.GroupNorm(8, hidden_linear_size),
             nn.ReLU(),
             nn.Dropout(DROPOUT),

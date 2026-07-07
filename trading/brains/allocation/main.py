@@ -18,13 +18,14 @@ from models import AllocatorPolicy, PriceDataset
 from trading.backtesting.backtesting import VectorizedBacktest
 
 if __name__ == "__main__":
-    EPOCHS = 100
+    EPOCHS = 1024
     SEQ_LEN = 16
     BATCH_SIZE = 2 ** 10
+    
     DATA = {
         "symbols": ["SOL-USDT", "BTC-USDT"],
-        "days": 1095,
-        "interval": "30m",
+        "days": 730,
+        "interval": "1h",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": -1,
@@ -34,15 +35,14 @@ if __name__ == "__main__":
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     data = mt.fetch_data(**DATA)
-    print(data.isna().sum())
     train_dataset_raw, val_dataset_raw = train_test_split(
         data,
         test_size=0.25,
         shuffle=False,
     )
 
-    train_dataset = PriceDataset(train_dataset_raw, seq_len=SEQ_LEN)
-    val_dataset = PriceDataset(val_dataset_raw, seq_len=SEQ_LEN)
+    train_dataset = PriceDataset(train_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN)
+    val_dataset = PriceDataset(val_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN)
 
     num_features = train_dataset.X.shape[1]
     sequence_length = train_dataset.X.shape[2]
@@ -88,7 +88,7 @@ if __name__ == "__main__":
     progress_bar.close()
 
     def model_wrapper(data, model, device, seq_len=10, batch_size=32):
-        dataset = PriceDataset(data, seq_len=seq_len)
+        dataset = PriceDataset(data, add_ticker=DATA["symbols"][1], seq_len=seq_len)
         raw_signals = lf.model_to_signals(model, dataset, device=device, batch_size=batch_size, eval_mode=True)
         signals = pd.Series(raw_signals.cpu().numpy(), index=data.index)
         return signals

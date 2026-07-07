@@ -241,8 +241,8 @@ class AllocationLoss(nn.Module):
         self,
         device: str = "cuda",
         sortino_weight=1,
-        turnover_weight=0.05,
-        undertrading_weight=0.01,
+        turnover_weight=0.01,
+        undertrading_weight=0.1,
     ):
         super().__init__()
         self.tb = TorchBacktest(device=device)
@@ -255,6 +255,7 @@ class AllocationLoss(nn.Module):
         sortino_value = self.tb.get_sortino(raw_signals)
         turnover_value = self.tb.get_turnover(raw_signals)
         undertrading_value = self.tb.get_pos_penalty(raw_signals)
+        
         return (
             self.sortino_weight * sortino_value
             + self.turnover_weight * turnover_value
