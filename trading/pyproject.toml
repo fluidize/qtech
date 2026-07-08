@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading"
+version = "1.0.0"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["trading*"]

@@ -6,7 +6,7 @@ This repository contains a collection of **quantitative trading ideas**, **neura
 <summary>Installation</summary>
 
 ```bash
-pip install -e . \
+pip install -e trading \
 numpy pandas matplotlib seaborn plotly \
 scikit-learn scipy hmmlearn optuna optunahub lightgbm \
 yfinance requests aiohttp websockets \
@@ -24,4 +24,4 @@ on python 3.11
 - [Backtesting Library](https://github.com/fluidize/qtech/tree/main/trading/backtesting)
 - [Jupiter Aggregator Python Trading Environment](https://github.com/fluidize/qtech/tree/main/trading/live/jupiter)
 - [Technical-Analysis-Based Genetic Algorithms](https://github.com/fluidize/qtech/tree/main/trading/brains/evolution)
-- [Textual Stock Terminal](https://github.com/fluidize/qtech/tree/main/trading/ideas/terminal)
+- [Textual Stock Terminal](https://github.com/fluidize/qtech/tree/main/terminal)
