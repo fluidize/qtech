@@ -18,14 +18,14 @@ from models import AllocatorPolicy, PriceDataset
 from trading.backtesting.backtesting import VectorizedBacktest
 
 if __name__ == "__main__":
-    EPOCHS = 1024
+    EPOCHS = 512
     SEQ_LEN = 16
     BATCH_SIZE = 2 ** 10
     
     DATA = {
         "symbols": ["SOL-USDT", "BTC-USDT"],
-        "days": 730,
-        "interval": "1h",
+        "days": 60,
+        "interval": "5m",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": -1,
@@ -52,7 +52,7 @@ if __name__ == "__main__":
         width=sequence_length,
     ).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    loss_fn = lf.AllocationLoss(device=DEVICE)
+    loss_fn = lf.SharpeLoss(device=DEVICE)
 
     summary(model)
 

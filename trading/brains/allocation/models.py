@@ -48,7 +48,6 @@ def ta_transform(data: pd.DataFrame, add_ticker: str):
             "rsi": ta.rsi(close, timeperiod=14),
             "vol_ratio": ta.vol_ratio(volume),
             "atr": ta.atr(high, low, close, timeperiod=14),
-            "future": close.pct_change().shift(-10),
 
             "add_ret_5": add_close.pct_change(5),
             "add_ret_20": add_close.pct_change(20),
@@ -91,6 +90,33 @@ class PriceDataset(Dataset):
         # Return both the data and the corresponding dataframe index
         return self.X[idx], idx
 
+class MultiScalePooling(nn.Module):
+    def __init__(self, reduction_dim=128):
+        super().__init__()
+
+        self.reduction_dim = reduction_dim
+        
+        self.aap_1 = nn.AdaptiveAvgPool1d(1)
+        self.aap_2 = nn.AdaptiveAvgPool1d(4)
+        self.aap_3 = nn.AdaptiveAvgPool1d(8)
+
+        self.channel_reducer = nn.Conv1d(64, self.reduction_dim, 1)
+
+        self.output_dim = self.reduction_dim*(1+4+8)
+
+    def forward(self, x):
+        x1 = self.aap_1(x)
+        x1 = self.channel_reducer(x1).flatten(1) #(B,64)
+
+        x2 = self.aap_2(x)
+        x2 = self.channel_reducer(x2).flatten(1) #(B,256)
+
+        x3 = self.aap_3(x)
+        x3 = self.channel_reducer(x3).flatten(1) #(B,512)
+
+        x = torch.cat([x1,x2,x3], dim=1)
+
+        return x
 
 class ConvolutionEncoder(nn.Module):
     def __init__(
@@ -108,6 +134,8 @@ class ConvolutionEncoder(nn.Module):
         self.hidden_channel_size = hidden_channel_size
         self.hidden_linear_size = hidden_linear_size
         self.out_size = out_size
+
+        self.msp = MultiScalePooling(reduction_dim=hidden_channel_size)
 
         self.convolver = nn.Sequential(
             nn.Conv1d(channels, hidden_channel_size, kernel_size=3, padding=1),
@@ -145,9 +173,8 @@ class ConvolutionEncoder(nn.Module):
         )
 
         self.encoder = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),
             # nn.Linear(hidden_channel_size * self.width, hidden_linear_size),
-            nn.Linear(1, hidden_linear_size),
+            nn.Linear(self.msp.output_dim, hidden_linear_size),
             nn.GroupNorm(8, hidden_linear_size),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
@@ -164,7 +191,7 @@ class ConvolutionEncoder(nn.Module):
 
     def forward(self, x):
         x = self.convolver(x)
-        x = x.flatten(1, 2)
+        x = self.msp(x)
         embedding = self.encoder(x)
         return embedding
 
@@ -203,6 +230,33 @@ class LSTMEncoder(nn.Module):
         return embedding
 
 
+class Booster(nn.Module):
+    def __init__(self, lstm_embedding_size, conv_embedding_size, out_size=1):
+        super().__init__()
+
+        self.lstm_embedding_size = lstm_embedding_size
+        self.conv_embedding_size = conv_embedding_size
+        self.out_size = out_size
+
+        self.encoder = nn.Sequential(
+            nn.Linear(lstm_embedding_size + conv_embedding_size, 128),
+            nn.GroupNorm(8, 128),
+            nn.ReLU(),
+            nn.Dropout(DROPOUT),
+            nn.Linear(128, 128),
+            nn.GroupNorm(8, 128),
+            nn.ReLU(),
+            nn.Dropout(DROPOUT),
+            nn.Linear(128, out_size),
+        )
+    
+    def forward(self, conv_embedding, lstm_embedding):
+        x = torch.cat([conv_embedding, lstm_embedding], dim=1)
+        output = self.encoder(x)
+        return output
+        
+
+
 class AllocatorPolicy(nn.Module):
     def __init__(
         self,
@@ -227,6 +281,9 @@ class AllocatorPolicy(nn.Module):
         self.lstm = LSTMEncoder(
             channels, width, hidden_size=lstm_hidden_size, out_size=lstm_out_size
         )
+
+        self.mean_booster = Booster(lstm_out_size, conv_out_size, out_size=1)
+        self.log_std_booster = Booster(lstm_out_size, conv_out_size, out_size=1)
 
         self.out_size = self.conv.out_size + self.lstm.out_size
 
@@ -267,7 +324,8 @@ class AllocatorPolicy(nn.Module):
         x2 = self.lstm(x)
         x = torch.cat([x1, x2], dim=1)
         x = self.dist_encoder(x)
-        mean = self.mean_head(x)
-        log_std = self.log_std_head(x)
+
+        mean = self.mean_head(x) + self.mean_booster(x1, x2)
+        log_std = self.log_std_head(x) + self.log_std_booster(x1, x2)
 
         return mean, log_std
