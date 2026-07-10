@@ -5,7 +5,7 @@ from trading.backtesting.backtesting import VectorizedBacktest
 import trading.backtesting.mc_analysis as mc
 import trading.model_tools as mt
 
-from genetics.ast_builder import generate_population
+from genetics.algorithm_builder import generate_population
 from genetics.tools import display_ast, unparsify
 import ast
 

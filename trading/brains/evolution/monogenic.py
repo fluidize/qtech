@@ -6,7 +6,7 @@ from trading.backtesting.algorithm_optim import BayesianOptimizer
 import trading.backtesting.mc_analysis as mc
 import trading.model_tools as mt
 
-from genetics.ast_builder import generate_population, generate_genome
+from genetics.algorithm_builder import generate_population, generate_genome
 from genetics.tools import display_ast, unparsify
 
 import ast
@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-from genetics.ast_builder import Genome
+from genetics.algorithm_builder import Genome
 
 import faulthandler
 faulthandler.enable()
