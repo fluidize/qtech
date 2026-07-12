@@ -18,7 +18,7 @@ from models import AllocatorPolicy, PriceDataset
 from trading.backtesting.backtesting import VectorizedBacktest
 
 if __name__ == "__main__":
-    EPOCHS = 512
+    EPOCHS = 25
     SEQ_LEN = 16
     BATCH_SIZE = 2 ** 10
     

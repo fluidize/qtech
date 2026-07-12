@@ -310,7 +310,7 @@ class VectorizedBacktest:
 
         summary = self.get_performance_metrics()
         if mode == "basic":
-            fig, ax = plt.subplots(2, 1, sharex=True)
+            fig, ax = plt.subplots(2, 1, sharex=True, figsize=(12, 8))
             indicator_ax = None
 
             ax[0].plot(
