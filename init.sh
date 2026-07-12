@@ -3,7 +3,7 @@ source .venv/bin/activate
 
 echo "Installing dependencies..."
 
-pip install -e trading \
+pip install -e . \
     numpy pandas matplotlib seaborn plotly \
     scikit-learn scipy hmmlearn optuna optunahub lightgbm \
     yfinance requests aiohttp websockets \
