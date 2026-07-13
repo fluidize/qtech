@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 import torch.nn.functional as F
 
+from sklearn.preprocessing import MinMaxScaler
 from scipy.signal import savgol_filter
 
 import trading.technical_analysis as ta
@@ -14,6 +15,7 @@ DROPOUT = 1/8
 
 
 def ta_transform(data: pd.DataFrame, add_ticker: str):
+    scaler = MinMaxScaler()
     data = ta.heikin_ashi_transform(data)
     close = data["Close"]
     high = data["High"]
@@ -36,7 +38,7 @@ def ta_transform(data: pd.DataFrame, add_ticker: str):
     add_aroon_up, add_aroon_down = ta.aroon(add_high, add_low, timeperiod=14)
     add_stoch_k, add_stoch_d = ta.stoch(add_high, add_low, add_close)
 
-    return pd.DataFrame(
+    df = pd.DataFrame(
         {
             "ret_5": close.pct_change(5),
             "ret_20": close.pct_change(20),
@@ -61,6 +63,8 @@ def ta_transform(data: pd.DataFrame, add_ticker: str):
             "add_atr": ta.atr(add_high, add_low, add_close, timeperiod=14),
         }
     ).dropna(axis=0)
+    df[df.columns] = scaler.fit_transform(df[df.columns])
+    return df
 
 
 class PriceDataset(Dataset):
