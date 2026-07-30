@@ -25,3 +25,5 @@ on python 3.11
 - [Jupiter Aggregator Python Trading Environment](https://github.com/fluidize/qtech/tree/main/trading/live/jupiter)
 - [Technical-Analysis-Based Genetic Algorithms](https://github.com/fluidize/qtech/tree/main/trading/brains/evolution)
 - [Textual Stock Terminal](https://github.com/fluidize/qtech/tree/main/terminal)
+
+In-depth descriptions at [https://fluidize.github.io](https://fluidize.github.io)
