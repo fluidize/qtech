@@ -6,7 +6,6 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 import torch.nn.functional as F
 
-from sklearn.preprocessing import MinMaxScaler
 from scipy.signal import savgol_filter
 
 from trading.model_tools import ta_transform
@@ -14,62 +13,6 @@ from trading.model_tools import ta_transform
 DROPOUT = 1/8
 
 
-<<<<<<< HEAD
-=======
-def ta_transform(data: pd.DataFrame, add_ticker: str):
-    scaler = MinMaxScaler()
-    data = ta.heikin_ashi_transform(data)
-    close = data["Close"]
-    high = data["High"]
-    low = data["Low"]
-    volume = data["Volume"]
-
-    aroon_up, aroon_down = ta.aroon(high, low, timeperiod=14)
-    stoch_k, stoch_d = ta.stoch(high, low, close)
-
-    ### add data
-    add_data = data[[f"add_{add_ticker}_Open", f"add_{add_ticker}_High", f"add_{add_ticker}_Low", f"add_{add_ticker}_Close", f"add_{add_ticker}_Volume"]].copy()
-    add_data.columns = ["Open", "High", "Low", "Close", "Volume"]
-    add_data = ta.heikin_ashi_transform(add_data)
-    
-    add_close = add_data["Close"]
-    add_high = add_data["High"]
-    add_low = add_data["Low"]
-    add_volume = add_data["Volume"]
-
-    add_aroon_up, add_aroon_down = ta.aroon(add_high, add_low, timeperiod=14)
-    add_stoch_k, add_stoch_d = ta.stoch(add_high, add_low, add_close)
-
-    df = pd.DataFrame(
-        {
-            "ret_5": close.pct_change(5),
-            "ret_20": close.pct_change(20),
-            "log_ret": ta.log_return(close),
-            "stoch_k": stoch_k,
-            "stoch_d": stoch_d,
-            "macd_hist": ta.macd_hist(close),
-            "aroon_osc": aroon_up - aroon_down,
-            "rsi": ta.rsi(close, timeperiod=14),
-            "vol_ratio": ta.vol_ratio(volume),
-            "atr": ta.atr(high, low, close, timeperiod=14),
-
-            "add_ret_5": add_close.pct_change(5),
-            "add_ret_20": add_close.pct_change(20),
-            "add_log_ret": ta.log_return(add_close),
-            "add_stoch_k": add_stoch_k,
-            "add_stoch_d": add_stoch_d,
-            "add_macd_hist": ta.macd_hist(add_close),
-            "add_aroon_osc": add_aroon_up - add_aroon_down,
-            "add_rsi": ta.rsi(add_close, timeperiod=14),
-            "add_vol_ratio": ta.vol_ratio(add_volume),
-            "add_atr": ta.atr(add_high, add_low, add_close, timeperiod=14),
-        }
-    ).dropna(axis=0)
-    df[df.columns] = scaler.fit_transform(df[df.columns])
-    return df
-
-
->>>>>>> 1db0c5f776c79ed12f0b71209bbe0dd0ecaf70ca
 class PriceDataset(Dataset):
     def __init__(self, data: pd.DataFrame, add_ticker: str, seq_len: int = 10):
         self.seq_len = seq_len

@@ -11,6 +11,7 @@ import asyncio
 import aiohttp
 
 from rich import print
+from sklearn.preprocessing import MinMaxScaler
 
 import trading.technical_analysis as ta
 
@@ -79,7 +80,17 @@ def ta_transform(data: pd.DataFrame, add_ticker: str):
             "atr": ta.atr(high, low, close, timeperiod=14),
         }
 
-    return pd.DataFrame(result_dict).dropna(axis=0)
+    result = pd.DataFrame(result_dict).dropna(axis=0)
+
+    scaler = MinMaxScaler()
+    scaled_values = scaler.fit_transform(result)
+    result = pd.DataFrame(
+        scaled_values,
+        columns=result.columns,
+        index=result.index,
+    )
+
+    return result
 
 
 def _fetch_yfinance(symbol, days, interval, age_days):
