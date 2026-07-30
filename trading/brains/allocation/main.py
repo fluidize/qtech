@@ -18,13 +18,13 @@ from models import AllocatorPolicy, PriceDataset
 from trading.backtesting.backtesting import VectorizedBacktest
 
 if __name__ == "__main__":
-    EPOCHS = 25
-    SEQ_LEN = 16
+    EPOCHS = 256
+    SEQ_LEN = 8
     BATCH_SIZE = 2 ** 10
     
     DATA = {
         "symbols": ["SOL-USDT", "BTC-USDT"],
-        "days": 60,
+        "days": 180,
         "interval": "5m",
         "age_days": 0,
         "data_source": "binance",
