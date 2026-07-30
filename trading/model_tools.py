@@ -12,6 +12,75 @@ import aiohttp
 
 from rich import print
 
+import trading.technical_analysis as ta
+
+
+def ta_transform(data: pd.DataFrame, add_ticker: str):
+    data = ta.heikin_ashi_transform(data)
+    close = data["Close"]
+    high = data["High"]
+    low = data["Low"]
+    volume = data["Volume"]
+
+    aroon_up, aroon_down = ta.aroon(high, low, timeperiod=14)
+    stoch_k, stoch_d = ta.stoch(high, low, close)
+
+    # Check if add_data columns exist and are not blank
+    add_data_cols = [f"add_{add_ticker}_Open", f"add_{add_ticker}_High", f"add_{add_ticker}_Low", f"add_{add_ticker}_Close", f"add_{add_ticker}_Volume"]
+    has_add_data = all(col in data.columns for col in add_data_cols) and not data[add_data_cols].isna().all().all()
+
+    if has_add_data:
+        add_data = data[add_data_cols].copy()
+        add_data.columns = ["Open", "High", "Low", "Close", "Volume"]
+        add_data = ta.heikin_ashi_transform(add_data)
+        
+        add_close = add_data["Close"]
+        add_high = add_data["High"]
+        add_low = add_data["Low"]
+        add_volume = add_data["Volume"]
+
+        add_aroon_up, add_aroon_down = ta.aroon(add_high, add_low, timeperiod=14)
+        add_stoch_k, add_stoch_d = ta.stoch(add_high, add_low, add_close)
+
+        result_dict = {
+            "ret_5": close.pct_change(5),
+            "ret_20": close.pct_change(20),
+            "log_ret": ta.log_return(close),
+            "stoch_k": stoch_k,
+            "stoch_d": stoch_d,
+            "macd_hist": ta.macd_hist(close),
+            "aroon_osc": aroon_up - aroon_down,
+            "rsi": ta.rsi(close, timeperiod=14),
+            "vol_ratio": ta.vol_ratio(volume),
+            "atr": ta.atr(high, low, close, timeperiod=14),
+
+            "add_ret_5": add_close.pct_change(5),
+            "add_ret_20": add_close.pct_change(20),
+            "add_log_ret": ta.log_return(add_close),
+            "add_stoch_k": add_stoch_k,
+            "add_stoch_d": add_stoch_d,
+            "add_macd_hist": ta.macd_hist(add_close),
+            "add_aroon_osc": add_aroon_up - add_aroon_down,
+            "add_rsi": ta.rsi(add_close, timeperiod=14),
+            "add_vol_ratio": ta.vol_ratio(add_volume),
+            "add_atr": ta.atr(add_high, add_low, add_close, timeperiod=14),
+        }
+    else:
+        result_dict = {
+            "ret_5": close.pct_change(5),
+            "ret_20": close.pct_change(20),
+            "log_ret": ta.log_return(close),
+            "stoch_k": stoch_k,
+            "stoch_d": stoch_d,
+            "macd_hist": ta.macd_hist(close),
+            "aroon_osc": aroon_up - aroon_down,
+            "rsi": ta.rsi(close, timeperiod=14),
+            "vol_ratio": ta.vol_ratio(volume),
+            "atr": ta.atr(high, low, close, timeperiod=14),
+        }
+
+    return pd.DataFrame(result_dict).dropna(axis=0)
+
 
 def _fetch_yfinance(symbol, days, interval, age_days):
     end_date = datetime.now() - timedelta(days=age_days)
@@ -212,7 +281,23 @@ def _fetch_binance(symbol, days, interval, age_days, retry_limit, proxies, end_t
         progress_bar.close()
         return chunk_results
 
-    chunk_results = asyncio.run(download_all_chunks())
+    try:
+        chunk_results = asyncio.run(download_all_chunks())
+    except RuntimeError:
+        # jupyter notebooks
+        import concurrent.futures
+        
+        def run_async_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(download_all_chunks())
+            finally:
+                loop.close()
+        
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_async_in_thread)
+            chunk_results = future.result()
     data = (
         pd.concat(
             [df for _, df in sorted(chunk_results, key=lambda x: x[0])],
