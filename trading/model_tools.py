@@ -1,4 +1,5 @@
 from math import ceil
+import numpy as np
 from datetime import datetime, timedelta, timezone
 import requests
 import yfinance as yf
@@ -89,6 +90,43 @@ def ta_transform(data: pd.DataFrame, add_ticker: str):
         columns=result.columns,
         index=result.index,
     )
+
+    # def shannon_entropy(series: pd.Series, bins: int = 50) -> float:
+    #     values = series.dropna().to_numpy()
+    #     counts, _ = np.histogram(values, bins=bins)
+    #     probs = counts[counts > 0] / counts.sum()
+    #     return -np.sum(probs * np.log2(probs))
+
+    # def difference_transform(x: pd.Series, y: pd.Series) -> np.ndarray:
+    #     return x.sub(y).to_numpy()
+
+    # def acceleration_transform(x: pd.Series) -> np.ndarray:
+    #     return x.diff(1).to_numpy()
+
+    # def log_transform(x: pd.Series) -> np.ndarray:
+    #     return np.log(x.to_numpy())
+
+    # transforms = [difference_transform, acceleration_transform, log_transform]
+
+    # columns = result.columns
+
+    # for col in columns:
+    #     max_entropy = 0
+    #     max_entropy_series = None
+    #     for transform in transforms:
+    #         if transform == difference_transform:
+    #             for col2 in columns:
+    #                 if col2 != col:
+    #                     result[col] = transform(result[col], result[col2])
+    #                     if shannon_entropy(result[col]) > max_entropy:
+    #                         max_entropy = shannon_entropy(result[col])
+    #                         max_entropy_series = result[col]
+    #         else:
+    #             result[col] = transform(result[col])
+    #             if shannon_entropy(result[col]) > max_entropy:
+    #                 max_entropy = shannon_entropy(result[col])
+    #                 max_entropy_series = result[col]
+    #     result[col] = max_entropy_series
 
     return result
 
