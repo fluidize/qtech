@@ -37,11 +37,45 @@ class PriceDataset(Dataset):
         return len(self.X)
 
     def __getitem__(self, idx):
-        # Return both the data and the corresponding dataframe index
         return self.X[idx], idx
 
+
+def initialize_weights(module):
+    if isinstance(module, nn.Linear):
+        nn.init.xavier_uniform_(module.weight)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+    elif isinstance(module, nn.Conv1d):
+        nn.init.xavier_uniform_(module.weight)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+    elif isinstance(module, nn.LSTM):
+        for name, param in module.named_parameters():
+            if 'weight_ih' in name:
+                nn.init.xavier_uniform_(param)
+            elif 'weight_hh' in name:
+                nn.init.orthogonal_(param)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+
+
+class FeatureGate(nn.Module):
+    def __init__(self, num_features):
+        super().__init__()
+        self.num_features = num_features
+        
+        self.gate_weights = nn.Parameter(torch.ones(num_features) * 4) #init to sigmoid ~1
+        
+    def forward(self, x):
+        # x is (B, C, W) 
+        gate = torch.sigmoid(self.gate_weights) #(C,)
+        
+        gate = gate.view(1, -1, 1) #(1, C, 1)
+        
+        return x * gate
+
 class MultiScalePooling(nn.Module):
-    def __init__(self, reduction_dim=128):
+    def __init__(self, input_channels=32, reduction_dim=32):
         super().__init__()
 
         self.reduction_dim = reduction_dim
@@ -50,7 +84,7 @@ class MultiScalePooling(nn.Module):
         self.aap_2 = nn.AdaptiveAvgPool1d(4)
         self.aap_3 = nn.AdaptiveAvgPool1d(8)
 
-        self.channel_reducer = nn.Conv1d(64, self.reduction_dim, 1)
+        self.channel_reducer = nn.Conv1d(input_channels, self.reduction_dim, 1)
 
         self.output_dim = self.reduction_dim*(1+4+8)
 
@@ -73,9 +107,9 @@ class ConvolutionEncoder(nn.Module):
         self,
         channels,
         width,
-        hidden_channel_size=64,
-        hidden_linear_size=256,
-        out_size=256,
+        hidden_channel_size=32,
+        hidden_linear_size=32,
+        out_size=32,
     ):
         super().__init__()
 
@@ -85,7 +119,10 @@ class ConvolutionEncoder(nn.Module):
         self.hidden_linear_size = hidden_linear_size
         self.out_size = out_size
 
-        self.msp = MultiScalePooling(reduction_dim=hidden_channel_size)
+        # Feature gate for input channels
+        self.feature_gate = FeatureGate(channels)
+
+        self.msp = MultiScalePooling(input_channels=hidden_channel_size, reduction_dim=hidden_channel_size)
 
         self.convolver = nn.Sequential(
             nn.Conv1d(channels, hidden_channel_size, kernel_size=3, padding=1),
@@ -125,21 +162,24 @@ class ConvolutionEncoder(nn.Module):
         self.encoder = nn.Sequential(
             # nn.Linear(hidden_channel_size * self.width, hidden_linear_size),
             nn.Linear(self.msp.output_dim, hidden_linear_size),
-            nn.GroupNorm(8, hidden_linear_size),
+            nn.LayerNorm(hidden_linear_size),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
             nn.Linear(hidden_linear_size, hidden_linear_size),
-            nn.GroupNorm(8, hidden_linear_size),
+            nn.LayerNorm(hidden_linear_size),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
             nn.Linear(hidden_linear_size, hidden_linear_size),
-            nn.GroupNorm(8, hidden_linear_size),
+            nn.LayerNorm(hidden_linear_size),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
             nn.Linear(hidden_linear_size, self.out_size),
         )
 
     def forward(self, x):
+        # Apply feature gate
+        x = self.feature_gate(x)
+        
         x = self.convolver(x)
         x = self.msp(x)
         embedding = self.encoder(x)
@@ -147,7 +187,7 @@ class ConvolutionEncoder(nn.Module):
 
 
 class LSTMEncoder(nn.Module):
-    def __init__(self, channels, width, hidden_size=64, out_size=256):
+    def __init__(self, channels, width, hidden_size=32, out_size=32):
         super().__init__()
 
         self.channels = channels
@@ -155,24 +195,24 @@ class LSTMEncoder(nn.Module):
         self.hidden_size = hidden_size
         self.out_size = out_size
 
+        self.feature_gate = FeatureGate(channels)
+
         self.lstm = nn.LSTM(channels, hidden_size, batch_first=True)
         self.encoder = nn.Sequential(
-            nn.Linear(hidden_size * width, 128),
-            nn.GroupNorm(8, 128),
+            nn.Linear(hidden_size * width, 64),
+            nn.LayerNorm(64),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
-            nn.Linear(128, 128),
-            nn.GroupNorm(8, 128),
+            nn.Linear(64, 64),
+            nn.LayerNorm(64),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
-            nn.Linear(128, 128),
-            nn.GroupNorm(8, 128),
-            nn.ReLU(),
-            nn.Dropout(DROPOUT),
-            nn.Linear(128, out_size),
+            nn.Linear(64, out_size),
         )
 
     def forward(self, x):
+        x = self.feature_gate(x)
+        
         x = x.transpose(1, 2)  # (B, W, C)
         x, _ = self.lstm(x)
         x = x.flatten(1, 2)  # (B, hidden_size * W)
@@ -189,15 +229,15 @@ class Booster(nn.Module):
         self.out_size = out_size
 
         self.encoder = nn.Sequential(
-            nn.Linear(lstm_embedding_size + conv_embedding_size, 128),
-            nn.GroupNorm(8, 128),
+            nn.Linear(lstm_embedding_size + conv_embedding_size, 64),
+            nn.LayerNorm(64),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
-            nn.Linear(128, 128),
-            nn.GroupNorm(8, 128),
+            nn.Linear(64, 64),
+            nn.LayerNorm(64),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
-            nn.Linear(128, out_size),
+            nn.Linear(64, out_size),
         )
     
     def forward(self, conv_embedding, lstm_embedding):
@@ -212,11 +252,11 @@ class AllocatorPolicy(nn.Module):
         self,
         channels,
         width,
-        conv_hidden_channel_size=64,
-        conv_hidden_linear_size=64,
-        conv_out_size=64,
-        lstm_hidden_size=64,
-        lstm_out_size=64,
+        conv_hidden_channel_size=32,
+        conv_hidden_linear_size=32,
+        conv_out_size=32,
+        lstm_hidden_size=32,
+        lstm_out_size=32,
     ):
 
         super().__init__()
@@ -238,28 +278,32 @@ class AllocatorPolicy(nn.Module):
         self.out_size = self.conv.out_size + self.lstm.out_size
 
         self.dist_encoder = nn.Sequential(
-            nn.Linear(self.out_size, 128),
-            nn.GroupNorm(8, 128),
+            nn.Linear(self.out_size, 64),
+            nn.LayerNorm(64),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
-            nn.Linear(128, 128),
-            nn.GroupNorm(8, 128),
-            nn.ReLU(),
-            nn.Dropout(DROPOUT),
-            nn.Linear(128, 128),
-            nn.GroupNorm(8, 128),
+            nn.Linear(64, 64),
+            nn.LayerNorm(64),
             nn.ReLU(),
             nn.Dropout(DROPOUT),
         )
 
-        self.mean_head = nn.Linear(128, 1)
-        self.log_std_head = nn.Linear(128, 1)
+        self.mean_head = nn.Linear(64, 1)
+        self.log_std_head = nn.Linear(64, 1)
+        
+        self.apply(initialize_weights)
 
-    def get_action(self, obs):
+    def get_action(self, obs, epoch=None, total_epochs=None):
         mean, log_std = self.forward(obs)
         if self.training:
-            log_std = torch.clamp(log_std, -40, 20)
+            log_std = torch.clamp(log_std, -2, 1)
             std = torch.exp(log_std)
+            
+            if epoch is not None and total_epochs is not None:
+                # Decay from 1.0 to 0.1 over training
+                exploration_scale = 1.0 - 0.9 * (epoch / total_epochs)
+                exploration_scale = max(0.1, exploration_scale)
+                std = std * exploration_scale
 
             epsilon = torch.randn_like(mean)
             action = mean + std * epsilon

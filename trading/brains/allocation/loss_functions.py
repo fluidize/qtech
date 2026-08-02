@@ -7,7 +7,7 @@ from models import PriceDataset
 
 
 def model_to_signals(
-    model, dataset, device: str = "cuda", batch_size: int = 32, eval_mode: bool = True
+    model, dataset, device: str = "cuda", batch_size: int = 32, eval_mode: bool = True, epoch=None, total_epochs=None
 ):
     dataloader = DataLoader(
         dataset,
@@ -21,7 +21,7 @@ def model_to_signals(
     with torch.enable_grad() if not eval_mode else torch.no_grad():
         for batch_X, batch_indices in dataloader:
             batch_X = batch_X.to(device)
-            batch_predictions = model.get_action(batch_X)
+            batch_predictions = model.get_action(batch_X, epoch=epoch, total_epochs=total_epochs)
             predictions[batch_indices] = batch_predictions.float()
 
     raw_signals_t = torch.zeros(len(dataset.data), dtype=torch.float32, device=device)
