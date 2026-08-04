@@ -294,7 +294,7 @@ class VectorizedBacktest:
             "R2": r2,
         }
 
-    def plot_performance(self, mode: str = "basic"):
+    def plot_performance(self, mode: str = "basic", save_name: str = None):
         """
         Modes: "basic", "standard"
 
@@ -335,6 +335,8 @@ class VectorizedBacktest:
             ax[0].set_title(
                 f"{self.symbols[0]} {self.n_days} days {self.interval} | TR: {summary['Total_Return'] * 100:.2f}% | Alpha: {summary['Alpha'] * 100:.2f}% | Beta: {summary['Beta']:.2f} | Max DD: {summary['Max_Drawdown'] * 100:.2f}% | Sharpe: {summary['Sharpe_Ratio']:.2f} | Trades: {summary['Total_Trades']}"
             )
+            if save_name:
+                plt.savefig(f"{save_name}", dpi=300)
             plt.show()
 
         elif mode == "standard":
