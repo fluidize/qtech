@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from models import PriceDataset
+from datasets import PriceDataset
 
 
 def model_to_signals(

@@ -7,6 +7,7 @@ import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchinfo import summary
+
 from sklearn.model_selection import train_test_split
 
 import matplotlib.pyplot as plt
@@ -24,7 +25,7 @@ if __name__ == "__main__":
     
     DATA = {
         "symbols": ["SOL-USDT", "BTC-USDT"],
-        "days": 180,
+        "days": 90,
         "interval": "1m",
         "age_days": 0,
         "data_source": "binance",
@@ -58,6 +59,12 @@ if __name__ == "__main__":
 
     train_losses = []
     val_losses = []
+    train_sharpes = []
+    val_sharpes = []
+    
+    # Create backtest instances for sharpe calculation
+    train_tb = lf.TorchBacktest(device=DEVICE)
+    val_tb = lf.TorchBacktest(device=DEVICE)
 
     progress_bar = tqdm(total=EPOCHS, desc="Training")
     for epoch in range(EPOCHS):
@@ -77,12 +84,22 @@ if __name__ == "__main__":
         with torch.no_grad():
             val_signals = lf.model_to_signals(model, val_dataset, device=DEVICE, batch_size=BATCH_SIZE, eval_mode=True, epoch=epoch, total_epochs=EPOCHS)
             val_loss = loss_fn(val_signals, val_dataset)
-        
+
+        # get losses
         train_losses.append(train_loss.item())
         val_losses.append(val_loss.item())
+        
+        # get sharpe ratios
+        train_tb.load_dataset(train_dataset)
+        train_sharpe = train_tb.get_sharpe(train_signals)
+        train_sharpes.append(train_sharpe.item())
+        
+        val_tb.load_dataset(val_dataset)
+        val_sharpe = val_tb.get_sharpe(val_signals)
+        val_sharpes.append(val_sharpe.item())
 
         progress_bar.set_description(
-            f"Epoch {epoch+1}/{EPOCHS} - Train Loss: {train_loss.item():.4f} - Val Loss: {val_loss.item():.4f}"
+            f"Epoch {epoch+1}/{EPOCHS} - Train Loss: {train_loss.item():.4f} - Val Loss: {val_loss.item():.4f} - Train Sharpe: {train_sharpe.item():.4f} - Val Sharpe: {val_sharpe.item():.4f}"
         )
         progress_bar.update(1)
     progress_bar.close()
@@ -93,11 +110,29 @@ if __name__ == "__main__":
         signals = pd.Series(raw_signals.cpu().numpy(), index=data.index)
         return signals
 
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Val Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    
+    # losses
+    ax1.plot(train_losses, label='Train Loss')
+    ax1.plot(val_losses, label='Val Loss')
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Training and Validation Loss')
+    ax1.legend()
+    ax1.grid(True)
+    
+    # sharpes
+    ax2.plot(train_sharpes, label='Train Sharpe')
+    ax2.plot(val_sharpes, label='Val Sharpe')
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Sharpe Ratio')
+    ax2.set_title('Training and Validation Sharpe Ratio')
+    ax2.legend()
+    ax2.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('training_metrics.png')
+    plt.show()
 
     vb = VectorizedBacktest(
         instance_name="AllocationModel",
@@ -106,12 +141,22 @@ if __name__ == "__main__":
         commission_fixed=0.0,
         leverage=1.0,
     )
+    ### val
     vb.load_data(val_dataset_raw, symbols=DATA["symbols"], interval=DATA["interval"], age_days=DATA["age_days"])
     vb.run_strategy(model_wrapper, verbose=True, model=model, device=DEVICE, seq_len=SEQ_LEN, batch_size=BATCH_SIZE)
 
     backtest_metrics = vb.get_performance_metrics()
     print("Backtest metrics:", backtest_metrics)
-    vb.plot_performance(mode="basic")
+
+    vb.plot_performance(mode="basic", save_name="val.png")
+    ### train
+    vb.load_data(train_dataset_raw, symbols=DATA["symbols"], interval=DATA["interval"], age_days=DATA["age_days"])
+    vb.run_strategy(model_wrapper, verbose=True, model=model, device=DEVICE, seq_len=SEQ_LEN, batch_size=BATCH_SIZE)
+
+    backtest_metrics = vb.get_performance_metrics()
+    print("Backtest metrics:", backtest_metrics)
+    
+    vb.plot_performance(mode="basic", save_name="train.png")
 
     option = input("Save Model? y/N: ")
     if option.lower() == 'y':

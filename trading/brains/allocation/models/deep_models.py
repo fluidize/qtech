@@ -3,56 +3,24 @@ import pandas as pd
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset
 import torch.nn.functional as F
 
-from scipy.signal import savgol_filter
-
-from trading.model_tools import ta_transform
-
-DROPOUT = 1/8
-
-
-class PriceDataset(Dataset):
-    def __init__(self, data: pd.DataFrame, add_ticker: str, seq_len: int = 10):
-        self.seq_len = seq_len
-        self.data = data
-
-        self.X = ta_transform(self.data, add_ticker=add_ticker)
-        self.valid_indices = self.X.index[self.seq_len - 1 :]
-
-        feat_arr = self.X.values.astype(np.float32)
-
-        sequences = []
-        for i in range(len(feat_arr) - self.seq_len + 1):
-            sequences.append(feat_arr[i : i + self.seq_len])
-
-        self.X = torch.from_numpy(np.array(sequences))
-        # Transpose to (num_sequences, num_features, seq_len)
-        self.X = self.X.transpose(1, 2)
-
-        # (num_sequences, num_features, seq_len)
-
-    def __len__(self):
-        return len(self.X)
-
-    def __getitem__(self, idx):
-        return self.X[idx], idx
+DROPOUT = 1/4
 
 
 def initialize_weights(module):
     if isinstance(module, nn.Linear):
-        nn.init.xavier_uniform_(module.weight)
+        nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
         if module.bias is not None:
             nn.init.zeros_(module.bias)
     elif isinstance(module, nn.Conv1d):
-        nn.init.xavier_uniform_(module.weight)
+        nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
         if module.bias is not None:
             nn.init.zeros_(module.bias)
     elif isinstance(module, nn.LSTM):
         for name, param in module.named_parameters():
             if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param)
+                nn.init.kaiming_uniform_(param, nonlinearity="relu")
             elif 'weight_hh' in name:
                 nn.init.orthogonal_(param)
             elif 'bias' in name:
