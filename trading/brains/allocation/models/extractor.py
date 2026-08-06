@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 DEFAULT_WINDOW = 4
 
 
@@ -100,18 +99,29 @@ def velocity(x: torch.Tensor):
 
 
 def acceleration(x: torch.Tensor):
-    return torch.cat([torch.zeros_like(x[:, :, :1]), torch.diff(velocity(x), dim=2)], dim=2)
+    return torch.cat(
+        [torch.zeros_like(x[:, :, :1]), torch.diff(velocity(x), dim=2)], dim=2
+    )
 
 
 def log_diff(x: torch.Tensor):
-    return torch.cat([torch.zeros_like(x[:, :, :1]), torch.log(x[:, :, 1:] / x[:, :, :-1] + 1e-8)], dim=2)
+    return torch.cat(
+        [torch.zeros_like(x[:, :, :1]), torch.log(x[:, :, 1:] / x[:, :, :-1] + 1e-8)],
+        dim=2,
+    )
 
 
-def dft(x: torch.Tensor):
+def rfft(x: torch.Tensor):
     return torch.fft.fft(x, axis=2).real
 
 
-def kalman_filter(x: torch.Tensor, process_noise: float = 1e-2, measurement_noise: float = 1e-1):
+def ifft(x: torch.Tensor):
+    return torch.fft.ifft(x, axis=2).imag
+
+
+def kalman_filter(
+    x: torch.Tensor, process_noise: float = 1e-2, measurement_noise: float = 1e-1
+):
     filtered = torch.zeros_like(x)
     state = x[..., :1]
     covariance = torch.ones_like(state)
@@ -121,12 +131,15 @@ def kalman_filter(x: torch.Tensor, process_noise: float = 1e-2, measurement_nois
         prediction = state
         prediction_covariance = covariance + process_noise
 
-        kalman_gain = prediction_covariance / (prediction_covariance + measurement_noise)
+        kalman_gain = prediction_covariance / (
+            prediction_covariance + measurement_noise
+        )
         state = prediction + kalman_gain * (measurement - prediction)
         covariance = (1 - kalman_gain) * prediction_covariance
         filtered[..., i : i + 1] = state
 
     return filtered
+
 
 ALL_TRANSFORMS = [
     identity,
@@ -139,12 +152,14 @@ ALL_TRANSFORMS = [
     rolling_linear_regression_slope,
     velocity,
     acceleration,
-    log_diff,
-    dft,
+    #    log_diff,
+    rfft,
+    ifft,
     kalman_filter,
 ]
 
-class SequentialTransformLayer(nn.Module):
+
+class SequentialTransformUnit(nn.Module):
     def __init__(self, num_features: int, transforms: list[callable] = ALL_TRANSFORMS):
         super().__init__()
         self.num_features = num_features
@@ -153,9 +168,7 @@ class SequentialTransformLayer(nn.Module):
         self.bias = nn.Parameter(torch.zeros(1, 1, 1))
 
     def forward(self, x: torch.Tensor):
-        x_transformed = [
-            f(x) for f in self.transforms
-        ]
+        x_transformed = [f(x) for f in self.transforms]
 
         # M * (B, C, W)
         z = torch.cat(x_transformed, dim=1)
@@ -188,7 +201,9 @@ if __name__ == "__main__":
     dataset = PriceDataset(sample_data, add_ticker="BTC-USDT", seq_len=16)
     batch = dataset[0][0].unsqueeze(0)
 
-    layer = SequentialTransformLayer(num_features=batch.shape[1], transforms=ALL_TRANSFORMS)
+    layer = SequentialTransformUnit(
+        num_features=batch.shape[1], transforms=ALL_TRANSFORMS
+    )
     output = layer(batch)
 
     print("transformed_features", transformed.shape)

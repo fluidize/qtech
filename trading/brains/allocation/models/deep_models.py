@@ -5,7 +5,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-DROPOUT = 1/4
+from .extractor import SequentialTransformUnit
+
+DROPOUT = 1 / 4
 
 
 def initialize_weights(module):
@@ -19,11 +21,11 @@ def initialize_weights(module):
             nn.init.zeros_(module.bias)
     elif isinstance(module, nn.LSTM):
         for name, param in module.named_parameters():
-            if 'weight_ih' in name:
+            if "weight_ih" in name:
                 nn.init.kaiming_uniform_(param, nonlinearity="relu")
-            elif 'weight_hh' in name:
+            elif "weight_hh" in name:
                 nn.init.orthogonal_(param)
-            elif 'bias' in name:
+            elif "bias" in name:
                 nn.init.zeros_(param)
 
 
@@ -31,44 +33,48 @@ class FeatureGate(nn.Module):
     def __init__(self, num_features):
         super().__init__()
         self.num_features = num_features
-        
-        self.gate_weights = nn.Parameter(torch.ones(num_features) * 4) #init to sigmoid ~1
-        
+
+        self.gate_weights = nn.Parameter(
+            torch.ones(num_features) * 4
+        )  # init to sigmoid ~1
+
     def forward(self, x):
-        # x is (B, C, W) 
-        gate = torch.sigmoid(self.gate_weights) #(C,)
-        
-        gate = gate.view(1, -1, 1) #(1, C, 1)
-        
+        # x is (B, C, W)
+        gate = torch.sigmoid(self.gate_weights)  # (C,)
+
+        gate = gate.view(1, -1, 1)  # (1, C, 1)
+
         return x * gate
+
 
 class MultiScalePooling(nn.Module):
     def __init__(self, input_channels=32, reduction_dim=32):
         super().__init__()
 
         self.reduction_dim = reduction_dim
-        
+
         self.aap_1 = nn.AdaptiveAvgPool1d(1)
         self.aap_2 = nn.AdaptiveAvgPool1d(4)
         self.aap_3 = nn.AdaptiveAvgPool1d(8)
 
         self.channel_reducer = nn.Conv1d(input_channels, self.reduction_dim, 1)
 
-        self.output_dim = self.reduction_dim*(1+4+8)
+        self.output_dim = self.reduction_dim * (1 + 4 + 8)
 
     def forward(self, x):
         x1 = self.aap_1(x)
-        x1 = self.channel_reducer(x1).flatten(1) #(B,64)
+        x1 = self.channel_reducer(x1).flatten(1)  # (B,64)
 
         x2 = self.aap_2(x)
-        x2 = self.channel_reducer(x2).flatten(1) #(B,256)
+        x2 = self.channel_reducer(x2).flatten(1)  # (B,256)
 
         x3 = self.aap_3(x)
-        x3 = self.channel_reducer(x3).flatten(1) #(B,512)
+        x3 = self.channel_reducer(x3).flatten(1)  # (B,512)
 
-        x = torch.cat([x1,x2,x3], dim=1)
+        x = torch.cat([x1, x2, x3], dim=1)
 
         return x
+
 
 class ConvolutionEncoder(nn.Module):
     def __init__(
@@ -90,7 +96,9 @@ class ConvolutionEncoder(nn.Module):
         # Feature gate for input channels
         self.feature_gate = FeatureGate(channels)
 
-        self.msp = MultiScalePooling(input_channels=hidden_channel_size, reduction_dim=hidden_channel_size)
+        self.msp = MultiScalePooling(
+            input_channels=hidden_channel_size, reduction_dim=hidden_channel_size
+        )
 
         self.convolver = nn.Sequential(
             nn.Conv1d(channels, hidden_channel_size, kernel_size=3, padding=1),
@@ -147,7 +155,7 @@ class ConvolutionEncoder(nn.Module):
     def forward(self, x):
         # Apply feature gate
         x = self.feature_gate(x)
-        
+
         x = self.convolver(x)
         x = self.msp(x)
         embedding = self.encoder(x)
@@ -180,7 +188,7 @@ class LSTMEncoder(nn.Module):
 
     def forward(self, x):
         x = self.feature_gate(x)
-        
+
         x = x.transpose(1, 2)  # (B, W, C)
         x, _ = self.lstm(x)
         x = x.flatten(1, 2)  # (B, hidden_size * W)
@@ -207,12 +215,11 @@ class Booster(nn.Module):
             nn.Dropout(DROPOUT),
             nn.Linear(64, out_size),
         )
-    
+
     def forward(self, conv_embedding, lstm_embedding):
         x = torch.cat([conv_embedding, lstm_embedding], dim=1)
         output = self.encoder(x)
         return output
-        
 
 
 class AllocatorPolicy(nn.Module):
@@ -228,6 +235,12 @@ class AllocatorPolicy(nn.Module):
     ):
 
         super().__init__()
+
+        self.stu = SequentialTransformUnit(
+            num_features=channels
+        )
+
+        channels = 1
 
         self.conv = ConvolutionEncoder(
             channels,
@@ -258,7 +271,7 @@ class AllocatorPolicy(nn.Module):
 
         self.mean_head = nn.Linear(64, 1)
         self.log_std_head = nn.Linear(64, 1)
-        
+
         self.apply(initialize_weights)
 
     def get_action(self, obs, epoch=None, total_epochs=None):
@@ -266,7 +279,7 @@ class AllocatorPolicy(nn.Module):
         if self.training:
             log_std = torch.clamp(log_std, -2, 1)
             std = torch.exp(log_std)
-            
+
             if epoch is not None and total_epochs is not None:
                 # Decay from 1.0 to 0.1 over training
                 exploration_scale = 1.0 - 0.9 * (epoch / total_epochs)
@@ -282,6 +295,8 @@ class AllocatorPolicy(nn.Module):
         return F.tanh(action).squeeze(-1)
 
     def forward(self, x):
+        x = self.stu(x)
+
         x1 = self.conv(x)
         x2 = self.lstm(x)
         x = torch.cat([x1, x2], dim=1)

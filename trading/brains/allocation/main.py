@@ -20,19 +20,19 @@ from trading.backtesting.backtesting import VectorizedBacktest
 if __name__ == "__main__":
     EPOCHS = 1024
     SEQ_LEN = 16
-    BATCH_SIZE = 2 ** 16
-    
+    BATCH_SIZE = 2**16
+
     DATA = {
         "symbols": ["SOL-USDT", "BTC-USDT"],
-        "days": 180,
+        "days": 60,
         "interval": "1m",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": -1,
-        "verbose": True
+        "verbose": True,
     }
     LEARNING_RATE = 5e-6
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     data = mt.fetch_data(**DATA)
     train_dataset_raw, val_dataset_raw = train_test_split(
@@ -41,8 +41,12 @@ if __name__ == "__main__":
         shuffle=False,
     )
 
-    train_dataset = PriceDataset(train_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN)
-    val_dataset = PriceDataset(val_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN)
+    train_dataset = PriceDataset(
+        train_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN
+    )
+    val_dataset = PriceDataset(
+        val_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN
+    )
 
     num_features = train_dataset.X.shape[1]
     sequence_length = train_dataset.X.shape[2]
@@ -64,7 +68,15 @@ if __name__ == "__main__":
         ### train
         model.train()
 
-        train_signals = lf.model_to_signals(model, train_dataset, device=DEVICE, batch_size=BATCH_SIZE, eval_mode=False, epoch=epoch, total_epochs=EPOCHS)
+        train_signals = lf.model_to_signals(
+            model,
+            train_dataset,
+            device=DEVICE,
+            batch_size=BATCH_SIZE,
+            eval_mode=False,
+            epoch=epoch,
+            total_epochs=EPOCHS,
+        )
         train_loss = loss_fn(train_signals, train_dataset)
         train_loss.backward()
 
@@ -75,9 +87,17 @@ if __name__ == "__main__":
         ### val
         model.eval()
         with torch.no_grad():
-            val_signals = lf.model_to_signals(model, val_dataset, device=DEVICE, batch_size=BATCH_SIZE, eval_mode=True, epoch=epoch, total_epochs=EPOCHS)
+            val_signals = lf.model_to_signals(
+                model,
+                val_dataset,
+                device=DEVICE,
+                batch_size=BATCH_SIZE,
+                eval_mode=True,
+                epoch=epoch,
+                total_epochs=EPOCHS,
+            )
             val_loss = loss_fn(val_signals, val_dataset)
-        
+
         train_losses.append(train_loss.item())
         val_losses.append(val_loss.item())
 
@@ -89,14 +109,22 @@ if __name__ == "__main__":
 
     def model_wrapper(data, model, device, seq_len=10, batch_size=32):
         dataset = PriceDataset(data, add_ticker=DATA["symbols"][1], seq_len=seq_len)
-        raw_signals = lf.model_to_signals(model, dataset, device=device, batch_size=batch_size, eval_mode=True, epoch=EPOCHS, total_epochs=EPOCHS)
+        raw_signals = lf.model_to_signals(
+            model,
+            dataset,
+            device=device,
+            batch_size=batch_size,
+            eval_mode=True,
+            epoch=EPOCHS,
+            total_epochs=EPOCHS,
+        )
         signals = pd.Series(raw_signals.cpu().numpy(), index=data.index)
         return signals
 
-    plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Val Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
+    plt.plot(train_losses, label="Train Loss")
+    plt.plot(val_losses, label="Val Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
     plt.legend()
 
     vb = VectorizedBacktest(
@@ -106,14 +134,28 @@ if __name__ == "__main__":
         commission_fixed=0.0,
         leverage=1.0,
     )
-    vb.load_data(val_dataset_raw, symbols=DATA["symbols"], interval=DATA["interval"], age_days=DATA["age_days"])
-    vb.run_strategy(model_wrapper, verbose=True, model=model, device=DEVICE, seq_len=SEQ_LEN, batch_size=BATCH_SIZE)
+    vb.load_data(
+        val_dataset_raw,
+        symbols=DATA["symbols"],
+        interval=DATA["interval"],
+        age_days=DATA["age_days"],
+    )
+    vb.run_strategy(
+        model_wrapper,
+        verbose=True,
+        model=model,
+        device=DEVICE,
+        seq_len=SEQ_LEN,
+        batch_size=BATCH_SIZE,
+    )
 
     backtest_metrics = vb.get_performance_metrics()
     print("Backtest metrics:", backtest_metrics)
     vb.plot_performance(mode="basic")
 
     option = input("Save Model? y/N: ")
-    if option.lower() == 'y':
-        torch.save(model.state_dict(), f"{round(backtest_metrics['Sharpe'],2)}-policy.pth")
+    if option.lower() == "y":
+        torch.save(
+            model.state_dict(), f"{round(backtest_metrics['Sharpe'],2)}-policy.pth"
+        )
         print("Model saved as allocator_policy.pth")
