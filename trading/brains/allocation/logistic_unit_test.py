@@ -18,14 +18,14 @@ from datasets import PriceDataset
 from trading.backtesting.backtesting import VectorizedBacktest
 
 if __name__ == "__main__":
-    EPOCHS = 32
+    EPOCHS = 128
     SEQ_LEN = 1
     BATCH_SIZE = 2 ** 16
 
     DATA = {
         "symbols": ["SOL-USDT", "BTC-USDT"],
         "days": 90,
-        "interval": "5m",
+        "interval": "1m",
         "age_days": 0,
         "data_source": "binance",
         "cache_expiry_hours": -1,
@@ -47,8 +47,7 @@ if __name__ == "__main__":
     num_features = train_dataset.X.shape[1]
     sequence_length = train_dataset.X.shape[2]
 
-    # Create all 4 model types
-    model_types = ['linear', 'log', 'poly', 'sqrt']
+    model_types = ['linear', 'log', 'exp', 'poly', 'sqrt']
     models = {}
     optimizers = {}
     train_losses_dict = {}
@@ -143,7 +142,7 @@ if __name__ == "__main__":
             'metrics': backtest_metrics,
             'equity_curve': vb.get_equity_curve()
         }
-        print(f"{model_type} - Sharpe: {backtest_metrics['Sharpe_Ratio']:.4f}, Total Return: {backtest_metrics['Total_Return']:.4f}")
+        print(f"{model_type} - Sharpe: {backtest_metrics['Sharpe_Ratio']:.4f}")
 
     # Plot all strategy curves together
     plt.figure(figsize=(12, 6))

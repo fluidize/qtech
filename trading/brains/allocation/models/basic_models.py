@@ -27,6 +27,17 @@ class LogMLR(nn.Module):
         return self.linear(x)
 
 
+class ExponentialMLR(nn.Module):
+    def __init__(self, num_features):
+        super().__init__()
+        self.num_features = num_features
+        self.linear = nn.Linear(num_features, 1)
+
+    def forward(self, x):
+        x = torch.exp(x)
+        return self.linear(x)
+
+
 class PolynomialMLR(nn.Module):
     def __init__(self, num_features, degree=2):
         super().__init__()
@@ -60,6 +71,8 @@ class LogisticUnit(nn.Module):
             self.mlr = MLR(num_features)
         elif model_type == 'log':
             self.mlr = LogMLR(num_features)
+        elif model_type == 'exp':
+            self.mlr = ExponentialMLR(num_features)
         elif model_type == 'poly':
             self.mlr = PolynomialMLR(num_features)
         elif model_type == 'sqrt':
