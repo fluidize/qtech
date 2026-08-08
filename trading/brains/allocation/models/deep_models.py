@@ -225,8 +225,11 @@ class Booster(nn.Module):
 class AllocatorPolicy(nn.Module):
     def __init__(
         self,
-        channels,
-        width,
+
+        in_channels, #num features for STL
+        in_width, #lookback len for STL + conv + lstm
+        out_channels=1, #STL output features
+
         conv_hidden_channel_size=32,
         conv_hidden_linear_size=32,
         conv_out_size=32,
@@ -237,21 +240,19 @@ class AllocatorPolicy(nn.Module):
         super().__init__()
 
         self.stu = SequentialTransformLayer(
-            num_features=channels,
-            num_outputs=1
+            num_features=in_channels,
+            num_outputs=out_channels,
         )
 
-        channels = 1
-
         self.conv = ConvolutionEncoder(
-            channels,
-            width,
+            out_channels,
+            in_width,
             hidden_channel_size=conv_hidden_channel_size,
             hidden_linear_size=conv_hidden_linear_size,
             out_size=conv_out_size,
         )
         self.lstm = LSTMEncoder(
-            channels, width, hidden_size=lstm_hidden_size, out_size=lstm_out_size
+            out_channels, in_width, hidden_size=lstm_hidden_size, out_size=lstm_out_size
         )
 
         self.mean_booster = Booster(lstm_out_size, conv_out_size, out_size=1)

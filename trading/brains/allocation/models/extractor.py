@@ -171,17 +171,26 @@ class SequentialTransformLayer(nn.Module):
         self.num_outputs = num_outputs
         self.transforms = transforms
         self.weights = nn.Parameter(
-            torch.randn(1, num_features * len(transforms), num_outputs)
+            torch.randn(1, num_outputs, num_features*len(transforms), 1)
         )
         self.bias = nn.Parameter(torch.zeros(1, num_outputs, 1))
 
     def forward(self, x: torch.Tensor):
         x_transformed = [f(x) for f in self.transforms]
         # each transform output: (B, C, W)
-        # combined: M * (B, C, W)
+        # combined: [M * (B, C, W)]
 
         z = torch.cat(x_transformed, dim=1)
         # (B, C*M, W)
+
+        z = z.unsqueeze(1)
+        # (B, 1, C*M, W) where 1 is the copy dimension
+        z = z.repeat(1, self.num_outputs, 1, 1)
+        # (B, num_outputs, C*M, W)
+        z = z * self.weights
+        # (B, num_outputs, C*M, W)
+        z = z.sum(dim=2)
+        # (B, num_outputs, W)
 
         z = z.sum(dim=1, keepdim=True)
         # (B, 1, W)

@@ -52,8 +52,9 @@ if __name__ == "__main__":
     sequence_length = train_dataset.X.shape[2]
 
     model = AllocatorPolicy(
-        channels=num_features,
-        width=sequence_length,
+        in_channels=num_features,
+        in_width=sequence_length,
+        out_channels=3,
     ).to(DEVICE)
     optimizer = optim.RMSprop(model.parameters(), lr=LEARNING_RATE)
     loss_fn = lf.HullTacLoss(device=DEVICE)
