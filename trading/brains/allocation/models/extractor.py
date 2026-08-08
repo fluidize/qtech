@@ -159,26 +159,40 @@ ALL_TRANSFORMS = [
 ]
 
 
-class SequentialTransformUnit(nn.Module):
-    def __init__(self, num_features: int, transforms: list[callable] = ALL_TRANSFORMS):
+class SequentialTransformLayer(nn.Module):
+    def __init__(
+        self,
+        num_features: int,
+        num_outputs: int = 1, #how many duplicates?
+        transforms: list[callable] = ALL_TRANSFORMS,
+    ):
         super().__init__()
         self.num_features = num_features
+        self.num_outputs = num_outputs
         self.transforms = transforms
-        self.weights = nn.Parameter(torch.randn(1, num_features * len(transforms), 1))
-        self.bias = nn.Parameter(torch.zeros(1, 1, 1))
+        self.weights = nn.Parameter(
+            torch.randn(1, num_features * len(transforms), num_outputs)
+        )
+        self.bias = nn.Parameter(torch.zeros(1, num_outputs, 1))
 
     def forward(self, x: torch.Tensor):
         x_transformed = [f(x) for f in self.transforms]
+        # each transform output: (B, C, W)
+        # combined: M * (B, C, W)
 
-        # M * (B, C, W)
         z = torch.cat(x_transformed, dim=1)
-        # (B, C*M , W)
+        # (B, C*M, W)
 
-        z = self.weights * z
         z = z.sum(dim=1, keepdim=True)
         # (B, 1, W)
 
-        return z + self.bias
+        z = z.repeat(1, self.num_outputs, 1)
+        # (B, num_outputs, W)
+
+        z = z + self.bias
+        # (B, num_outputs, W)
+
+        return z
 
 
 if __name__ == "__main__":

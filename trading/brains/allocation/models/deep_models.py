@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .extractor import SequentialTransformUnit
+from .extractor import SequentialTransformLayer
 
 DROPOUT = 1 / 4
 
@@ -236,8 +236,9 @@ class AllocatorPolicy(nn.Module):
 
         super().__init__()
 
-        self.stu = SequentialTransformUnit(
-            num_features=channels
+        self.stu = SequentialTransformLayer(
+            num_features=channels,
+            num_outputs=1
         )
 
         channels = 1
