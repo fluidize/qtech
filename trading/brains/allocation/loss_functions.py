@@ -173,6 +173,18 @@ class SharpeLoss(nn.Module):
         return -loss
 
 
+class SortinoLoss(nn.Module):
+    def __init__(self, device: str = "cuda"):
+        super().__init__()
+        self.device = device
+        self.tb = TorchBacktest(device=device)
+
+    def forward(self, raw_signals, dataset):
+        self.tb.load_dataset(dataset)
+        loss = self.tb.get_sortino(raw_signals)
+        return -loss
+
+
 class InformationRatioLoss(nn.Module):
     def __init__(self, device: str = "cuda"):
         super().__init__()
@@ -234,30 +246,3 @@ class TurnoverLoss(nn.Module):
         turnover = torch.abs(position_changes).mean()
 
         return turnover
-
-
-class AllocationLoss(nn.Module):
-    def __init__(
-        self,
-        device: str = "cuda",
-        sortino_weight=1,
-        turnover_weight=0.05,
-        undertrading_weight=0.05,
-    ):
-        super().__init__()
-        self.tb = TorchBacktest(device=device)
-        self.sortino_weight = sortino_weight
-        self.turnover_weight = turnover_weight
-        self.undertrading_weight = undertrading_weight
-
-    def forward(self, raw_signals, dataset):
-        self.tb.load_dataset(dataset)
-        sortino_value = self.tb.get_sortino(raw_signals)
-        turnover_value = self.tb.get_turnover(raw_signals)
-        undertrading_value = self.tb.get_pos_penalty(raw_signals)
-        
-        return (
-            self.sortino_weight * sortino_value
-            + self.turnover_weight * turnover_value
-            + self.undertrading_weight * undertrading_value
-        )

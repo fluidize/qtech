@@ -5,6 +5,10 @@ import torch.nn.functional as F
 DEFAULT_WINDOW = 4
 
 
+def _safe_log(x: torch.Tensor) -> torch.Tensor:
+    return torch.log(torch.clamp(x, min=1e-8))
+
+
 def identity(x: torch.Tensor):
     return x
 
@@ -53,7 +57,8 @@ def rolling_shannon_entropy(x: torch.Tensor, window: int = DEFAULT_WINDOW):
     windows = windows.permute(0, 1, 3, 2)
 
     probs = torch.softmax(windows, dim=-1)
-    entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=-1)
+    probs = torch.clamp(probs, min=1e-8)
+    entropy = -(probs * _safe_log(probs)).sum(dim=-1)
     return entropy
 
 
@@ -105,8 +110,10 @@ def acceleration(x: torch.Tensor):
 
 
 def log_diff(x: torch.Tensor):
+    ratios = x[:, :, 1:] / torch.clamp(x[:, :, :-1], min=1e-8)
+    safe_ratios = torch.clamp(ratios, min=1e-8)
     return torch.cat(
-        [torch.zeros_like(x[:, :, :1]), torch.log(x[:, :, 1:] / x[:, :, :-1] + 1e-8)],
+        [torch.zeros_like(x[:, :, :1]), _safe_log(safe_ratios)],
         dim=2,
     )
 
@@ -149,10 +156,10 @@ ALL_TRANSFORMS = [
     rolling_max,
     rolling_min,
     rolling_shannon_entropy,
-    rolling_linear_regression_slope,
+    # rolling_linear_regression_slope,
     velocity,
     acceleration,
-    #    log_diff,
+    log_diff,
     rfft,
     ifft,
     kalman_filter,
@@ -163,7 +170,7 @@ class SequentialTransformLayer(nn.Module):
     def __init__(
         self,
         num_features: int,
-        num_outputs: int = 1, #how many duplicates?
+        num_outputs: int = 1,
         transforms: list[callable] = ALL_TRANSFORMS,
     ):
         super().__init__()
@@ -171,7 +178,7 @@ class SequentialTransformLayer(nn.Module):
         self.num_outputs = num_outputs
         self.transforms = transforms
         self.weights = nn.Parameter(
-            torch.randn(1, num_outputs, num_features*len(transforms), 1)
+            torch.randn(1, num_outputs, num_features * len(transforms), 1)
         )
         self.bias = nn.Parameter(torch.zeros(1, num_outputs, 1))
 
@@ -190,12 +197,6 @@ class SequentialTransformLayer(nn.Module):
         z = z * self.weights
         # (B, num_outputs, C*M, W)
         z = z.sum(dim=2)
-        # (B, num_outputs, W)
-
-        z = z.sum(dim=1, keepdim=True)
-        # (B, 1, W)
-
-        z = z.repeat(1, self.num_outputs, 1)
         # (B, num_outputs, W)
 
         z = z + self.bias
@@ -224,8 +225,8 @@ if __name__ == "__main__":
     dataset = PriceDataset(sample_data, add_ticker="BTC-USDT", seq_len=16)
     batch = dataset[0][0].unsqueeze(0)
 
-    layer = SequentialTransformUnit(
-        num_features=batch.shape[1], transforms=ALL_TRANSFORMS
+    layer = SequentialTransformLayer(
+        num_features=batch.shape[1], num_outputs=3, transforms=ALL_TRANSFORMS
     )
     output = layer(batch)
 

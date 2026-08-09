@@ -18,13 +18,13 @@ from datasets import PriceDataset
 from trading.backtesting.backtesting import VectorizedBacktest
 
 if __name__ == "__main__":
-    EPOCHS = 1024
-    SEQ_LEN = 16
+    EPOCHS = 512
+    SEQ_LEN = 8
     BATCH_SIZE = 2**16
 
     DATA = {
         "symbols": ["SOL-USDT", "BTC-USDT"],
-        "days": 60,
+        "days": 90,
         "interval": "1m",
         "age_days": 0,
         "data_source": "binance",
@@ -33,8 +33,8 @@ if __name__ == "__main__":
     }
     LEARNING_RATE = 5e-6
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-    data = mt.fetch_data(**DATA)
+# 
+    data = mt.fetch_data(**DATA) 
     train_dataset_raw, val_dataset_raw = train_test_split(
         data,
         test_size=0.25,
@@ -54,7 +54,6 @@ if __name__ == "__main__":
     model = AllocatorPolicy(
         in_channels=num_features,
         in_width=sequence_length,
-        out_channels=3,
     ).to(DEVICE)
     optimizer = optim.RMSprop(model.parameters(), lr=LEARNING_RATE)
     loss_fn = lf.HullTacLoss(device=DEVICE)

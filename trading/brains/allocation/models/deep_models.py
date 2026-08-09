@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 from .extractor import SequentialTransformLayer
 
-DROPOUT = 1 / 4
+DROPOUT = 1 / 8
 
 
 def initialize_weights(module):
@@ -47,33 +47,26 @@ class FeatureGate(nn.Module):
         return x * gate
 
 
-class MultiScalePooling(nn.Module):
+class AttentionPooling(nn.Module):
     def __init__(self, input_channels=32, reduction_dim=32):
         super().__init__()
 
         self.reduction_dim = reduction_dim
-
-        self.aap_1 = nn.AdaptiveAvgPool1d(1)
-        self.aap_2 = nn.AdaptiveAvgPool1d(4)
-        self.aap_3 = nn.AdaptiveAvgPool1d(8)
-
         self.channel_reducer = nn.Conv1d(input_channels, self.reduction_dim, 1)
+        self.attention = nn.Sequential(
+            nn.Conv1d(self.reduction_dim, self.reduction_dim, kernel_size=1),
+            nn.Tanh(),
+            nn.Conv1d(self.reduction_dim, 1, kernel_size=1),
+        )
 
-        self.output_dim = self.reduction_dim * (1 + 4 + 8)
+        self.output_dim = self.reduction_dim
 
     def forward(self, x):
-        x1 = self.aap_1(x)
-        x1 = self.channel_reducer(x1).flatten(1)  # (B,64)
-
-        x2 = self.aap_2(x)
-        x2 = self.channel_reducer(x2).flatten(1)  # (B,256)
-
-        x3 = self.aap_3(x)
-        x3 = self.channel_reducer(x3).flatten(1)  # (B,512)
-
-        x = torch.cat([x1, x2, x3], dim=1)
-
-        return x
+        x = self.channel_reducer(x)  # (B, reduction_dim, W)
+        scores = self.attention(x).squeeze(1)  # (B, W)
+        weights = torch.softmax(scores, dim=-1).unsqueeze(1)  # (B, 1, W)
+        pooled = torch.sum(x * weights, dim=-1)  # (B, reduction_dim)
+        return pooled
 
 
 class ConvolutionEncoder(nn.Module):
@@ -96,7 +89,7 @@ class ConvolutionEncoder(nn.Module):
         # Feature gate for input channels
         self.feature_gate = FeatureGate(channels)
 
-        self.msp = MultiScalePooling(
+        self.msp = AttentionPooling(
             input_channels=hidden_channel_size, reduction_dim=hidden_channel_size
         )
 
@@ -228,7 +221,7 @@ class AllocatorPolicy(nn.Module):
 
         in_channels, #num features for STL
         in_width, #lookback len for STL + conv + lstm
-        out_channels=1, #STL output features
+        out_channels=2, #STL output features
 
         conv_hidden_channel_size=32,
         conv_hidden_linear_size=32,
@@ -239,9 +232,43 @@ class AllocatorPolicy(nn.Module):
 
         super().__init__()
 
-        self.stu = SequentialTransformLayer(
-            num_features=in_channels,
-            num_outputs=out_channels,
+        self.stu = nn.Sequential(
+            SequentialTransformLayer(
+                num_features=in_channels,
+                num_outputs=out_channels,
+            ),
+            SequentialTransformLayer(
+                num_features=out_channels,
+                num_outputs=out_channels,
+            ),
+            SequentialTransformLayer(
+                num_features=out_channels,
+                num_outputs=out_channels,
+            ),
+            SequentialTransformLayer(
+                num_features=out_channels,
+                num_outputs=out_channels,
+            ),
+            SequentialTransformLayer(
+                num_features=out_channels,
+                num_outputs=out_channels,
+            ),
+            SequentialTransformLayer(
+                num_features=out_channels,
+                num_outputs=out_channels,
+            ),
+            SequentialTransformLayer(
+                num_features=out_channels,
+                num_outputs=out_channels,
+            ),
+            SequentialTransformLayer(
+                num_features=out_channels,
+                num_outputs=out_channels,
+            ),
+                SequentialTransformLayer(
+                num_features=out_channels,
+                num_outputs=out_channels,
+            ),
         )
 
         self.conv = ConvolutionEncoder(

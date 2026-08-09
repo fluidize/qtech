@@ -23,7 +23,7 @@ class LogMLR(nn.Module):
         self.linear = nn.Linear(num_features, 1)
 
     def forward(self, x):
-        x = torch.log(x + 1e-8)
+        x = torch.log(torch.clamp(x, min=1e-8))
         return self.linear(x)
 
 
