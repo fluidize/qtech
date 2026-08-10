@@ -3,6 +3,7 @@ import pandas as pd
 from tqdm import tqdm
 from rich import print
 
+import contextlib
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -20,7 +21,7 @@ from trading.backtesting.backtesting import VectorizedBacktest
 if __name__ == "__main__":
     EPOCHS = 512
     SEQ_LEN = 8
-    BATCH_SIZE = 2**16
+    BATCH_SIZE = 4096
 
     DATA = {
         "symbols": ["SOL-USDT", "BTC-USDT"],

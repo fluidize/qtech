@@ -4,6 +4,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as checkpoint
 
 from .extractor import SequentialTransformLayer
 
@@ -236,38 +237,47 @@ class AllocatorPolicy(nn.Module):
             SequentialTransformLayer(
                 num_features=in_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
             SequentialTransformLayer(
                 num_features=out_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
             SequentialTransformLayer(
                 num_features=out_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
             SequentialTransformLayer(
                 num_features=out_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
             SequentialTransformLayer(
                 num_features=out_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
             SequentialTransformLayer(
                 num_features=out_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
             SequentialTransformLayer(
                 num_features=out_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
             SequentialTransformLayer(
                 num_features=out_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
                 SequentialTransformLayer(
                 num_features=out_channels,
                 num_outputs=out_channels,
+                seq_len=in_width,
             ),
         )
 
@@ -324,7 +334,7 @@ class AllocatorPolicy(nn.Module):
         return F.tanh(action).squeeze(-1)
 
     def forward(self, x):
-        x = self.stu(x)
+        x = checkpoint.checkpoint(self.stu, x, use_reentrant=False)
 
         x1 = self.conv(x)
         x2 = self.lstm(x)

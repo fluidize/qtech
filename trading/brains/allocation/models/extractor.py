@@ -48,6 +48,29 @@ def rolling_min(x: torch.Tensor, window: int = DEFAULT_WINDOW):
     return -F.max_pool1d(-x_pad, kernel_size=window, stride=1, padding=0)
 
 
+def rolling_median(x: torch.Tensor, window: int = DEFAULT_WINDOW):
+    x_pad = same_pad_1d(x, window)
+    batch_size, channels, seq_len = x.shape
+    windows = F.unfold(
+        x_pad.unsqueeze(2), kernel_size=(1, window), padding=0, stride=(1, 1)
+    )
+    windows = windows.view(batch_size, channels, window, seq_len)
+    return torch.median(windows, dim=2).values
+
+
+def rolling_range(x: torch.Tensor, window: int = DEFAULT_WINDOW):
+    return rolling_max(x, window=window) - rolling_min(x, window=window)
+
+
+def rolling_position(x: torch.Tensor, window: int = DEFAULT_WINDOW):
+    rng = rolling_range(x, window=window)
+    return (x - rolling_min(x, window=window)) / (rng + 1e-8)
+
+
+def detrended(x: torch.Tensor, window: int = DEFAULT_WINDOW):
+    return x - sma(x, window=window)
+
+
 def rolling_shannon_entropy(x: torch.Tensor, window: int = DEFAULT_WINDOW):
     x_pad = same_pad_1d(x, window)
     batch_size, channels, seq_len = x.shape
@@ -151,18 +174,22 @@ def kalman_filter(
 ALL_TRANSFORMS = [
     identity,
     sma,
-    rolling_std,
-    rolling_zscore,
+    # rolling_std,
+    # rolling_zscore,
     rolling_max,
     rolling_min,
-    rolling_shannon_entropy,
+    rolling_median,
+    rolling_range,
+    rolling_position,
+    detrended,
+    # rolling_shannon_entropy,
     # rolling_linear_regression_slope,
     velocity,
     acceleration,
     log_diff,
     rfft,
     ifft,
-    kalman_filter,
+    # kalman_filter,
 ]
 
 
@@ -171,6 +198,7 @@ class SequentialTransformLayer(nn.Module):
         self,
         num_features: int,
         num_outputs: int = 1,
+        seq_len: int | None = None,
         transforms: list[callable] = ALL_TRANSFORMS,
     ):
         super().__init__()
@@ -181,26 +209,32 @@ class SequentialTransformLayer(nn.Module):
             torch.randn(1, num_outputs, num_features * len(transforms), 1)
         )
         self.bias = nn.Parameter(torch.zeros(1, num_outputs, 1))
+        self.norm = nn.LayerNorm(seq_len)
 
     def forward(self, x: torch.Tensor):
-        x_transformed = [f(x) for f in self.transforms]
-        # each transform output: (B, C, W)
-        # combined: [M * (B, C, W)]
+        # force fp32 in autocast
+        x = x.float()
+        # (B, C, W)
 
-        z = torch.cat(x_transformed, dim=1)
-        # (B, C*M, W)
+        transformed = [f(x) for f in self.transforms] # [M * (B, C, W)]
+        z = torch.cat(transformed, dim=1) # (B, C*M, W)
+        
+        z = torch.matmul(self.weights.squeeze(0).squeeze(-1), z) # (O, C*M) @ (B, C*M, W) -> (B, O, W)
+        # (B, O, W)
 
-        z = z.unsqueeze(1)
-        # (B, 1, C*M, W) where 1 is the copy dimension
-        z = z.repeat(1, self.num_outputs, 1, 1)
-        # (B, num_outputs, C*M, W)
-        z = z * self.weights
-        # (B, num_outputs, C*M, W)
-        z = z.sum(dim=2)
-        # (B, num_outputs, W)
+        # equivalent to:
+        # z = z.unsqueeze(1)
+        # # (B, 1, C*M, W)
+        # z = self.weights * z
+        # # (1, O, C*M, 1) * (B, 1, C*M, W) -> (B, O, C*M, W)
+        # z = z.sum(dim=2)
+        # # (B, O, W)  -- weighted features summed over C*M
 
         z = z + self.bias
-        # (B, num_outputs, W)
+        # (B, O, W)
+
+        z = self.norm(z)
+        # (B, O, W)
 
         return z
 
