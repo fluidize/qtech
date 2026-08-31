@@ -13,10 +13,6 @@ __pycache__/
 # Ignore log files
 *.log
 
-# Ignore model files
-*.keras
-*.pth
-
 # Ignore other files and directories
 node_modules/
 .DS_Store

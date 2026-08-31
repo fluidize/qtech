@@ -21,11 +21,11 @@ from trading.backtesting.backtesting import VectorizedBacktest
 if __name__ == "__main__":
     EPOCHS = 512
     SEQ_LEN = 8
-    BATCH_SIZE = 4096
+    BATCH_SIZE = 2 ** 20
 
     DATA = {
-        "symbols": ["SOL-USDT", "BTC-USDT"],
-        "days": 90,
+        "symbols": ["SOL-USDT"],
+        "days": 5,
         "interval": "1m",
         "age_days": 0,
         "data_source": "binance",
@@ -42,11 +42,17 @@ if __name__ == "__main__":
         shuffle=False,
     )
 
+    # train_dataset = PriceDataset(
+    #     train_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN
+    # )
+    # val_dataset = PriceDataset(
+    #     val_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN
+    # )
     train_dataset = PriceDataset(
-        train_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN
+        train_dataset_raw, add_ticker=DATA["symbols"][0], seq_len=SEQ_LEN
     )
     val_dataset = PriceDataset(
-        val_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN
+        val_dataset_raw, add_ticker=DATA["symbols"][0], seq_len=SEQ_LEN
     )
 
     num_features = train_dataset.X.shape[1]
@@ -109,7 +115,8 @@ if __name__ == "__main__":
     progress_bar.close()
 
     def model_wrapper(data, model, device, seq_len=10, batch_size=32):
-        dataset = PriceDataset(data, add_ticker=DATA["symbols"][1], seq_len=seq_len)
+        # dataset = PriceDataset(data, add_ticker=DATA["symbols"][1], seq_len=seq_len)
+        dataset = PriceDataset(data, add_ticker=DATA["symbols"][0], seq_len=seq_len)
         raw_signals = lf.model_to_signals(
             model,
             dataset,
@@ -157,6 +164,5 @@ if __name__ == "__main__":
     option = input("Save Model? y/N: ")
     if option.lower() == "y":
         torch.save(
-            model.state_dict(), f"{round(backtest_metrics['Sharpe'],2)}-policy.pth"
+            model.state_dict(), f"{round(backtest_metrics['Sharpe_Ratio'],2)}-{DATA["interval"]}policy.pth"
         )
-        print("Model saved as allocator_policy.pth")
