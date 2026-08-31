@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trading"
 version = "1.0.0"
+dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["."]

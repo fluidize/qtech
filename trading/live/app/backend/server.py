@@ -1,18 +1,7 @@
-"""Live trading app backend.
-
-A thin aiohttp server that:
-- exposes the registered strategies over REST (``/api/strategies``)
-- runs a strategy once over historical data (``/api/backtest``)
-- streams candle closes + live algorithm decisions over WebSocket (``/ws/stream``)
-- serves the built frontend statically (``/api/*`` routes take priority)
-
-The algorithm side follows the backtesting contract exactly: each strategy is a
-pure ``data -> signal_series`` function, and signals are discretized to
-``{-1, 0, 1}`` for display.
-"""
-
 import asyncio
 import json
+import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -21,8 +10,72 @@ import numpy as np
 import pandas as pd
 from aiohttp import web
 
+
+class LogBroker:
+    def __init__(self) -> None:
+        self._loops: Dict[int, asyncio.AbstractEventLoop] = {}
+        self._subs: List[asyncio.Queue] = []
+
+    def subscribe(self, loop: asyncio.AbstractEventLoop) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        self._subs.append(q)
+        self._loops[id(q)] = loop
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        if q in self._subs:
+            self._subs.remove(q)
+        self._loops.pop(id(q), None)
+
+    def publish(self, message: str) -> None:
+        for q in list(self._subs):
+            loop = self._loops.get(id(q))
+            if loop is None or loop.is_closed():
+                continue
+
+            async def _push(q=q):
+                if q.full():
+                    try:
+                        q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                q.put_nowait(message)
+
+            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(_push()))
+
+
+LOG_BROKER = LogBroker()
+LOGGER = logging.getLogger("trading.live")
+
+
+class WsLogHandler(logging.Handler):
+    """A logging.Handler that forwards every record to the live log subscribers."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            LOG_BROKER.publish(self.format(record))
+        except Exception:
+            pass
+
+
+def log(*args, **kwargs) -> None:
+    LOGGER.info(*args, **kwargs)
+
+
+def install_ws_log_handler() -> None:
+    LOGGER.setLevel(logging.INFO)
+    if not any(isinstance(h, WsLogHandler) for h in LOGGER.handlers):
+        handler = WsLogHandler()
+        handler.setFormatter(
+            logging.Formatter("[%(asctime)s %(levelname)s] %(message)s", "%H:%M:%S")
+        )
+        LOGGER.addHandler(handler)
+    # shut up noisy library loggers unless something real happens
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+
+
 import trading.model_tools as mt
-from .strategies import STRATEGIES, normalize_signals
+from .registry import get_strategies, get_strategy
 
 # static frontend build output
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
@@ -41,7 +94,9 @@ BINANCE_WS_BASE = "wss://stream.binance.com:9443/ws/"
 
 def _synthetic_data(days: int, interval: str) -> pd.DataFrame:
     """Generate random-walk OHLCV so the app runs offline when a feed is unavailable."""
-    bar_minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}.get(interval, 60)
+    bar_minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}.get(
+        interval, 60
+    )
     n = max(days * (24 * 60 // bar_minutes), 100)
     rng = np.random.default_rng(0)
     drift = rng.normal(0, 0.002, n).cumsum()
@@ -65,9 +120,15 @@ def _synthetic_data(days: int, interval: str) -> pd.DataFrame:
 
 async def _fetch_feed(symbol, days, interval) -> pd.DataFrame:
     """Try the real feed, fall back to synthetic data so the app always has bars."""
-    data = await asyncio.to_thread(mt.fetch_data, [symbol], days, interval, 0, "binance", verbose=False)
+    log(f"fetching feed symbol={symbol} interval={interval} days={days}")
+    data = await asyncio.to_thread(
+        mt.fetch_data, [symbol], days, interval, 0, "binance", verbose=False
+    )
     if data.empty:
+        log(f"feed empty for {symbol} - falling back to synthetic data")
         data = _synthetic_data(days, interval)
+    else:
+        log(f"fetched {len(data)} bars for {symbol}")
     return data
 
 
@@ -91,7 +152,9 @@ async def handle_health(request: web.Request) -> web.Response:
 
 
 async def handle_strategies(request: web.Request) -> web.Response:
-    payload = {name: {"params": meta["params"]} for name, meta in STRATEGIES.items()}
+    payload = {
+        name: {"params": meta["params"]} for name, meta in get_strategies().items()
+    }
     return web.json_response(payload)
 
 
@@ -104,12 +167,15 @@ async def handle_backtest(request: web.Request) -> web.Response:
     strategy_name = query.get("strategy", "ema_cross")
     params = json.loads(query.get("params", "{}"))
 
-    meta = STRATEGIES.get(strategy_name)
+    meta = get_strategy(strategy_name)
     if meta is None:
-        return web.json_response({"error": f"unknown strategy: {strategy_name}"}, status=404)
+        return web.json_response(
+            {"error": f"unknown strategy: {strategy_name}"}, status=404
+        )
 
     data = await _fetch_feed(symbol, days, interval)
-    signals = normalize_signals(meta["func"](data, **params))
+    log(f"running backtest strategy={strategy_name} bars={len(data)} params={params}")
+    signals = meta["func"](data, **params)
 
     candles = [_candle_to_json(i, _asdict(data.iloc[i])) for i in range(len(data))]
     decisions = [
@@ -118,7 +184,12 @@ async def handle_backtest(request: web.Request) -> web.Response:
     ]
 
     return web.json_response(
-        {"symbol": symbol, "interval": interval, "candles": candles, "decisions": decisions}
+        {
+            "symbol": symbol,
+            "interval": interval,
+            "candles": candles,
+            "decisions": decisions,
+        }
     )
 
 
@@ -161,7 +232,7 @@ async def _fetch_recent_klines(symbol: str, interval: str, limit: int) -> List[d
 
 def _decide(func, buffer: pd.DataFrame, **params) -> float:
     """Run a strategy over the buffer and return the latest discretized decision."""
-    signals = normalize_signals(func(buffer, **params))
+    signals = func(buffer, **params)
     return float(signals.iloc[-1])
 
 
@@ -177,11 +248,13 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
     strategy_name = query.get("strategy", "ema_cross")
     params = json.loads(query.get("params", "{}"))
 
-    meta = STRATEGIES.get(strategy_name)
+    meta = get_strategy(strategy_name)
     if meta is None:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        await ws.send_json({"type": "error", "message": f"unknown strategy: {strategy_name}"})
+        await ws.send_json(
+            {"type": "error", "message": f"unknown strategy: {strategy_name}"}
+        )
         return ws
 
     ws = web.WebSocketResponse()
@@ -190,8 +263,12 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
     try:
         seed = await _fetch_recent_klines(symbol, interval, BUFFER_SIZE)
     except Exception as exc:
-        await ws.send_json({"type": "error", "message": f"failed to seed history: {exc}"})
+        log(f"failed to seed history for {symbol}: {exc}")
+        await ws.send_json(
+            {"type": "error", "message": f"failed to seed history: {exc}"}
+        )
         return ws
+    log(f"stream seeding {len(seed)} historical candles for {symbol} {interval}")
 
     func = meta["func"]
 
@@ -210,7 +287,7 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
 
     buffer: List[dict] = []
     seed_df = to_df(seed)
-    seed_signals = normalize_signals(func(seed_df, **params))
+    seed_signals = func(seed_df, **params)
     # replay the seed so the chart has context and the strategy is warmed up
     for i, row in enumerate(seed):
         buffer.append(row)
@@ -218,9 +295,12 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
         await ws.send_json({"type": "candle", "candle": row, "decision": decision})
 
     stream_url = f"{BINANCE_WS_BASE}{_binance_symbol(symbol).lower()}@kline_{interval}"
+    log(f"connecting to Binance websocket {stream_url}")
     try:
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(stream_url, heartbeat=30) as bws:
+                log(f"websocket connected for {symbol} {interval}")
+                last_log = 0.0
                 async for msg in bws:
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         continue
@@ -231,14 +311,52 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
                     candle = _kline_to_json(k)
                     buffer.append(candle)
                     buffer = buffer[-BUFFER_SIZE:]
+                    decision = _decide(func, to_df(buffer), **params)
                     await ws.send_json(
-                        {"type": "candle", "candle": candle, "decision": _decide(func, to_df(buffer), **params)}
+                        {"type": "candle", "candle": candle, "decision": decision}
                     )
+                    now = time.monotonic()
+                    if now - last_log >= 2.0:
+                        last_log = now
+                        log(
+                            f"live {symbol} {interval} @ {candle['time']} close={candle['close']:.6f} decision={decision:+.0f}"
+                        )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        log(f"live stream error for {symbol}: {exc}")
         if not ws.closed:
-            await ws.send_json({"type": "error", "message": f"live stream error: {exc}"})
+            try:
+                await ws.send_json(
+                    {"type": "error", "message": f"live stream error: {exc}"}
+                )
+            except (ConnectionResetError, aiohttp.ClientConnectionResetError):
+                pass
+    return ws
+
+
+async def handle_logs(request: web.Request) -> web.WebSocketResponse:
+    """Stream the Python backend's log output to the frontend."""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    q = LOG_BROKER.subscribe(request.app.loop)
+    try:
+        await ws.send_json({"type": "log", "line": "[backend] log stream connected"})
+        while not ws.closed:
+            try:
+                line = await asyncio.wait_for(q.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            try:
+                await ws.send_json({"type": "log", "line": line})
+            except (ConnectionResetError, aiohttp.ClientConnectionResetError):
+                break
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass
+    finally:
+        LOG_BROKER.unsubscribe(q)
     return ws
 
 
@@ -257,10 +375,12 @@ async def handle_static(request: web.Request) -> web.Response:
 
 def create_app() -> web.Application:
     app = web.Application()
+    install_ws_log_handler()
     app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/strategies", handle_strategies)
     app.router.add_get("/api/backtest", handle_backtest)
     app.router.add_get("/ws/stream", handle_stream)
+    app.router.add_get("/ws/logs", handle_logs)
     app.router.add_get("/", handle_index)
     app.router.add_get("/{path:.+}", handle_static)
     return app
