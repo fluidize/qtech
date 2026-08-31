@@ -14,7 +14,7 @@ pure ``data -> signal_series`` function, and signals are discretized to
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import aiohttp
 import numpy as np
@@ -34,10 +34,14 @@ DEFAULT_DAYS = 60
 DEFAULT_TICK_SECONDS = 1.0
 BUFFER_SIZE = 500
 
+# Binance endpoints (only the historical REST + live websocket are used for the stream)
+BINANCE_REST = "https://api.binance.com/api/v3/klines"
+BINANCE_WS_BASE = "wss://stream.binance.com:9443/ws/"
+
 
 def _synthetic_data(days: int, interval: str) -> pd.DataFrame:
     """Generate random-walk OHLCV so the app runs offline when a feed is unavailable."""
-    bar_minutes = {"15m": 15, "1h": 60, "4h": 240, "1d": 1440}.get(interval, 60)
+    bar_minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}.get(interval, 60)
     n = max(days * (24 * 60 // bar_minutes), 100)
     rng = np.random.default_rng(0)
     drift = rng.normal(0, 0.002, n).cumsum()
@@ -118,15 +122,60 @@ async def handle_backtest(request: web.Request) -> web.Response:
     )
 
 
+def _kline_to_json(kline: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a raw Binance kline payload (``k``) to our candle JSON."""
+    return {
+        "time": int(kline["t"] // 1000),
+        "open": float(kline["o"]),
+        "high": float(kline["h"]),
+        "low": float(kline["l"]),
+        "close": float(kline["c"]),
+        "volume": float(kline["v"]),
+    }
+
+
+def _binance_symbol(symbol: str) -> str:
+    """'SOL-USDT' -> 'SOLUSDT' (strip the quote-currency separator)."""
+    return symbol.replace("-", "").replace("/", "").upper()
+
+
+async def _fetch_recent_klines(symbol: str, interval: str, limit: int) -> List[dict]:
+    """Pull the most recent closed candles from Binance REST to warm up the strategy."""
+    url = f"{BINANCE_REST}?symbol={_binance_symbol(symbol)}&interval={interval}&limit={limit}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+            raw = await resp.json()
+    return [
+        {
+            "time": int(row[0] // 1000),  # open time is ms
+            "open": float(row[1]),
+            "high": float(row[2]),
+            "low": float(row[3]),
+            "close": float(row[4]),
+            "volume": float(row[5]),
+        }
+        for row in raw
+    ]
+
+
+def _decide(func, buffer: pd.DataFrame, **params) -> float:
+    """Run a strategy over the buffer and return the latest discretized decision."""
+    signals = normalize_signals(func(buffer, **params))
+    return float(signals.iloc[-1])
+
+
 async def handle_stream(request: web.Request) -> web.WebSocketResponse:
-    """Replay historical candles one-by-one, emitting the live algorithm decision each close."""
+    """Live Binance kline feed.
+
+    Seeds the strategy with recent history (so EMAs have warmup), then forwards
+    every new closed candle plus the algorithm's decision over the WebSocket.
+    """
     query = request.query
     symbol = query.get("symbol", DEFAULT_SYMBOL)
     interval = query.get("interval", DEFAULT_INTERVAL)
-    days = int(query.get("days", DEFAULT_DAYS))
     strategy_name = query.get("strategy", "ema_cross")
     params = json.loads(query.get("params", "{}"))
-    tick_seconds = float(query.get("tick", DEFAULT_TICK_SECONDS))
 
     meta = STRATEGIES.get(strategy_name)
     if meta is None:
@@ -138,23 +187,58 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
-    data = await _fetch_feed(symbol, days, interval)
+    try:
+        seed = await _fetch_recent_klines(symbol, interval, BUFFER_SIZE)
+    except Exception as exc:
+        await ws.send_json({"type": "error", "message": f"failed to seed history: {exc}"})
+        return ws
 
-    buffer = data.iloc[:0].copy()
-    for i in range(len(data)):
-        row = _asdict(data.iloc[i])
-        buffer = pd.concat([buffer, pd.DataFrame([row])], ignore_index=True)
-        buffer = buffer.tail(BUFFER_SIZE)
+    func = meta["func"]
 
-        signals = normalize_signals(meta["func"](buffer, **params))
-        decision = float(signals.iloc[-1])
-
-        await ws.send_json(
-            {"type": "candle", "candle": _candle_to_json(i, row), "decision": decision}
+    def to_df(candles: List[dict]) -> pd.DataFrame:
+        """Build a strategy-friendly OHLCV frame (uppercase cols) from candle dicts."""
+        return pd.DataFrame(
+            {
+                "Datetime": pd.to_datetime([c["time"] for c in candles], unit="s"),
+                "Open": [c["open"] for c in candles],
+                "High": [c["high"] for c in candles],
+                "Low": [c["low"] for c in candles],
+                "Close": [c["close"] for c in candles],
+                "Volume": [c["volume"] for c in candles],
+            }
         )
-        await asyncio.sleep(tick_seconds)
 
-    await ws.send_json({"type": "done"})
+    buffer: List[dict] = []
+    seed_df = to_df(seed)
+    seed_signals = normalize_signals(func(seed_df, **params))
+    # replay the seed so the chart has context and the strategy is warmed up
+    for i, row in enumerate(seed):
+        buffer.append(row)
+        decision = float(seed_signals.iloc[i]) if i < len(seed_signals) else 0.0
+        await ws.send_json({"type": "candle", "candle": row, "decision": decision})
+
+    stream_url = f"{BINANCE_WS_BASE}{_binance_symbol(symbol).lower()}@kline_{interval}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(stream_url, heartbeat=30) as bws:
+                async for msg in bws:
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        continue
+                    payload = json.loads(msg.data)
+                    k = payload.get("k")
+                    if not k:
+                        continue
+                    candle = _kline_to_json(k)
+                    buffer.append(candle)
+                    buffer = buffer[-BUFFER_SIZE:]
+                    await ws.send_json(
+                        {"type": "candle", "candle": candle, "decision": _decide(func, to_df(buffer), **params)}
+                    )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if not ws.closed:
+            await ws.send_json({"type": "error", "message": f"live stream error: {exc}"})
     return ws
 
 
