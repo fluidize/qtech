@@ -19,13 +19,13 @@ from datasets import PriceDataset
 from trading.backtesting.backtesting import VectorizedBacktest
 
 if __name__ == "__main__":
-    EPOCHS = 512
+    EPOCHS = 1024
     SEQ_LEN = 8
-    BATCH_SIZE = 2 ** 20
+    BATCH_SIZE = 2 ** 14
 
     DATA = {
         "symbols": ["SOL-USDT"],
-        "days": 5,
+        "days": 45,
         "interval": "1m",
         "age_days": 0,
         "data_source": "binance",
@@ -164,5 +164,5 @@ if __name__ == "__main__":
     option = input("Save Model? y/N: ")
     if option.lower() == "y":
         torch.save(
-            model.state_dict(), f"{round(backtest_metrics['Sharpe_Ratio'],2)}-{DATA["interval"]}policy.pth"
+            model.state_dict(), f"{round(backtest_metrics['Sharpe_Ratio'],2)}-{DATA['interval']}-policy.pth"
         )

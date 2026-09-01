@@ -244,7 +244,7 @@ def _fetch_birdeye(symbol, days, interval, age_days, retry_limit, proxies, end_t
     return data
 
 
-def _fetch_binance(symbol, days, interval, age_days, retry_limit, proxies, end_time):
+def _fetch_binance(symbol, days, interval, age_days, retry_limit, proxies, end_time, fail_fast=False):
     if "min" in interval:
         interval = interval.replace("min", "m")
     elif "hour" in interval:
@@ -283,6 +283,10 @@ def _fetch_binance(symbol, days, interval, age_days, retry_limit, proxies, end_t
                         request_data = await response.json()
                         break
                 except Exception as e:
+                    if fail_fast:
+                        raise Exception(
+                            f"Error fetching {binance_symbol} chunk {chunk_index}: {e}"
+                        )
                     if retries < retry_limit:
                         retries += 1
                         await asyncio.sleep(0.5)
@@ -324,6 +328,9 @@ def _fetch_binance(symbol, days, interval, age_days, retry_limit, proxies, end_t
                     chunk_results.append((chunk_index, temp_data))
                     progress_bar.update(1)
                 except Exception as e:
+                    if fail_fast:
+                        progress_bar.close()
+                        raise
                     print(f"[red]Error downloading chunk: {e}[/red]")
                     progress_bar.update(1)
 
@@ -381,6 +388,7 @@ def fetch_data(
     retry_limit: int = 3,
     verbose: bool = True,
     proxies: dict = {},
+    fail_fast: bool = False,
 ) -> pd.DataFrame:
     """ """
     (
@@ -481,6 +489,7 @@ def fetch_data(
                     retry_limit,
                     proxies,
                     anchored_end_time,
+                    fail_fast,
                 )
             else:
                 temp_df = _fetch_binance(
@@ -491,6 +500,7 @@ def fetch_data(
                     retry_limit,
                     proxies,
                     anchored_end_time,
+                    fail_fast,
                 )
                 temp_df = temp_df.drop(columns=["Datetime"])
                 temp_df.rename(

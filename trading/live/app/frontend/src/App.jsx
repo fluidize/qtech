@@ -34,6 +34,22 @@ const PERIODS_PER_YEAR = {
   "1d": 252,
 };
 
+function erf(x) {
+  const p = 0.3275911;
+  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429;
+  const sign = x < 0 ? -1 : 1;
+  x = Math.abs(x);
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * Math.exp(-x * x);
+  return sign * y;
+}
+// two-sided p-value of the Sharpe ratio (t = sharpePerPeriod * sqrt(n)) via normal approx
+function sharpePval(sharpeAnnual, n, py) {
+  if (!sharpeAnnual || n < 2 || !py) return null;
+  const t = (sharpeAnnual / Math.sqrt(py)) * Math.sqrt(n);
+  return 1 - erf(Math.abs(t) / Math.SQRT2);
+}
+
 function computeMetrics(candles, decisions, interval) {
   if (!candles.length || candles.length < 2) return null;
   const closes = candles.map((c) => c.close);
@@ -145,6 +161,7 @@ function computeMetrics(candles, decisions, interval) {
     buyHold,
     maxDrawdown: maxDD,
     sharpe,
+    sharpePval: sharpePval(sharpe, n, py),
     sortino,
     annualVol,
     calmar,
@@ -179,12 +196,14 @@ export default function App() {
   const [btInterval, setBtInterval] = useState(DEFAULTS.interval);
   const [btDays, setBtDays] = useState(DEFAULTS.days);
   const [btStrategy, setBtStrategy] = useState(DEFAULTS.strategy);
+  const [btDataSource, setBtDataSource] = useState(DEFAULTS.dataSource ?? "binance");
 
   const [liveSymbol, setLiveSymbol] = useState(DEFAULTS.symbol);
   const [liveInterval, setLiveInterval] = useState(DEFAULTS.interval);
   const [liveStrategy, setLiveStrategy] = useState(DEFAULTS.strategy);
 
   const [strategies, setStrategies] = useState({});
+  const [dataSources, setDataSources] = useState([]);
   const [candles, setCandles] = useState([]);
   const [decisions, setDecisions] = useState([]);
   const [status, setStatus] = useState("idle");
@@ -193,8 +212,10 @@ export default function App() {
   const [showPrice, setShowPrice] = useState(true);
   const [showStrategy, setShowStrategy] = useState(true);
   const [mode, setMode] = useState("backtest"); // "backtest" | "live" (which one is displayed)
+  const [loaded, setLoaded] = useState(null); // params of data currently on chart {symbol, interval, days, source, live}
   const wsRef = useRef(null);
   const modeRef = useRef("backtest"); // "backtest" | "live"
+  const chartRef = useRef(null);
 
   const btParams = useMemo(() => strategies[btStrategy]?.params ?? {}, [strategies, btStrategy]);
   const liveParams = useMemo(() => strategies[liveStrategy]?.params ?? {}, [strategies, liveStrategy]);
@@ -205,6 +226,10 @@ export default function App() {
   const fetchStrategies = () => {
     fetch("/api/strategies").then((r) => r.json()).then((data) => {
       setStrategies(data);
+    });
+    fetch("/api/datasources").then((r) => r.json()).then((data) => {
+      setDataSources(data.sources ?? []);
+      setBtDataSource((v) => v || data.default || "binance");
     });
   };
 
@@ -220,19 +245,21 @@ export default function App() {
       interval: btInterval,
       days: String(btDays),
       strategy: btStrategy,
+      data_source: btDataSource,
       params: JSON.stringify(btParams),
     });
     fetch(`/api/backtest?${q}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.error) return setStatus("error: " + data.error);
+        setLoaded({ symbol: data.symbol ?? btSymbol, interval: data.interval ?? btInterval, days: data.days ?? btDays, source: data.data_source ?? btDataSource, live: false });
         setCandles(data.candles);
         setDecisions(data.decisions);
         setStatus("backtest loaded");
       })
       .catch(() => setStatus("error: request failed"))
       .finally(() => setLoading(false));
-  }, [btSymbol, btInterval, btDays, btStrategy, btParams]);
+  }, [btSymbol, btInterval, btDays, btStrategy, btParams, btDataSource]);
 
   const start = useCallback(() => {
     modeRef.current = "live";
@@ -242,6 +269,7 @@ export default function App() {
     setDecisions([]);
     setIsLive(true);
     setStatus("connecting");
+    setLoaded({ symbol: liveSymbol, interval: liveInterval, days: null, source: "live", live: true });
     const q = new URLSearchParams({
       symbol: liveSymbol,
       interval: liveInterval,
@@ -285,23 +313,16 @@ export default function App() {
 
   useEffect(fetchStrategies, []);
 
-  // Re-run backtest when any BACKTEST param changes and we're in backtest mode.
-  // (Runs the initial backtest too: modeRef starts as "backtest" and this fires
-  // once strategies are known.)
+  // Run the initial backtest once strategies are loaded. Subsequent runs are
+  // manual only (Backtest / Start Stream buttons) — field edits don't rerun.
+  const initialRunRef = useRef(false);
   useEffect(() => {
-    if (modeRef.current !== "backtest") return;
+    if (initialRunRef.current) return;
     if (!Object.keys(strategies).length) return;
+    initialRunRef.current = true;
     loadBacktest();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [btSymbol, btInterval, btDays, btStrategy, btParams, strategies]);
-
-  // Restart live stream when any LIVE param changes and we're in live mode.
-  useEffect(() => {
-    if (modeRef.current !== "live") return;
-    if (!Object.keys(strategies).length) return;
-    start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveSymbol, liveInterval, liveStrategy, liveParams, strategies]);
+  }, [strategies]);
 
   const statusColor = {
     idle: "#707a8c",
@@ -325,7 +346,6 @@ export default function App() {
       <div style={{ padding: "14px 18px", background: "#232834", borderBottom: "1px solid #2a3040", display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 340, background: "#1f2430", borderRadius: 0, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8, border: "1px solid " + (mode === "backtest" ? "#5ccfe6" : "#2a3040") }}>
-            <span style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "#5ccfe6", fontWeight: 600 }}>◧ Backtest</span>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
               <Field label="Symbol">
                 <input value={btSymbol} onChange={(e) => setBtSymbol(e.target.value)} style={{ ...inputStyle, minWidth: 130 }} />
@@ -343,10 +363,17 @@ export default function App() {
                   {Object.keys(strategies).map((s) => <option key={s}>{s}</option>)}
                 </select>
               </Field>
+              <Field label="Data Source">
+                <select value={btDataSource} onChange={(e) => setBtDataSource(e.target.value)} style={inputStyle}>
+                  {dataSources.map((s) => <option key={s}>{s}</option>)}
+                </select>
+              </Field>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
               <button
                 onClick={loadBacktest}
                 disabled={loading}
-                style={{ padding: "8px 16px", height: 35, background: "#5ccfe6", border: "1px solid #5ccfe6", borderRadius: 0, color: "#fff", cursor: loading ? "default" : "pointer", fontWeight: 600, opacity: loading ? 0.7 : 1 }}
+                style={{ padding: "8px 16px", height: 35, width: "100%", background: "#5ccfe6", border: "1px solid #5ccfe6", borderRadius: 0, color: "#fff", cursor: loading ? "default" : "pointer", fontWeight: 600, opacity: loading ? 0.7 : 1 }}
               >
                 {loading ? "⏳ Backtesting…" : "⤓ Backtest"}
               </button>
@@ -354,7 +381,6 @@ export default function App() {
           </div>
 
             <div style={{ flex: 1, minWidth: 340, background: "#1f2430", borderRadius: 0, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8, border: "1px solid " + (mode === "live" ? "#a6cc70" : "#2a3040") }}>
-            <span style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: "#a6cc70", fontWeight: 600 }}>◉ Live</span>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
               <Field label="Symbol">
                 <input value={liveSymbol} onChange={(e) => setLiveSymbol(e.target.value)} style={{ ...inputStyle, minWidth: 130 }} />
@@ -369,17 +395,19 @@ export default function App() {
                   {Object.keys(strategies).map((s) => <option key={s}>{s}</option>)}
                 </select>
               </Field>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
               <button
                 onClick={() => (isLive ? stop() : start())}
                 style={{
                   padding: "8px 16px",
+                  width: "100%",
                   background: isLive ? "#f28779" : "#a6cc70",
                   border: isLive ? "1px solid #f28779" : "1px solid #a6cc70",
                   borderRadius: 0,
                   color: "#fff",
                   cursor: "pointer",
                   fontWeight: 600,
-                  minWidth: 150,
                   height: 35,
                   display: "inline-flex",
                   alignItems: "center",
@@ -409,6 +437,13 @@ export default function App() {
             >
               {showStrategy ? "✓ Strategy" : "Strategy"}
             </button>
+            <button
+              onClick={() => chartRef.current?.fit()}
+              title="Fit chart to screen"
+              style={{ fontSize: 12, padding: "1px 8px", background: "#2a3040", border: "1px solid #3d424d", borderRadius: 0, color: "#ffffff", cursor: "pointer", lineHeight: 1.6 }}
+            >
+              Fit
+            </button>
           </span>
         </div>
 
@@ -419,6 +454,7 @@ export default function App() {
               ["Buy & Hold", metrics.buyHold, (v) => `${(v * 100).toFixed(2)}%`, metrics.buyHold >= 0 ? "#a6cc70" : "#f28779"],
               ["Max Drawdown", metrics.maxDrawdown, (v) => `${(v * 100).toFixed(2)}%`, "#f28779"],
               ["Sharpe", metrics.sharpe, (v) => v.toFixed(2), "#cbccc6"],
+              ["Sharpe P", metrics.sharpePval, (v) => (v == null ? "—" : v.toFixed(3)), metrics.sharpePval != null && metrics.sharpePval < 0.05 ? "#a6cc70" : "#707a8c"],
               ["Sortino", metrics.sortino, (v) => v.toFixed(2), "#cbccc6"],
               ["Volatility", metrics.annualVol, (v) => `${(v * 100).toFixed(2)}%`, "#cbccc6"],
               ["Calmar", metrics.calmar, (v) => v.toFixed(2), "#cbccc6"],
@@ -443,7 +479,7 @@ export default function App() {
       </div>
       <div style={{ flex: 1, minHeight: 0, padding: 12 }}>
         <div style={{ height: "100%", borderRadius: 16, overflow: "hidden", border: "1px solid #3d424d", boxShadow: "0 0 0 1px rgba(92, 207, 230, 0.12), 0 4px 16px rgba(0,0,0,0.06)", background: "#1f2430", position: "relative" }}>
-          <LiveChart candles={candles} decisions={decisions} equity={equity} showPrice={showPrice} showStrategy={showStrategy} symbol={btSymbol} interval={btInterval} />
+          <LiveChart ref={chartRef} candles={candles} decisions={decisions} equity={equity} showPrice={showPrice} showStrategy={showStrategy} symbol={loaded?.symbol ?? ""} interval={loaded?.interval ?? ""} days={loaded?.days ?? null} live={loaded?.live ?? false} />
           {loading && (
             <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(31,36,48,0.7)", zIndex: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#cbccc6", fontSize: 14 }}>

@@ -84,8 +84,12 @@ FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 DEFAULT_SYMBOL = "SOL-USDT"
 DEFAULT_INTERVAL = "1h"
 DEFAULT_DAYS = 60
+DEFAULT_DATA_SOURCE = "binance"
 DEFAULT_TICK_SECONDS = 1.0
 BUFFER_SIZE = 500
+
+# data sources valid for backtesting (subset of fetch_data's whitelist)
+DATA_SOURCES = ["binance", "yfinance", "birdeye"]
 
 # Binance endpoints (only the historical REST + live websocket are used for the stream)
 BINANCE_REST = "https://api.binance.com/api/v3/klines"
@@ -118,11 +122,18 @@ def _synthetic_data(days: int, interval: str) -> pd.DataFrame:
     )
 
 
-async def _fetch_feed(symbol, days, interval) -> pd.DataFrame:
+async def _fetch_feed(symbol, days, interval, data_source=DEFAULT_DATA_SOURCE) -> pd.DataFrame:
     """Try the real feed, fall back to synthetic data so the app always has bars."""
-    log(f"fetching feed symbol={symbol} interval={interval} days={days}")
+    log(f"fetching feed symbol={symbol} interval={interval} days={days} source={data_source}")
     data = await asyncio.to_thread(
-        mt.fetch_data, [symbol], days, interval, 0, "binance", verbose=False
+        mt.fetch_data,
+        [symbol],
+        days,
+        interval,
+        0,
+        data_source,
+        verbose=False,
+        fail_fast=True,
     )
     if data.empty:
         log(f"feed empty for {symbol} - falling back to synthetic data")
@@ -158,6 +169,10 @@ async def handle_strategies(request: web.Request) -> web.Response:
     return web.json_response(payload)
 
 
+async def handle_datasources(request: web.Request) -> web.Response:
+    return web.json_response({"sources": DATA_SOURCES, "default": DEFAULT_DATA_SOURCE})
+
+
 async def handle_backtest(request: web.Request) -> web.Response:
     """Run a strategy once over historical data, return candles + decisions."""
     query = request.query
@@ -165,7 +180,13 @@ async def handle_backtest(request: web.Request) -> web.Response:
     interval = query.get("interval", DEFAULT_INTERVAL)
     days = int(query.get("days", DEFAULT_DAYS))
     strategy_name = query.get("strategy", "ema_cross")
+    data_source = query.get("data_source", DEFAULT_DATA_SOURCE)
     params = json.loads(query.get("params", "{}"))
+
+    if data_source not in DATA_SOURCES:
+        return web.json_response(
+            {"error": f"unknown data_source: {data_source}"}, status=404
+        )
 
     meta = get_strategy(strategy_name)
     if meta is None:
@@ -173,7 +194,7 @@ async def handle_backtest(request: web.Request) -> web.Response:
             {"error": f"unknown strategy: {strategy_name}"}, status=404
         )
 
-    data = await _fetch_feed(symbol, days, interval)
+    data = await _fetch_feed(symbol, days, interval, data_source)
     log(f"running backtest strategy={strategy_name} bars={len(data)} params={params}")
     signals = meta["func"](data, **params)
 
@@ -187,6 +208,8 @@ async def handle_backtest(request: web.Request) -> web.Response:
         {
             "symbol": symbol,
             "interval": interval,
+            "days": days,
+            "data_source": data_source,
             "candles": candles,
             "decisions": decisions,
         }
@@ -300,27 +323,50 @@ async def handle_stream(request: web.Request) -> web.WebSocketResponse:
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(stream_url, heartbeat=30) as bws:
                 log(f"websocket connected for {symbol} {interval}")
-                last_log = 0.0
-                async for msg in bws:
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        continue
-                    payload = json.loads(msg.data)
-                    k = payload.get("k")
-                    if not k:
-                        continue
-                    candle = _kline_to_json(k)
-                    buffer.append(candle)
-                    buffer = buffer[-BUFFER_SIZE:]
-                    decision = _decide(func, to_df(buffer), **params)
-                    await ws.send_json(
-                        {"type": "candle", "candle": candle, "decision": decision}
-                    )
-                    now = time.monotonic()
-                    if now - last_log >= 2.0:
-                        last_log = now
-                        log(
-                            f"live {symbol} {interval} @ {candle['time']} close={candle['close']:.6f} decision={decision:+.0f}"
+
+                feed_task = None
+
+                async def feed():
+                    """Forward Binance klines, recomputing decisions, until the client stops."""
+                    nonlocal buffer
+                    last_log = 0.0
+                    async for msg in bws:
+                        if msg.type != aiohttp.WSMsgType.TEXT:
+                            continue
+                        payload = json.loads(msg.data)
+                        k = payload.get("k")
+                        if not k:
+                            continue
+                        candle = _kline_to_json(k)
+                        buffer.append(candle)
+                        buffer = buffer[-BUFFER_SIZE:]
+                        decision = _decide(func, to_df(buffer), **params)
+                        await ws.send_json(
+                            {"type": "candle", "candle": candle, "decision": decision}
                         )
+                        now = time.monotonic()
+                        if now - last_log >= 2.0:
+                            last_log = now
+                            log(
+                                f"live {symbol} {interval} @ {candle['time']} close={candle['close']:.6f} decision={decision:+.0f}"
+                            )
+
+                async def watch_disconnect():
+                    """Return (unblocking the gather) once the client closes the socket."""
+                    msg = await ws.receive()
+                    if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
+                        return
+
+                feed_task = asyncio.create_task(feed())
+                watch_task = asyncio.create_task(watch_disconnect())
+                try:
+                    await asyncio.gather(feed_task, watch_task)
+                except asyncio.CancelledError:
+                    raise
+                finally:
+                    feed_task.cancel()
+                    watch_task.cancel()
+                    log(f"stream stopped for {symbol} {interval}")
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -378,6 +424,7 @@ def create_app() -> web.Application:
     install_ws_log_handler()
     app.router.add_get("/api/health", handle_health)
     app.router.add_get("/api/strategies", handle_strategies)
+    app.router.add_get("/api/datasources", handle_datasources)
     app.router.add_get("/api/backtest", handle_backtest)
     app.router.add_get("/ws/stream", handle_stream)
     app.router.add_get("/ws/logs", handle_logs)

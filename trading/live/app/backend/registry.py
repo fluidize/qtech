@@ -23,13 +23,19 @@ def _is_strategy(obj) -> bool:
 
 
 def get_strategies() -> dict:
-    """Autodetect strategy definitions, with params defaulting to signature defaults."""
+    """Discover code strategies plus any *.pth model strategies in /models."""
     module = importlib.import_module(STRATEGIES_MODULE)
-    return {
+    strategies = {
         name: {"func": obj, "params": _strategy_params(obj)}
         for name, obj in vars(module).items()
         if _is_strategy(obj)
     }
+
+    from .model_wrapper import get_model_strategies
+
+    for name, func in get_model_strategies().items():
+        strategies[name] = {"func": func, "params": _strategy_params(func)}
+    return strategies
 
 
 def get_strategy(name: str) -> dict | None:

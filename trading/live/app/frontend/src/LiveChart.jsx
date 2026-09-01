@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { createChart, ColorType, CandlestickSeries, LineSeries, createTextWatermark } from "lightweight-charts";
 
 function signalColor(v) {
@@ -67,7 +67,7 @@ BackgroundShadeSeries.prototype = {
   },
 };
 
-export default function LiveChart({ candles, decisions, equity, showPrice, showStrategy, symbol, interval }) {
+export default forwardRef(function LiveChart({ candles, decisions, equity, showPrice, showStrategy, symbol, interval, days, live }, ref) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const priceSeriesRef = useRef(null);
@@ -82,7 +82,7 @@ export default function LiveChart({ candles, decisions, equity, showPrice, showS
       hoveredSeriesOnTop: false,
       layout: { background: { type: ColorType.Solid, color: "#232834" }, textColor: "#cbccc6", fontFamily: "Departure Mono" },
       grid: { vertLines: { visible: false }, horzLines: { color: "#2a3040" } },
-      timeScale: { borderColor: "#3d424d", rightOffset: 5, shiftVisibleRangeOnNewBar: true },
+      timeScale: { borderColor: "#3d424d", rightOffset: 5, shiftVisibleRangeOnNewBar: true, minBarSpacing: 0.01 },
     });
 
     const tintSeries = chart.addCustomSeries(new BackgroundShadeSeries(), {});
@@ -121,14 +121,19 @@ export default function LiveChart({ candles, decisions, equity, showPrice, showS
   }, []);
 
   useEffect(() => {
+    const suffix = live ? " · live" : ` · ${days || ""}d`;
     watermarkRef.current?.applyOptions({
       lines: [
-        { text: `${symbol} · ${interval}`, color: "rgba(112, 122, 140, 0.25)", fontSize: 48, fontFamily: "Departure Mono" },
+        { text: `${symbol} · ${interval}${suffix}`, color: "rgba(112, 122, 140, 0.25)", fontSize: 48, fontFamily: "Departure Mono" },
       ],
     });
-  }, [symbol, interval]);
+  }, [symbol, interval, days, live]);
 
   const firstTimeRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    fit: () => chartRef.current?.timeScale().fitContent(),
+  }));
 
   useEffect(() => {
     if (!candles.length) return;
@@ -141,16 +146,18 @@ export default function LiveChart({ candles, decisions, equity, showPrice, showS
     );
     equitySeriesRef.current.setData(showStrategy ? equity : []);
     tintSeriesRef.current.setData(
-      showStrategy
-        ? candles.map((c, i) => ({ time: c.time, value: decisions[i]?.value ?? 0 }))
-        : []
+      candles.map((c, i) => ({ time: c.time, value: decisions[i]?.value ?? 0 }))
     );
 
     if (firstTimeRef.current === null || firstTime !== firstTimeRef.current) {
-      chartRef.current.timeScale().resetTimeScale();
+      if (live) {
+        chartRef.current.timeScale().resetTimeScale();
+      } else {
+        chartRef.current.timeScale().fitContent();
+      }
       firstTimeRef.current = firstTime;
     }
   }, [candles, decisions, equity, showPrice, showStrategy]);
 
   return <div style={{ height: "100%", width: "100%" }} ref={containerRef} />;
-}
+});
