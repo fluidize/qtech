@@ -21,11 +21,11 @@ from trading.backtesting.backtesting import VectorizedBacktest
 if __name__ == "__main__":
     EPOCHS = 1024
     SEQ_LEN = 8
-    BATCH_SIZE = 2 ** 14
+    BATCH_SIZE = 2 ** 16
 
     DATA = {
         "symbols": ["SOL-USDT"],
-        "days": 45,
+        "days": 180,
         "interval": "1m",
         "age_days": 0,
         "data_source": "binance",
@@ -161,8 +161,8 @@ if __name__ == "__main__":
     print("Backtest metrics:", backtest_metrics)
     vb.plot_performance(mode="basic")
 
-    option = input("Save Model? y/N: ")
-    if option.lower() == "y":
-        torch.save(
-            model.state_dict(), f"{round(backtest_metrics['Sharpe_Ratio'],2)}-{DATA['interval']}-policy.pth"
-        )
+    # option = input("Save Model? y/N: ")
+    # if option.lower() == "y":
+    torch.save(
+        model.state_dict(), f"{round(backtest_metrics['Sharpe_Ratio'],2)}-{DATA['interval']}-policy.pth"
+    )
