@@ -134,6 +134,7 @@ async def _fetch_feed(symbol, days, interval, data_source=DEFAULT_DATA_SOURCE) -
         data_source,
         verbose=False,
         fail_fast=True,
+        cache_expiry_hours=24,
     )
     if data.empty:
         log(f"feed empty for {symbol} - falling back to synthetic data")

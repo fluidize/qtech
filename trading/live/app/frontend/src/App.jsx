@@ -9,18 +9,19 @@ const DEFAULTS = {
   strategy: "ema_cross",
 };
 
-// Portfolio equity curve: start holding 1 unit of the base currency (worth its
-// t0 close), then apply the strategy's position (from the previous bar) to each
-// bar's return. Produces values in the same price units as the chart.
+// Strategy comparison line (TradingView "compare in % mode"): plot the strategy's
+// cumulative return as a percent change from the first bar, relative to just
+// holding. Produces % values meant for a dedicated right-hand percent axis.
 function computeEquity(candles, decisions) {
   if (!candles.length) return [];
   const closes = candles.map((c) => c.close);
-  let val = closes[0]; // 1 unit bought at the first bar's price
-  const out = [{ time: candles[0].time, value: val }];
+  const p0 = closes[0];
+  let val = p0; // 1 unit bought at the first bar's price
+  const out = [{ time: candles[0].time, value: 0 }];
   for (let i = 1; i < closes.length; i++) {
     const pos = decisions[i - 1]?.value ?? 0; // position from previous bar (no lookahead)
     val *= 1 + pos * (closes[i] / closes[i - 1] - 1);
-    out.push({ time: candles[i].time, value: val });
+    out.push({ time: candles[i].time, value: (val / p0 - 1) * 100 });
   }
   return out;
 }

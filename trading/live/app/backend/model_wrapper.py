@@ -32,7 +32,7 @@ def _run_model(data, pth, seq_len, batch_size) -> pd.Series:
         device=MODEL_DEVICE,
     )
     raw[rows] = preds
-    return pd.Series(raw.cpu().numpy(), index=data.index).clip(0.0, 1.0)
+    return pd.Series(raw.cpu().numpy(), index=data.index).clip(-1.0, 1.0)
 
 
 def make_model_strategy(pth: Path):

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { createChart, ColorType, CandlestickSeries, LineSeries, createTextWatermark } from "lightweight-charts";
 
 function signalColor(v) {
@@ -74,6 +74,12 @@ export default forwardRef(function LiveChart({ candles, decisions, equity, showP
   const tintSeriesRef = useRef(null);
   const equitySeriesRef = useRef(null);
   const watermarkRef = useRef(null);
+  const decisionsRef = useRef([]);
+  const [hover, setHover] = useState(null); // {x, y, value}
+
+  useEffect(() => {
+    decisionsRef.current = decisions;
+  }, [decisions]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -83,7 +89,9 @@ export default forwardRef(function LiveChart({ candles, decisions, equity, showP
       layout: { background: { type: ColorType.Solid, color: "#232834" }, textColor: "#cbccc6", fontFamily: "Departure Mono" },
       grid: { vertLines: { visible: false }, horzLines: { color: "#2a3040" } },
       timeScale: { borderColor: "#3d424d", rightOffset: 5, shiftVisibleRangeOnNewBar: true, minBarSpacing: 0.01 },
+      rightPriceScale: { visible: true },
     });
+    chart.priceScale("strategy-pct").applyOptions({ visible: true, scaleMargins: { top: 0.1, bottom: 0.1 } });
 
     const tintSeries = chart.addCustomSeries(new BackgroundShadeSeries(), {});
     const priceSeries = chart.addSeries(CandlestickSeries, {
@@ -97,8 +105,10 @@ export default forwardRef(function LiveChart({ candles, decisions, equity, showP
       color: "#5ccfe6",
       lineWidth: 2,
       priceLineVisible: false,
-      lastValueVisible: false,
+      lastValueVisible: true,
       crosshairMarkerVisible: false,
+      priceScaleId: "strategy-pct",
+      priceFormat: { type: "custom", formatter: (v) => `${v.toFixed(2)}%`, minMove: 0.01 },
     });
 
     tintSeriesRef.current = tintSeries;
@@ -115,7 +125,20 @@ export default forwardRef(function LiveChart({ candles, decisions, equity, showP
     });
     watermarkRef.current = watermark;
 
+    const onCrosshair = (param) => {
+      const time = param.time;
+      const point = param.point;
+      if (time === undefined || point === undefined) {
+        setHover(null);
+        return;
+      }
+      const value = decisionsRef.current.find((d) => d.time === time)?.value ?? 0;
+      setHover({ x: point.x, y: point.y, value });
+    };
+    chart.subscribeCrosshairMove(onCrosshair);
+
     return () => {
+      chart.unsubscribeCrosshairMove(onCrosshair);
       chart.remove();
     };
   }, []);
@@ -159,5 +182,29 @@ export default forwardRef(function LiveChart({ candles, decisions, equity, showP
     }
   }, [candles, decisions, equity, showPrice, showStrategy]);
 
-  return <div style={{ height: "100%", width: "100%" }} ref={containerRef} />;
+  return (
+    <div style={{ position: "relative", height: "100%", width: "100%" }}>
+      <div style={{ height: "100%", width: "100%" }} ref={containerRef} />
+      {hover && (
+        <div
+          style={{
+            position: "absolute",
+            left: Math.max(0, Math.min(hover.x + 10, (containerRef.current?.clientWidth ?? 0) - 90)),
+            top: Math.max(8, Math.min(hover.y - 6, (containerRef.current?.clientHeight ?? 0) - 30)),
+            padding: "4px 8px",
+            background: "#232834",
+            border: "1px solid #3d424d",
+            color: hover.value > 0 ? "#a6cc70" : hover.value < 0 ? "#f28779" : "#707a8c",
+            fontSize: 12,
+            fontWeight: 600,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+            zIndex: 5,
+          }}
+        >
+          signal: {hover.value > 0 ? "+" : ""}{Number(hover.value).toFixed(2)}
+        </div>
+      )}
+    </div>
+  );
 });
