@@ -107,6 +107,49 @@ def get_max_drawdown(position: pd.Series, open_prices: pd.Series, initial_capita
     result = drawdown.min()
     return result
 
+
+def get_cagr(strategy_returns: pd.Series, return_interval: str = '1h', n_days: int = None, compounded: bool = False) -> float:
+    """Calculate CAGR from a strategy return series."""
+    returns = pd.Series(strategy_returns).dropna()
+    if len(returns) < 2:
+        return 0.0
+
+    total = float((1 + returns).prod() - 1) if compounded else float(returns.sum())
+    if total <= -1:
+        return 0.0
+
+    periods_per_year = {
+        '1m': 365 * 24 * 60,
+        '3m': 365 * 24 * 20,
+        '5m': 365 * 24 * 12,
+        '15m': 365 * 24 * 4,
+        '30m': 365 * 24 * 2,
+        '1h': 365 * 24,
+        '4h': 365 * 6,
+        '1d': 365,
+    }.get(return_interval, 365)
+
+    years = n_days / 365.0 if n_days is not None else len(returns) / periods_per_year
+    if years <= 0:
+        return 0.0
+
+    return float((1 + total) ** (1 / years) - 1)
+
+def get_calmar_ratio(strategy_returns: pd.Series, return_interval: str = '1h', n_days: int = None, compounded: bool = False) -> float:
+    """Calculate the Calmar ratio."""
+    returns = pd.Series(strategy_returns).dropna()
+    if len(returns) < 2:
+        return 0.0
+
+    cagr = get_cagr(returns, return_interval, n_days, compounded)
+    equity = (1 + returns).cumprod() if compounded else 1 + returns.cumsum()
+    max_drawdown = float((equity / equity.cummax() - 1).min())
+    if max_drawdown == 0:
+        return 0.0
+
+    return float(cagr / abs(max_drawdown))
+
+
 def get_sharpe_ratio(strategy_returns: pd.Series, return_interval: str, risk_free_rate: float = 0.00) -> float:
     """Calculate annualized Sharpe ratio using actual strategy returns that include costs."""
     excess_returns = strategy_returns - risk_free_rate

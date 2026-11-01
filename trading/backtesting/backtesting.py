@@ -9,6 +9,79 @@ import trading.backtesting.metrics as metrics
 import trading.model_tools as mt
 
 
+def _performance_metrics(
+    strategy_returns: pd.Series,
+    benchmark_returns: pd.Series,
+    equity: pd.Series,
+    positions: list[pd.Series],
+    interval: str,
+    n_days: int,
+) -> dict:
+    """Shared performance summary for single- and multi-asset books."""
+    strategy_returns = pd.Series(strategy_returns).dropna()
+    benchmark_returns = pd.Series(benchmark_returns).dropna()
+    equity = pd.Series(equity).dropna()
+    if len(strategy_returns) < 2 or len(equity) < 2:
+        raise ValueError("Not enough observations to calculate metrics.")
+
+    total_return = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
+    peak = equity.cummax()
+    max_drawdown = float((equity / peak - 1.0).min())
+
+    sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(
+        strategy_returns, interval
+    )
+    sharpe_p_val = 1 - stats.t.cdf(
+        sharpe_t_stat, df=len(strategy_returns) - 1
+    )
+    has_variance = strategy_returns.std() != 0
+    sortino_ratio = (
+        metrics.get_sortino_ratio(strategy_returns, interval, n_days)
+        if has_variance
+        else float("nan")
+    )
+    info_ratio = (
+        metrics.get_information_ratio(
+            strategy_returns, benchmark_returns, interval, n_days
+        )
+        if has_variance
+        else float("nan")
+    )
+    alpha, beta = metrics.get_alpha_beta(
+        strategy_returns,
+        benchmark_returns,
+        n_days=n_days,
+        return_interval=interval,
+    )
+    r, r2 = metrics.get_r_and_r2(equity)
+    cagr = metrics.get_cagr(strategy_returns, interval, n_days)
+    calmar_ratio = metrics.get_calmar_ratio(
+        strategy_returns, interval, n_days
+    )
+    total_trades = sum(
+        metrics.get_total_trades(position) for position in positions
+    )
+    active_return = total_return - float(benchmark_returns.sum())
+
+    return {
+        "Total_Return": total_return,
+        "CAGR": cagr,
+        "Alpha": alpha,
+        "Beta": beta,
+        "Active_Return": active_return,
+        "Max_Drawdown": max_drawdown,
+        "Calmar_Ratio": calmar_ratio,
+        "Sharpe_Ratio": sharpe_ratio,
+        "Sharpe_T_Stat": sharpe_t_stat,
+        "Sharpe_P_Val": sharpe_p_val,
+        "Sortino_Ratio": sortino_ratio,
+        "Information_Ratio": info_ratio,
+        "Total_Trades": total_trades,
+        "R": r,
+        "R2": r2,
+    }
+
+
 class VectorizedBacktest:
     def __init__(
         self,
@@ -18,6 +91,12 @@ class VectorizedBacktest:
         commission_fixed: float = 0.0,
         leverage: float = 1.0,
     ):
+        if initial_capital <= 0:
+            raise ValueError("initial_capital must be positive")
+        if slippage_pct < 0:
+            raise ValueError("slippage_pct must be non-negative")
+        if leverage <= 0:
+            raise ValueError("leverage must be positive")
         self.instance_name = instance_name
         self.initial_capital = initial_capital
         self.slippage_pct = slippage_pct
@@ -46,16 +125,18 @@ class VectorizedBacktest:
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True,
-        proxies: dict = {},
+        proxies: dict | None = None,
     ):
-        self.symbols = symbols
+        if not symbols:
+            raise ValueError("symbols must be a non-empty list")
+        self.symbols = list(symbols)
         self.days = days
         self.interval = interval
         self.age_days = age_days
         self.data_source = data_source
 
         self.data = mt.fetch_data(
-            symbols,
+            self.symbols,
             days,
             interval,
             age_days,
@@ -63,6 +144,7 @@ class VectorizedBacktest:
             cache_expiry_hours=cache_expiry_hours,
             retry_limit=retry_limit,
             verbose=verbose,
+            proxies=proxies or {},
         )
         self._set_n_days()
 
@@ -71,7 +153,7 @@ class VectorizedBacktest:
     def load_data(
         self,
         data: pd.DataFrame,
-        symbols: list[str] = None,
+        symbols: list[str] | None = None,
         interval: str = None,
         age_days: int = None,
     ):
@@ -236,63 +318,14 @@ class VectorizedBacktest:
         if self.data is None or "Position" not in self.data.columns:
             raise ValueError("No strategy results available. Run a strategy first.")
 
-        position = self.data["Position"]
-        strategy_returns = self.data["Strategy_Returns"].dropna()
-        portfolio_value = self.data["Portfolio_Value"].dropna()
-
-        try:
-            total_return = (portfolio_value.iloc[-1] / self.initial_capital) - 1
-        except:
-            total_return = 0
-
-        asset_returns = self.data["Open_Return"].dropna()
-        benchmark_total_return = asset_returns.sum()
-
-        active_return = total_return - benchmark_total_return
-
-        peak = portfolio_value.cummax()
-        drawdown = (portfolio_value - peak) / peak
-        max_drawdown = drawdown.min()
-
-        sharpe_ratio, sharpe_t_stat = metrics.get_sharpe_ratio(
-            strategy_returns, self.interval
+        return _performance_metrics(
+            self.data["Strategy_Returns"],
+            self.data["Open_Return"],
+            self.data["Portfolio_Value"],
+            [self.data["Position"]],
+            self.interval,
+            self.n_days,
         )
-        sharpe_p_val = 1 - stats.t.cdf(sharpe_t_stat, df=len(strategy_returns) - 1)
-        sortino_ratio = (
-            metrics.get_sortino_ratio(strategy_returns, self.interval, self.n_days)
-            if strategy_returns.std() != 0
-            else float("nan")
-        )
-        info_ratio = (
-            metrics.get_information_ratio(
-                strategy_returns, asset_returns, self.interval, self.n_days
-            )
-            if strategy_returns.std() != 0
-            else float("nan")
-        )
-        alpha, beta = metrics.get_alpha_beta(
-            strategy_returns,
-            asset_returns,
-            n_days=self.n_days,
-            return_interval=self.interval,
-        )
-        r, r2 = metrics.get_r_and_r2(portfolio_value)
-
-        return {
-            "Total_Return": total_return,
-            "Alpha": alpha,
-            "Beta": beta,
-            "Active_Return": active_return,
-            "Max_Drawdown": max_drawdown,
-            "Sharpe_Ratio": sharpe_ratio,
-            "Sharpe_T_Stat": sharpe_t_stat,
-            "Sharpe_P_Val": sharpe_p_val,
-            "Sortino_Ratio": sortino_ratio,
-            "Information_Ratio": info_ratio,
-            "Total_Trades": metrics.get_total_trades(position),
-            "R": r,
-            "R2": r2,
-        }
 
     def plot_performance(self, mode: str = "basic", save_name: str = None):
         """
@@ -569,106 +602,178 @@ class VectorizedBacktest:
 class MultiAssetBacktest:
     def __init__(
         self,
-        initial_capitals: list[float] = [10000],
+        initial_capitals: float | list[float] = 10000.0,
         slippage_pct: float = 0.001,
         commission_fixed: float = 0.0,
         leverage: float = 1.0,
     ):
-        self.initial_capitals = initial_capitals
+        if slippage_pct < 0:
+            raise ValueError("slippage_pct must be non-negative")
+        if leverage <= 0:
+            raise ValueError("leverage must be positive")
+        self.initial_capitals = self._normalize_capitals(initial_capitals)
         self.slippage_pct = slippage_pct
         self.commission_fixed = commission_fixed
         self.leverage = leverage
+        self.symbols: list[str] = []
+        self.interval = "1h"
+        self.age_days = 0
+        self.data: dict[str, pd.DataFrame] = {}
+        self.engines: dict[str, VectorizedBacktest] = {}
+        self.weighted_portfolio_value: pd.Series | None = None
 
-        self.data = {}
-        self.equity_curves_pct = {}
-        self.weighted_portfolio_value = None
+    @staticmethod
+    def _normalize_capitals(initial_capitals: float | list[float]) -> list[float]:
+        if isinstance(initial_capitals, (int, float)):
+            initial_capitals = [initial_capitals]
+        capitals = [float(value) for value in initial_capitals]
+        if not capitals or any(value <= 0 for value in capitals):
+            raise ValueError("initial_capitals must be positive")
+        return capitals
+
+    def _resolve_capitals(self, count: int) -> list[float]:
+        if len(self.initial_capitals) == 1:
+            return self.initial_capitals * count
+        if len(self.initial_capitals) != count:
+            raise ValueError(
+                f"Expected 1 or {count} initial capitals, "
+                f"got {len(self.initial_capitals)}"
+            )
+        return self.initial_capitals
 
     def fetch_data(
         self,
-        symbols: list[str] = [],
-        days: int = "None",
-        interval: str = "None",
-        age_days: int = "None",
-        data_source: str = "kucoin",
+        symbols: list[str],
+        days: int = 365,
+        interval: str = "1h",
+        age_days: int = 0,
+        data_source: str = "binance",
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True,
+        proxies: dict | None = None,
     ):
-        self.symbols = symbols
-        self.days = days
+        if not symbols:
+            raise ValueError("symbols must be a non-empty list")
+        self.symbols = list(symbols)
         self.interval = interval
         self.age_days = age_days
-        self.data_source = data_source
-        if any([days, interval, age_days]) == "None":
-            pass
-        else:
-            for symbol in self.symbols:
-                self.data[symbol] = mt.fetch_data(
-                    symbol,
-                    days,
-                    interval,
-                    age_days,
-                    data_source=data_source,
-                    cache_expiry_hours=cache_expiry_hours,
-                    retry_limit=retry_limit,
-                    verbose=verbose,
-                )
-            return self.data
+        self.data = {}
+        for symbol in self.symbols:
+            frame = mt.fetch_data(
+                symbols=[symbol],
+                days=days,
+                interval=interval,
+                age_days=age_days,
+                data_source=data_source,
+                cache_expiry_hours=cache_expiry_hours,
+                retry_limit=retry_limit,
+                verbose=verbose,
+                proxies=proxies or {},
+            )
+            if frame is None or frame.empty:
+                raise ValueError(f"No data returned for {symbol}")
+            self.data[symbol] = frame
+        self.initial_capitals = self._resolve_capitals(len(self.symbols))
+        return self.data
+
+    def load_data(
+        self,
+        data: dict[str, pd.DataFrame],
+        symbols: list[str] | None = None,
+        interval: str = "1h",
+        age_days: int = 0,
+    ):
+        if not data:
+            raise ValueError("data must be a non-empty dict")
+        self.symbols = list(symbols) if symbols is not None else list(data)
+        missing = [symbol for symbol in self.symbols if symbol not in data]
+        if missing:
+            raise ValueError(f"Missing data for: {missing}")
+        empty = [
+            symbol
+            for symbol in self.symbols
+            if data[symbol] is None or data[symbol].empty
+        ]
+        if empty:
+            raise ValueError(f"Empty data for: {empty}")
+        self.data = {symbol: data[symbol] for symbol in self.symbols}
+        self.interval = interval
+        self.age_days = age_days
+        self.initial_capitals = self._resolve_capitals(len(self.symbols))
+        return self.data
 
     def run_strategy(self, strategy_func, verbose: bool = False, **kwargs):
-        for symbol in self.data.keys():
-            vb = VectorizedBacktest(
+        if not self.data:
+            raise ValueError("No data available. Call fetch_data() or load_data() first.")
+        if not (callable(strategy_func) or isinstance(strategy_func, dict)):
+            raise TypeError("strategy_func must be callable or a dict")
+
+        self.initial_capitals = self._resolve_capitals(len(self.symbols))
+        self.engines = {}
+        for symbol, capital in zip(self.symbols, self.initial_capitals):
+            engine = VectorizedBacktest(
                 instance_name=symbol,
-                initial_capital=self.initial_capitals[self.symbols.index(symbol)],
+                initial_capital=capital,
                 slippage_pct=self.slippage_pct,
                 commission_fixed=self.commission_fixed,
                 leverage=self.leverage,
             )
-            vb.load_data(self.data[symbol])
-            vb.run_strategy(strategy_func, verbose=verbose, **kwargs)
-            self.equity_curves_pct[symbol] = vb.data["Percent_Return"]
+            engine.load_data(self.data[symbol], interval=self.interval)
+            strategy = (
+                strategy_func[symbol]
+                if isinstance(strategy_func, dict)
+                else strategy_func
+            )
+            if isinstance(strategy, pd.Series):
+                values = strategy
+                strategy = lambda frame, v=values: pd.Series(
+                    v.to_numpy(), index=frame.index
+                )
+            engine.run_strategy(strategy, verbose=verbose, **kwargs)
+            self.engines[symbol] = engine
 
-        weighted_curves = []
-        for i, symbol in enumerate(self.equity_curves_pct.keys()):
-            weighted_curve = self.equity_curves_pct[symbol] * self.initial_capitals[i]
-            weighted_curves.append(weighted_curve)
+        self.weighted_portfolio_value = sum(
+            engine.data["Percent_Return"] * capital
+            for engine, capital in zip(
+                self.engines.values(), self.initial_capitals
+            )
+        ).dropna()
+        return self.weighted_portfolio_value
 
-        self.weighted_portfolio_value = sum(weighted_curves)
-        self.weighted_portfolio_value.dropna(inplace=True)
+    def get_equity_curve(self) -> pd.Series:
+        if self.weighted_portfolio_value is None:
+            raise ValueError("No strategy results available. Run a strategy first.")
         return self.weighted_portfolio_value
 
     def get_performance_metrics(self):
-        if not self.equity_curves_pct:
+        if not self.engines:
             raise ValueError("No strategy results available. Run a strategy first.")
-        total_return = (
-            self.weighted_portfolio_value.iloc[-1]
-            / self.weighted_portfolio_value.iloc[0]
-        ) - 1
-
-        peak = self.weighted_portfolio_value.cummax()
-        drawdown = (self.weighted_portfolio_value - peak) / peak
-        max_drawdown = drawdown.min()
-
-        strategy_returns = self.weighted_portfolio_value.pct_change().dropna()
-
-        oldest = self.data[list(self.data.keys())[0]]["Datetime"].iloc[0]
-        newest = self.data[list(self.data.keys())[0]]["Datetime"].iloc[-1]
-        n_days = (newest - oldest).days
-
-        sharpe_ratio, _ = metrics.get_sharpe_ratio(strategy_returns, self.interval)
-
-        sortino_ratio = metrics.get_sortino_ratio(
-            strategy_returns, self.interval, n_days
+        weights = pd.Series(self.initial_capitals, index=self.symbols)
+        returns = pd.DataFrame(
+            {
+                symbol: engine.data["Strategy_Returns"]
+                for symbol, engine in self.engines.items()
+            }
+        )
+        benchmark = pd.DataFrame(
+            {
+                symbol: engine.data["Open_Return"].fillna(0.0)
+                for symbol, engine in self.engines.items()
+            }
+        )
+        first = self.data[self.symbols[0]]["Datetime"]
+        n_days = (first.iloc[-1] - first.iloc[0]).days
+        return _performance_metrics(
+            returns.mul(weights, axis=1).sum(axis=1) / weights.sum(),
+            benchmark.mul(weights, axis=1).sum(axis=1) / weights.sum(),
+            self.weighted_portfolio_value,
+            [engine.data["Position"] for engine in self.engines.values()],
+            self.interval,
+            n_days,
         )
 
-        return {
-            "Total_Return": total_return,
-            "Max_Drawdown": max_drawdown,
-            "Sharpe_Ratio": sharpe_ratio,
-            "Sortino_Ratio": sortino_ratio,
-        }
-
-    def plot_performance(self):
+    def plot_performance(self, mode: str = "basic", save_name: str | None = None):
         import matplotlib.pyplot as plt
 
         summary = self.get_performance_metrics()
@@ -678,4 +783,8 @@ class MultiAssetBacktest:
         plt.xlabel("Time")
         plt.ylabel("Portfolio Value")
         plt.plot(self.weighted_portfolio_value)
-        plt.show()
+        if save_name:
+            plt.savefig(save_name, dpi=150)
+            plt.close()
+        else:
+            plt.show()
