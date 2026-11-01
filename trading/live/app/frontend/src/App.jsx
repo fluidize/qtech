@@ -9,19 +9,29 @@ const DEFAULTS = {
   strategy: "ema_cross",
 };
 
-// Strategy comparison line (TradingView "compare in % mode"): plot the strategy's
-// cumulative return as a percent change from the first bar, relative to just
-// holding. Produces % values meant for a dedicated right-hand percent axis.
+// Matches backtesting.py execution model: signal generated at Close[t] (using all
+// bars up to t), trade executed at Open[t+1], return earned from Open[t+1] to
+// Open[t+2]. Plots the strategy's cumulative return as a percent change.
+function openStrategyReturns(candles, decisions) {
+  const n = candles.length;
+  const o = candles.map((c) => c.open);
+  const rets = new Array(n);
+  for (let k = 0; k < n; k++) {
+    const pos = k === 0 ? 0 : (decisions[k - 1]?.value ?? 0); // no lookahead: decision from previous close
+    const r = k + 1 < n ? pos * (o[k + 1] / o[k] - 1) : 0;
+    rets[k] = r;
+  }
+  return rets;
+}
+
 function computeEquity(candles, decisions) {
   if (!candles.length) return [];
-  const closes = candles.map((c) => c.close);
-  const p0 = closes[0];
-  let val = p0; // 1 unit bought at the first bar's price
+  const rets = openStrategyReturns(candles, decisions);
+  let cum = 1;
   const out = [{ time: candles[0].time, value: 0 }];
-  for (let i = 1; i < closes.length; i++) {
-    const pos = decisions[i - 1]?.value ?? 0; // position from previous bar (no lookahead)
-    val *= 1 + pos * (closes[i] / closes[i - 1] - 1);
-    out.push({ time: candles[i].time, value: (val / p0 - 1) * 100 });
+  for (let k = 1; k < candles.length; k++) {
+    cum *= 1 + rets[k];
+    out.push({ time: candles[k].time, value: (cum - 1) * 100 });
   }
   return out;
 }
@@ -55,14 +65,9 @@ function computeMetrics(candles, decisions, interval) {
   if (!candles.length || candles.length < 2) return null;
   const closes = candles.map((c) => c.close);
   const sig = decisions.map((d) => d.value);
+  const rets = openStrategyReturns(candles, decisions).slice(1); // aligned with backtesting.py (Open-based); drop the leading force-flat bar so it matches `bench` length
 
-  const n = closes.length - 1;
-  const rets = [];
-  for (let i = 1; i < closes.length; i++) {
-    const pos = sig[i - 1] || 0; // position from previous bar (no lookahead)
-    rets.push(pos * (closes[i] / closes[i - 1] - 1));
-  }
-
+  const n = rets.length;
   // equity + drawdown
   let equity = 1;
   let peak = 1;
@@ -101,8 +106,9 @@ function computeMetrics(candles, decisions, interval) {
   if (dir !== 0) runs.push({ dir, start, end: sig.length });
 
   const pnls = runs.map((t) => {
-    const entry = closes[t.start];
-    const exit = closes[Math.min(t.end, closes.length - 1)];
+    const opens = candles.map((c) => c.open);
+    const entry = opens[Math.min(t.start + 1, opens.length - 1)];
+    const exit = opens[Math.min(t.end + 2, opens.length - 1)];
     return t.dir * (exit / entry - 1);
   });
   const trades = pnls.length;

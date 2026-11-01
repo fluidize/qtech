@@ -153,6 +153,7 @@ export default forwardRef(function LiveChart({ candles, decisions, equity, showP
   }, [symbol, interval, days, live]);
 
   const firstTimeRef = useRef(null);
+  const lastCandlesRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
     fit: () => chartRef.current?.timeScale().fitContent(),
@@ -172,13 +173,19 @@ export default forwardRef(function LiveChart({ candles, decisions, equity, showP
       candles.map((c, i) => ({ time: c.time, value: decisions[i]?.value ?? 0 }))
     );
 
-    if (firstTimeRef.current === null || firstTime !== firstTimeRef.current) {
+    const isNewLoad = candles !== lastCandlesRef.current;
+    if (isNewLoad) {
       if (live) {
-        chartRef.current.timeScale().resetTimeScale();
+        // Only re-anchor once per new feed (symbol/interval), so the user can
+        // still scroll back while the stream is appending bars.
+        if (firstTimeRef.current === null || firstTime !== firstTimeRef.current) {
+          chartRef.current.timeScale().resetTimeScale();
+          firstTimeRef.current = firstTime;
+        }
       } else {
         chartRef.current.timeScale().fitContent();
       }
-      firstTimeRef.current = firstTime;
+      lastCandlesRef.current = candles;
     }
   }, [candles, decisions, equity, showPrice, showStrategy]);
 
