@@ -21,9 +21,9 @@ on python 3.11
 </details>
 
 ## Table of Contents
-- [Backtesting Library](https://github.com/fluidize/qtech/tree/main/trading/backtesting)
-- [Jupiter Aggregator Python Trading Environment](https://github.com/fluidize/qtech/tree/main/trading/live/jupiter)
-- [Technical-Analysis-Based Genetic Algorithms](https://github.com/fluidize/qtech/tree/main/trading/brains/evolution)
-- [Textual Stock Terminal](https://github.com/fluidize/qtech/tree/main/terminal)
+- Backtesting Library
+- Jupiter Aggregator Python Trading Environment
+- Technical-Analysis-Based Genetic Algorithms
+- Textual Stock Terminal
 
-In-depth descriptions at [https://fluidize.github.io](https://fluidize.github.io)
+In-depth descriptions at https://fluidize.github.io
