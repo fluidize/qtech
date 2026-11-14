@@ -1,12 +1,10 @@
 from math import ceil
 import numpy as np
 from datetime import datetime, timedelta, timezone
-import requests
 import yfinance as yf
 from tqdm import tqdm
 import pandas as pd
 import os
-import time
 from pathlib import Path
 import asyncio
 import aiohttp
@@ -154,97 +152,7 @@ def _fetch_yfinance(symbol, days, interval, age_days):
     return pd.DataFrame(data)
 
 
-def _fetch_birdeye(symbol, days, interval, age_days, retry_limit, proxies, end_time):
-    chunks = ceil(days * 1.44)
-    headers = {
-        "accept": "application/json",
-        "x-chain": "solana",
-        "X-API-KEY": os.getenv("BIRDEYE_API_KEY"),
-    }
-
-    chunk_results = []
-    progress_bar = tqdm(total=chunks, desc="BIRDEYE PROGRESS")
-
-    for chunk_index in range(chunks):
-        retries = 0
-        chunk_end_time = end_time - timedelta(minutes=1000 * chunk_index)
-        start_time = chunk_end_time - timedelta(minutes=1000)
-
-        start_ts = int(start_time.timestamp())
-        end_ts = int(chunk_end_time.timestamp())
-        url = (
-            f"https://public-api.birdeye.so/defi/ohlcv?address={symbol}&type={interval}"
-            f"&currency=usd&time_from={start_ts}&time_to={end_ts}&ui_amount_mode=raw"
-        )
-
-        while retries <= retry_limit:
-            try:
-                response = requests.get(
-                    url,
-                    headers=headers,
-                    proxies=proxies if proxies else None,
-                    timeout=30,
-                )
-                response.raise_for_status()
-                request_data = response.json()
-                break
-            except Exception as e:
-                if retries < retry_limit:
-                    retries += 1
-                    time.sleep(0.5)
-                else:
-                    print(
-                        f"[red]Error fetching {symbol} chunk {chunk_index} after {retry_limit} retries: {e}[/red]"
-                    )
-                    progress_bar.update(1)
-                    continue
-
-        if retries > retry_limit:
-            continue
-
-        records = [
-            {
-                "Datetime": kline["unixTime"],
-                "Open": float(kline["o"]),
-                "High": float(kline["h"]),
-                "Low": float(kline["l"]),
-                "Close": float(kline["c"]),
-                "Volume": float(kline["v"]),
-            }
-            for kline in request_data["data"]["items"]
-        ]
-
-        chunk_results.append((chunk_index, pd.DataFrame(records)))
-        progress_bar.update(1)
-        time.sleep(0.1)
-
-    progress_bar.close()
-    data = (
-        pd.concat(
-            [df for _, df in sorted(chunk_results, key=lambda x: x[0])],
-            ignore_index=True,
-        )
-        if chunk_results
-        else pd.DataFrame(
-            columns=["Datetime", "Open", "High", "Low", "Close", "Volume"]
-        )
-    )
-    if not data.empty:
-        data["Datetime"] = pd.to_datetime(data["Datetime"], unit="s")
-        data.sort_values("Datetime", inplace=True)
-        data = data.drop_duplicates(subset=["Datetime"], keep="first")
-        data.reset_index(drop=True, inplace=True)
-
-        data["HL2"] = (data["High"] + data["Low"]) / 2
-        data["OHLC4"] = (data["Open"] + data["High"] + data["Low"] + data["Close"]) / 4
-        data["HLC3"] = (data["High"] + data["Low"] + data["Close"]) / 3
-    else:
-        print(f"[red]No data retrieved for {symbol}[/red]")
-
-    return data
-
-
-def _fetch_binance(symbol, days, interval, age_days, retry_limit, proxies, end_time, fail_fast=False):
+def _fetch_binance(symbol, days, interval, age_days, retry_limit, end_time, fail_fast=False):
     if "min" in interval:
         interval = interval.replace("min", "m")
     elif "hour" in interval:
@@ -387,7 +295,6 @@ def fetch_data(
     cache_expiry_hours: int = 24,
     retry_limit: int = 3,
     verbose: bool = True,
-    proxies: dict = {},
     fail_fast: bool = False,
 ) -> pd.DataFrame:
     """ """
@@ -448,35 +355,6 @@ def fetch_data(
                 )
             data = pd.concat([data, temp_df], axis=1)
 
-    elif data_source == "birdeye":
-        data = pd.DataFrame()
-        for symbol in symbols:
-            if symbol == main_symbol:
-                temp_df = _fetch_birdeye(
-                    symbol,
-                    days,
-                    interval,
-                    age_days,
-                    retry_limit,
-                    proxies,
-                    anchored_end_time,
-                )
-            else:
-                temp_df = _fetch_birdeye(
-                    symbol,
-                    days,
-                    interval,
-                    age_days,
-                    retry_limit,
-                    proxies,
-                    anchored_end_time,
-                )
-                temp_df = temp_df.drop(columns=["Datetime"])
-                temp_df.rename(
-                    columns={col: f"add_{symbol}_{col}" for col in temp_df.columns},
-                    inplace=True,
-                )
-            data = pd.concat([data, temp_df], axis=1)
     elif data_source == "binance":
         data = pd.DataFrame()
         for symbol in symbols:
@@ -487,7 +365,6 @@ def fetch_data(
                     interval,
                     age_days,
                     retry_limit,
-                    proxies,
                     anchored_end_time,
                     fail_fast,
                 )
@@ -498,7 +375,6 @@ def fetch_data(
                     interval,
                     age_days,
                     retry_limit,
-                    proxies,
                     anchored_end_time,
                     fail_fast,
                 )
@@ -510,7 +386,7 @@ def fetch_data(
             data = pd.concat([data, temp_df], axis=1)
     else:
         raise ValueError(
-            f"Unknown data_source: {data_source}. Choose from 'binance', 'kucoin', 'yfinance'."
+            f"Unknown data_source: {data_source}. Choose from 'binance', 'yfinance'."
         )
 
     if not data.empty and len(data) > 0:

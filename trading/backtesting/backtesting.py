@@ -125,7 +125,6 @@ class VectorizedBacktest:
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True,
-        proxies: dict | None = None,
     ):
         if not symbols:
             raise ValueError("symbols must be a non-empty list")
@@ -144,7 +143,6 @@ class VectorizedBacktest:
             cache_expiry_hours=cache_expiry_hours,
             retry_limit=retry_limit,
             verbose=verbose,
-            proxies=proxies or {},
         )
         self._set_n_days()
 
@@ -651,7 +649,6 @@ class MultiAssetBacktest:
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True,
-        proxies: dict | None = None,
     ):
         if not symbols:
             raise ValueError("symbols must be a non-empty list")
@@ -669,7 +666,6 @@ class MultiAssetBacktest:
                 cache_expiry_hours=cache_expiry_hours,
                 retry_limit=retry_limit,
                 verbose=verbose,
-                proxies=proxies or {},
             )
             if frame is None or frame.empty:
                 raise ValueError(f"No data returned for {symbol}")

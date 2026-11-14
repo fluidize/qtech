@@ -19,7 +19,6 @@ vb.fetch_data(
     cache_expiry_hours=-1,
     retry_limit=3,
     verbose=True,
-    proxies={},
 )
 
 
