@@ -78,7 +78,7 @@ if __name__ == "__main__":
     }
 
     data_config = {
-        "symbols": ["SOL-USDT"],
+        "symbol": "SOL-USDT",
         "days": 365,
         "interval": "30m",
         "age_days": 0,

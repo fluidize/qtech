@@ -286,21 +286,188 @@ def _fetch_binance(symbol, days, interval, age_days, retry_limit, end_time, fail
     return data
 
 
+def _fetch_jupiter(symbol, days, interval, age_days, retry_limit, end_time, fail_fast=False):
+    if "minute" in interval:
+        interval = interval.replace("minute", "m")
+    elif "min" in interval:
+        interval = interval.replace("min", "m")
+    elif "hour" in interval:
+        interval = interval.replace("hour", "h")
+    elif "day" in interval:
+        interval = interval.replace("day", "d")
+    elif "week" in interval:
+        interval = interval.replace("week", "w")
+    elif "month" in interval:
+        interval = interval.replace("month", "M")
+
+    jupiter_intervals = {
+        "1m": ("1_MINUTE", 60),
+        "5m": ("5_MINUTE", 300),
+        "15m": ("15_MINUTE", 900),
+        "30m": ("30_MINUTE", 1800),
+        "1h": ("1_HOUR", 3600),
+        "4h": ("4_HOUR", 14400),
+        "1d": ("1_DAY", 86400),
+        "1w": ("1_WEEK", 604800),
+        "1wk": ("1_WEEK", 604800),
+        "1M": ("1_MONTH", 2592000),
+        "1mo": ("1_MONTH", 2592000),
+    }
+
+    if interval not in jupiter_intervals:
+        raise ValueError(
+            f"Unknown interval for jupiter: {interval}. Choose from {list(jupiter_intervals)}."
+        )
+
+    jupiter_interval, candle_seconds = jupiter_intervals[interval]
+    candles_per_chunk = 5000
+    target_candles = ceil(days * 86400 / candle_seconds)
+    chunks = max(1, ceil(target_candles / candles_per_chunk))
+    url = f"https://datapi.jup.ag/v2/charts/{symbol}"
+
+    async def download_chunk(session, chunk_index, semaphore):
+        async with semaphore:
+            retries = 0
+            chunk_end_time = end_time - timedelta(
+                seconds=candle_seconds * candles_per_chunk * chunk_index
+            )
+            chunk_candles = min(
+                candles_per_chunk, target_candles - chunk_index * candles_per_chunk
+            )
+            params = {
+                "interval": jupiter_interval,
+                "to": chunk_end_time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "candles": chunk_candles,
+                "type": "price",
+                "quote": "usd",
+            }
+
+            while retries <= retry_limit:
+                try:
+                    async with session.get(url, params=params) as response:
+                        response.raise_for_status()
+                        request_data = (await response.json()).get("candles", [])
+                        break
+                except Exception as e:
+                    if fail_fast:
+                        raise Exception(
+                            f"Error fetching {symbol} chunk {chunk_index}: {e}"
+                        )
+                    if retries < retry_limit:
+                        retries += 1
+                        await asyncio.sleep(0.5)
+                    else:
+                        raise Exception(
+                            f"Error fetching {symbol} chunk {chunk_index} after {retry_limit} retries: {e}"
+                        )
+
+            records = [
+                {
+                    "Datetime": int(candle["time"]),
+                    "Open": float(candle["open"]),
+                    "High": float(candle["high"]),
+                    "Low": float(candle["low"]),
+                    "Close": float(candle["close"]),
+                    "Volume": float(candle["volume"]),
+                }
+                for candle in request_data
+            ]
+
+            return chunk_index, pd.DataFrame(records)
+
+    async def download_all_chunks():
+        chunk_results = []
+        max_concurrent = min(5, chunks)
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        connector = aiohttp.TCPConnector(limit=max_concurrent)
+        timeout = aiohttp.ClientTimeout(total=30)
+
+        progress_bar = tqdm(total=chunks, desc="JUPITER PROGRESS")
+        async with aiohttp.ClientSession(
+            connector=connector, timeout=timeout
+        ) as session:
+            tasks = [download_chunk(session, x, semaphore) for x in range(chunks)]
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    chunk_index, temp_data = await coro
+                    chunk_results.append((chunk_index, temp_data))
+                    progress_bar.update(1)
+                except Exception as e:
+                    if fail_fast:
+                        progress_bar.close()
+                        raise
+                    print(f"[red]Error downloading chunk: {e}[/red]")
+                    progress_bar.update(1)
+
+        progress_bar.close()
+        return chunk_results
+
+    try:
+        chunk_results = asyncio.run(download_all_chunks())
+    except RuntimeError:
+        # jupyter notebooks
+        import concurrent.futures
+
+        def run_async_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(download_all_chunks())
+            finally:
+                loop.close()
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_async_in_thread)
+            chunk_results = future.result()
+    data = (
+        pd.concat(
+            [df for _, df in sorted(chunk_results, key=lambda x: x[0])],
+            ignore_index=True,
+        )
+        if chunk_results
+        else pd.DataFrame(
+            columns=["Datetime", "Open", "High", "Low", "Close", "Volume"]
+        )
+    )
+    if not data.empty:
+        data["Datetime"] = pd.to_datetime(data["Datetime"], unit="s")
+        data.drop_duplicates(subset="Datetime", inplace=True)
+        data.sort_values("Datetime", inplace=True)
+        data.reset_index(drop=True, inplace=True)
+
+        data["HL2"] = (data["High"] + data["Low"]) / 2
+        data["OHLC4"] = (data["Open"] + data["High"] + data["Low"] + data["Close"]) / 4
+        data["HLC3"] = (data["High"] + data["Low"] + data["Close"]) / 3
+    else:
+        print(f"[red]No data retrieved for {symbol}[/red]")
+
+    return data
+
+
 def fetch_data(
-    symbols: list[str],  # first symbol is treated as main symbol
+    symbol: str,  # main symbol
     days: int,
     interval: str,
     age_days: int,
     data_source: str,
+    add_symbols: list[str] | None = None,
     cache_expiry_hours: int = 24,
     retry_limit: int = 3,
     verbose: bool = True,
     fail_fast: bool = False,
 ) -> pd.DataFrame:
     """ """
+    if isinstance(symbol, (list, tuple, set)):
+        raise TypeError(
+            "fetch_data() takes a single symbol; pass additional series with add_symbols=[...]"
+        )
+    add_symbols = list(add_symbols) if add_symbols else []
+    all_symbols = [symbol] + add_symbols
+
     (
         print(
-            f"[yellow]FETCHING DATASET(S) {', '.join(symbols)}; {days}d of {interval}[/yellow]"
+            f"[yellow]FETCHING DATASET(S) {', '.join(all_symbols)}; {days}d of {interval}[/yellow]"
         )
         if verbose
         else None
@@ -313,7 +480,7 @@ def fetch_data(
         temp_dir = Path.home() / ".local" / "share" / "market_data"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    cache_key = f"{'_'.join(symbols)}_{days}_{interval}_{age_days}_{data_source}"
+    cache_key = f"{'_'.join(all_symbols)}_{days}_{interval}_{age_days}_{data_source}"
     cache_file = temp_dir / f"{cache_key}.csv"
 
     if os.path.exists(cache_file):
@@ -340,54 +507,52 @@ def fetch_data(
 
     anchored_end_time = datetime.now(timezone.utc) - timedelta(days=age_days) ### important! ensures no NANs from subtle datetime mismatches
     print("[green]DOWNLOADING DATA[/green]")
-    main_symbol = symbols[0]
     if data_source == "yfinance":
-        data = pd.DataFrame()
-        for symbol in symbols:
-            if symbol == main_symbol:
-                temp_df = _fetch_yfinance(symbol, days, interval, age_days)
-            else:
-                temp_df = _fetch_yfinance(symbol, days, interval, age_days)
-                temp_df = temp_df.drop(columns=["Datetime"])
-                temp_df.rename(
-                    columns={col: f"add_{symbol}_{col}" for col in temp_df.columns},
-                    inplace=True,
-                )
-            data = pd.concat([data, temp_df], axis=1)
+
+        def fetch_one(name):
+            return _fetch_yfinance(name, days, interval, age_days)
 
     elif data_source == "binance":
-        data = pd.DataFrame()
-        for symbol in symbols:
-            if symbol == main_symbol:
-                temp_df = _fetch_binance(
-                    symbol,
-                    days,
-                    interval,
-                    age_days,
-                    retry_limit,
-                    anchored_end_time,
-                    fail_fast,
-                )
-            else:
-                temp_df = _fetch_binance(
-                    symbol,
-                    days,
-                    interval,
-                    age_days,
-                    retry_limit,
-                    anchored_end_time,
-                    fail_fast,
-                )
-                temp_df = temp_df.drop(columns=["Datetime"])
-                temp_df.rename(
-                    columns={col: f"add_{symbol}_{col}" for col in temp_df.columns},
-                    inplace=True,
-                )
-            data = pd.concat([data, temp_df], axis=1)
+
+        def fetch_one(name):
+            return _fetch_binance(
+                name,
+                days,
+                interval,
+                age_days,
+                retry_limit,
+                anchored_end_time,
+                fail_fast,
+            )
+
+    elif data_source == "jupiter":
+
+        def fetch_one(name):
+            return _fetch_jupiter(
+                name,
+                days,
+                interval,
+                age_days,
+                retry_limit,
+                anchored_end_time,
+                fail_fast,
+            )
+
     else:
         raise ValueError(
-            f"Unknown data_source: {data_source}. Choose from 'binance', 'yfinance'."
+            f"Unknown data_source: {data_source}. Choose from 'binance', 'jupiter', 'yfinance'."
         )
+
+    data = fetch_one(symbol)
+    for add_symbol in add_symbols:
+        temp_df = fetch_one(add_symbol)
+        if "Datetime" in temp_df.columns:
+            temp_df = temp_df.drop(columns=["Datetime"])
+        temp_df.rename(
+            columns={col: f"add_{add_symbol}_{col}" for col in temp_df.columns},
+            inplace=True,
+        )
+        data = pd.concat([data, temp_df], axis=1)
 
     if not data.empty and len(data) > 0:
         try:

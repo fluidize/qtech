@@ -11,7 +11,7 @@ vb = bt.VectorizedBacktest(
 )
 
 vb.fetch_data(
-    symbols=["SOL-USDT"],
+    symbol="SOL-USDT",
     days=365,
     interval="4h",
     age_days=0,

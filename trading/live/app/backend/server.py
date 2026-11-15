@@ -89,7 +89,8 @@ DEFAULT_TICK_SECONDS = 1.0
 BUFFER_SIZE = 500
 
 # data sources valid for backtesting (subset of fetch_data's whitelist)
-DATA_SOURCES = ["binance", "yfinance"]
+# note: jupiter expects Solana mint addresses as symbols; live streaming stays Binance-only
+DATA_SOURCES = ["binance", "jupiter", "yfinance"]
 
 # Binance endpoints (only the historical REST + live websocket are used for the stream)
 BINANCE_REST = "https://api.binance.com/api/v3/klines"
@@ -127,7 +128,7 @@ async def _fetch_feed(symbol, days, interval, data_source=DEFAULT_DATA_SOURCE) -
     log(f"fetching feed symbol={symbol} interval={interval} days={days} source={data_source}")
     data = await asyncio.to_thread(
         mt.fetch_data,
-        [symbol],
+        symbol,
         days,
         interval,
         0,

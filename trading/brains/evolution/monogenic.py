@@ -35,7 +35,7 @@ VB_CONFIG = {
 }
 
 DATA_CONFIG = {
-    "symbols": ["SOL-USDT"],
+    "symbol": "SOL-USDT",
     "days": 365,
     "interval": "1h",
     "age_days": 0,

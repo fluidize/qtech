@@ -246,7 +246,8 @@ if __name__ == "__main__":
     from trading.model_tools import ta_transform, fetch_data
 
     sample_data = fetch_data(
-        symbols=["SOL-USDT", "BTC-USDT"],
+        symbol="SOL-USDT",
+        add_symbols=["BTC-USDT"],
         days=30,
         interval="5m",
         age_days=0,

@@ -103,6 +103,8 @@ class VectorizedBacktest:
         self.commission_fixed = commission_fixed
         self.leverage = leverage
 
+        self.symbol = None
+        self.add_symbols = []
         self.symbols = None
         self.chunks = None
         self.interval = None
@@ -117,29 +119,33 @@ class VectorizedBacktest:
 
     def fetch_data(
         self,
-        symbols: list[str],
+        symbol: str,
         days: int,
         interval: str,
         age_days: int,
         data_source: str,
+        add_symbols: list[str] | None = None,
         cache_expiry_hours: int = 24,
         retry_limit: int = 3,
         verbose: bool = True,
     ):
-        if not symbols:
-            raise ValueError("symbols must be a non-empty list")
-        self.symbols = list(symbols)
+        if not symbol:
+            raise ValueError("symbol must be a non-empty string")
+        self.symbol = symbol
+        self.add_symbols = list(add_symbols) if add_symbols else []
+        self.symbols = [self.symbol] + self.add_symbols
         self.days = days
         self.interval = interval
         self.age_days = age_days
         self.data_source = data_source
 
         self.data = mt.fetch_data(
-            self.symbols,
+            self.symbol,
             days,
             interval,
             age_days,
             data_source=data_source,
+            add_symbols=self.add_symbols,
             cache_expiry_hours=cache_expiry_hours,
             retry_limit=retry_limit,
             verbose=verbose,
@@ -658,7 +664,7 @@ class MultiAssetBacktest:
         self.data = {}
         for symbol in self.symbols:
             frame = mt.fetch_data(
-                symbols=[symbol],
+                symbol=symbol,
                 days=days,
                 interval=interval,
                 age_days=age_days,

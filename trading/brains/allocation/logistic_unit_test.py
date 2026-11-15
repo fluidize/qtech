@@ -23,7 +23,8 @@ if __name__ == "__main__":
     BATCH_SIZE = 2 ** 16
 
     DATA = {
-        "symbols": ["SOL-USDT", "BTC-USDT"],
+        "symbol": "SOL-USDT",
+        "add_symbols": ["BTC-USDT"],
         "days": 90,
         "interval": "1m",
         "age_days": 0,
@@ -41,8 +42,8 @@ if __name__ == "__main__":
         shuffle=False,
     )
 
-    train_dataset = PriceDataset(train_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN)
-    val_dataset = PriceDataset(val_dataset_raw, add_ticker=DATA["symbols"][1], seq_len=SEQ_LEN)
+    train_dataset = PriceDataset(train_dataset_raw, add_ticker=DATA["add_symbols"][0], seq_len=SEQ_LEN)
+    val_dataset = PriceDataset(val_dataset_raw, add_ticker=DATA["add_symbols"][0], seq_len=SEQ_LEN)
 
     num_features = train_dataset.X.shape[1]
     sequence_length = train_dataset.X.shape[2]
@@ -120,7 +121,7 @@ if __name__ == "__main__":
 
     # Run backtests for all models
     def model_wrapper(data, model, device, seq_len=10, batch_size=32):
-        dataset = PriceDataset(data, add_ticker=DATA["symbols"][1], seq_len=seq_len)
+        dataset = PriceDataset(data, add_ticker=DATA["add_symbols"][0], seq_len=seq_len)
         raw_signals = lf.model_to_signals(model, dataset, device=device, batch_size=batch_size, eval_mode=True, epoch=EPOCHS, total_epochs=EPOCHS)
         signals = pd.Series(raw_signals.cpu().numpy(), index=data.index)
         return signals
@@ -134,7 +135,7 @@ if __name__ == "__main__":
             commission_fixed=0.0,
             leverage=1.0,
         )
-        vb.load_data(val_dataset_raw, symbols=DATA["symbols"], interval=DATA["interval"], age_days=DATA["age_days"])
+        vb.load_data(val_dataset_raw, symbols=[DATA["symbol"], *DATA["add_symbols"]], interval=DATA["interval"], age_days=DATA["age_days"])
         vb.run_strategy(model_wrapper, verbose=False, model=models[model_type], device=DEVICE, seq_len=SEQ_LEN, batch_size=BATCH_SIZE)
 
         backtest_metrics = vb.get_performance_metrics()
