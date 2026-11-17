@@ -5,7 +5,39 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trading"
 version = "1.0.0"
-dependencies = []
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "python-dateutil",
+    "matplotlib",
+    "seaborn",
+    "plotly",
+    "scikit-learn",
+    "scipy",
+    "hmmlearn",
+    "optuna",
+    "optunahub",
+    "lightgbm",
+    "yfinance",
+    "requests",
+    "aiohttp",
+    "websockets",
+    "beautifulsoup4",
+    "selenium",
+    "rich",
+    "tqdm",
+    "textual",
+    "discord-webhook",
+    "torch",
+    "torchvision",
+    "torchinfo",
+    "numba",
+    "base58",
+    "solders",
+    "hurst",
+    "networkx",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
